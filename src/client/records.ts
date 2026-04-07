@@ -147,11 +147,19 @@ export function matchesHealthFilter(
     }
   }
 
-  if ("exchange" in event && filter.exchange && event.exchange !== filter.exchange) {
+  if (
+    "exchange" in event &&
+    filter.exchange &&
+    event.exchange !== filter.exchange
+  ) {
     return false;
   }
 
-  if ("accountId" in event && filter.accountId && event.accountId !== filter.accountId) {
+  if (
+    "accountId" in event &&
+    filter.accountId &&
+    event.accountId !== filter.accountId
+  ) {
     return false;
   }
 
@@ -162,7 +170,9 @@ export function matchesHealthFilter(
   return true;
 }
 
-export function hasPrivateCredentials(credentials?: AccountCredentials): boolean {
+export function hasPrivateCredentials(
+  credentials?: AccountCredentials,
+): boolean {
   return Boolean(credentials?.apiKey && credentials.secret);
 }
 
@@ -184,7 +194,9 @@ export function cloneMarketStatus(status: MarketDataStatus): MarketDataStatus {
   return { ...status };
 }
 
-export function cloneAccountStatus(status: AccountDataStatus): AccountDataStatus {
+export function cloneAccountStatus(
+  status: AccountDataStatus,
+): AccountDataStatus {
   return { ...status };
 }
 

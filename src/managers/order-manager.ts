@@ -23,10 +23,17 @@ export class OrderManagerImpl implements OrderManager {
     const account = this.client.getRegisteredAccount(input.accountId);
     this.client.ensurePrivateCredentials(input.accountId);
 
-    const record = this.client.getOrCreateOrderRecord(input.accountId, account.exchange);
+    const record = this.client.getOrCreateOrderRecord(
+      input.accountId,
+      account.exchange,
+    );
     record.subscribed = true;
     record.status = {
-      ...this.client.createOrderStatus(input.accountId, account.exchange, "active"),
+      ...this.client.createOrderStatus(
+        input.accountId,
+        account.exchange,
+        "active",
+      ),
       ready: true,
       runtimeStatus: "healthy",
       lastReceivedAt: this.client.now(),
@@ -47,7 +54,7 @@ export class OrderManagerImpl implements OrderManager {
 
   async unsubscribeOrders(input: UnsubscribeOrdersInput): Promise<void> {
     const record = this.client.getOrderRecord(input.accountId);
-    if (!record || !record.subscribed) {
+    if (!record?.subscribed) {
       return;
     }
 
@@ -76,7 +83,10 @@ export class OrderManagerImpl implements OrderManager {
         return snapshot;
       }
 
-      if (input.clientOrderId && snapshot.clientOrderId === input.clientOrderId) {
+      if (
+        input.clientOrderId &&
+        snapshot.clientOrderId === input.clientOrderId
+      ) {
         return snapshot;
       }
     }
@@ -95,7 +105,9 @@ export class OrderManagerImpl implements OrderManager {
         return false;
       }
 
-      return snapshot.status === "open" || snapshot.status === "partially_filled";
+      return (
+        snapshot.status === "open" || snapshot.status === "partially_filled"
+      );
     });
   }
 

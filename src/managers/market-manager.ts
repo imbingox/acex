@@ -1,5 +1,6 @@
-import type { AcexClientImpl } from "../client/runtime.ts";
 import type { MarketRecord } from "../client/records.ts";
+import { cloneMarketStatus } from "../client/records.ts";
+import type { AcexClientImpl } from "../client/runtime.ts";
 import type {
   FundingRateSnapshot,
   FundingRateUpdatedEvent,
@@ -12,7 +13,6 @@ import type {
   SubscribeFundingRateInput,
   SubscribeL1BookInput,
 } from "../types/index.ts";
-import { cloneMarketStatus } from "../client/records.ts";
 
 export class MarketManagerImpl implements MarketManager {
   readonly events: MarketEventStreams;
@@ -26,7 +26,11 @@ export class MarketManagerImpl implements MarketManager {
     const record = this.client.getOrCreateMarketRecord(input);
     const fundingRate =
       record.fundingRate ??
-      this.client.createFundingRate(input.exchange, input.symbol, record.fundingRate);
+      this.client.createFundingRate(
+        input.exchange,
+        input.symbol,
+        record.fundingRate,
+      );
 
     if (!record.fundingRateSubscribed) {
       record.fundingRateSubscribed = true;
@@ -59,7 +63,8 @@ export class MarketManagerImpl implements MarketManager {
     this.client.assertStarted();
     const record = this.client.getOrCreateMarketRecord(input);
     const l1Book =
-      record.l1Book ?? this.client.createL1Book(input.exchange, input.symbol, record.l1Book);
+      record.l1Book ??
+      this.client.createL1Book(input.exchange, input.symbol, record.l1Book);
 
     if (!record.l1BookSubscribed) {
       record.l1BookSubscribed = true;
@@ -88,9 +93,11 @@ export class MarketManagerImpl implements MarketManager {
     this.client.publishMarketStatus(record);
   }
 
-  async unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void> {
+  async unsubscribeFundingRate(
+    input: SubscribeFundingRateInput,
+  ): Promise<void> {
     const record = this.client.getMarketRecord(input);
-    if (!record || !record.fundingRateSubscribed) {
+    if (!record?.fundingRateSubscribed) {
       return;
     }
 
@@ -100,7 +107,7 @@ export class MarketManagerImpl implements MarketManager {
 
   async unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
     const record = this.client.getMarketRecord(input);
-    if (!record || !record.l1BookSubscribed) {
+    if (!record?.l1BookSubscribed) {
       return;
     }
 

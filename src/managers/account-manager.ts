@@ -1,6 +1,4 @@
-import {
-  cloneAccountStatus,
-} from "../client/records.ts";
+import { cloneAccountStatus } from "../client/records.ts";
 import type { AcexClientImpl } from "../client/runtime.ts";
 import type {
   AccountDataStatus,
@@ -28,11 +26,21 @@ export class AccountManagerImpl implements AccountManager {
     const account = this.client.getRegisteredAccount(input.accountId);
     this.client.ensurePrivateCredentials(input.accountId);
 
-    const record = this.client.getOrCreateAccountRecord(input.accountId, account.exchange);
+    const record = this.client.getOrCreateAccountRecord(
+      input.accountId,
+      account.exchange,
+    );
     record.subscribed = true;
-    record.snapshot ??= this.client.createEmptyAccountSnapshot(input.accountId, account.exchange);
+    record.snapshot ??= this.client.createEmptyAccountSnapshot(
+      input.accountId,
+      account.exchange,
+    );
     record.status = {
-      ...this.client.createAccountStatus(input.accountId, account.exchange, "active"),
+      ...this.client.createAccountStatus(
+        input.accountId,
+        account.exchange,
+        "active",
+      ),
       ready: true,
       runtimeStatus: "healthy",
       lastReceivedAt: record.snapshot.updatedAt,
@@ -53,7 +61,7 @@ export class AccountManagerImpl implements AccountManager {
 
   async unsubscribeAccount(input: UnsubscribeAccountInput): Promise<void> {
     const record = this.client.getAccountRecord(input.accountId);
-    if (!record || !record.subscribed) {
+    if (!record?.subscribed) {
       return;
     }
 
@@ -76,7 +84,8 @@ export class AccountManagerImpl implements AccountManager {
   }
 
   getBalances(accountId: string): BalanceSnapshot[] {
-    const balances = this.client.getAccountRecord(accountId)?.snapshot?.balances;
+    const balances =
+      this.client.getAccountRecord(accountId)?.snapshot?.balances;
     return balances ? Object.values(balances) : [];
   }
 
@@ -87,7 +96,8 @@ export class AccountManagerImpl implements AccountManager {
   }
 
   getPositions(accountId: string, symbol?: string): PositionSnapshot[] {
-    const positions = this.client.getAccountRecord(accountId)?.snapshot?.positions ?? [];
+    const positions =
+      this.client.getAccountRecord(accountId)?.snapshot?.positions ?? [];
     if (!symbol) {
       return [...positions];
     }

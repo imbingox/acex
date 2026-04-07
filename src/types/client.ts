@@ -1,14 +1,4 @@
 import type {
-  AccountCredentials,
-  AcexInternalError,
-  ClientStatus,
-  CreateClientOptions,
-  Exchange,
-  RegisterAccountInput,
-  RegisterAccountResult,
-  StopOptions,
-} from "./shared.ts";
-import type {
   AccountDataStatus,
   AccountManager,
   AccountStatusChangedEvent,
@@ -23,6 +13,16 @@ import type {
   OrderManager,
   OrderStatusChangedEvent,
 } from "./order.ts";
+import type {
+  AccountCredentials,
+  AcexInternalError,
+  ClientStatus,
+  CreateClientOptions,
+  Exchange,
+  RegisterAccountInput,
+  RegisterAccountResult,
+  StopOptions,
+} from "./shared.ts";
 
 export interface ClientHealthSnapshot {
   clientStatus: ClientStatus;
@@ -76,6 +76,4 @@ export interface AcexClient {
   stop(options?: StopOptions): Promise<void>;
 }
 
-export interface CreateClient {
-  (options?: CreateClientOptions): AcexClient;
-}
+export type CreateClient = (options?: CreateClientOptions) => AcexClient;

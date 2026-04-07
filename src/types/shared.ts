@@ -2,7 +2,12 @@ export const SUPPORTED_EXCHANGES = ["binance", "okx", "bybit", "gate"] as const;
 
 export type Exchange = (typeof SUPPORTED_EXCHANGES)[number];
 
-export type ClientStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
+export type ClientStatus =
+  | "idle"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "stopped";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 

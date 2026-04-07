@@ -3,23 +3,6 @@ import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { AccountManagerImpl } from "../managers/account-manager.ts";
 import { MarketManagerImpl } from "../managers/market-manager.ts";
 import { OrderManagerImpl } from "../managers/order-manager.ts";
-import {
-  cloneAccountStatus,
-  cloneMarketStatus,
-  cloneOrderStatus,
-  hasPrivateCredentials,
-  marketKey,
-  matchesAccountFilter,
-  matchesHealthFilter,
-  matchesMarketFilter,
-  matchesOrderFilter,
-  mergeCredentials,
-  sortByJson,
-  type AccountRecord,
-  type MarketRecord,
-  type OrderRecord,
-  type RegisteredAccountRecord,
-} from "./records.ts";
 import type {
   AccountCredentials,
   AccountDataStatus,
@@ -46,15 +29,32 @@ import type {
   MarketEventStreams,
   MarketManager,
   MarketStatusChangedEvent,
+  OrderDataStatus,
   OrderEvent,
   OrderEventStreams,
-  OrderStatusChangedEvent,
   OrderManager,
-  OrderDataStatus,
+  OrderStatusChangedEvent,
   RegisterAccountInput,
   RegisterAccountResult,
   StopOptions,
 } from "../types/index.ts";
+import {
+  type AccountRecord,
+  cloneAccountStatus,
+  cloneMarketStatus,
+  cloneOrderStatus,
+  hasPrivateCredentials,
+  type MarketRecord,
+  marketKey,
+  matchesAccountFilter,
+  matchesHealthFilter,
+  matchesMarketFilter,
+  matchesOrderFilter,
+  mergeCredentials,
+  type OrderRecord,
+  type RegisteredAccountRecord,
+  sortByJson,
+} from "./records.ts";
 
 class ClientEventStreamsImpl implements ClientEventStreams {
   constructor(
@@ -81,13 +81,19 @@ export class AcexClientImpl implements AcexClient {
   private readonly healthBus = new AsyncEventBus<HealthEvent>();
   private readonly errorBus = new AsyncEventBus<AcexInternalError>();
   private readonly marketBus = new AsyncEventBus<MarketEvent>();
-  private readonly marketStatusBus = new AsyncEventBus<MarketStatusChangedEvent>();
+  private readonly marketStatusBus =
+    new AsyncEventBus<MarketStatusChangedEvent>();
   private readonly accountBus = new AsyncEventBus<AccountEvent>();
-  private readonly accountStatusBus = new AsyncEventBus<AccountStatusChangedEvent>();
+  private readonly accountStatusBus =
+    new AsyncEventBus<AccountStatusChangedEvent>();
   private readonly orderBus = new AsyncEventBus<OrderEvent>();
-  private readonly orderStatusBus = new AsyncEventBus<OrderStatusChangedEvent>();
+  private readonly orderStatusBus =
+    new AsyncEventBus<OrderStatusChangedEvent>();
 
-  private readonly registeredAccounts = new Map<string, RegisteredAccountRecord>();
+  private readonly registeredAccounts = new Map<
+    string,
+    RegisteredAccountRecord
+  >();
   private readonly marketRecords = new Map<string, MarketRecord>();
   private readonly accountRecords = new Map<string, AccountRecord>();
   private readonly orderRecords = new Map<string, OrderRecord>();
@@ -107,19 +113,27 @@ export class AcexClientImpl implements AcexClient {
     return {
       clientStatus: this.status,
       markets: sortByJson(
-        [...this.marketRecords.values()].map((record) => cloneMarketStatus(record.status)),
+        [...this.marketRecords.values()].map((record) =>
+          cloneMarketStatus(record.status),
+        ),
       ),
       accounts: sortByJson(
-        [...this.accountRecords.values()].map((record) => cloneAccountStatus(record.status)),
+        [...this.accountRecords.values()].map((record) =>
+          cloneAccountStatus(record.status),
+        ),
       ),
       orders: sortByJson(
-        [...this.orderRecords.values()].map((record) => cloneOrderStatus(record.status)),
+        [...this.orderRecords.values()].map((record) =>
+          cloneOrderStatus(record.status),
+        ),
       ),
       updatedAt: this.now(),
     };
   }
 
-  async registerAccount(input: RegisterAccountInput): Promise<RegisterAccountResult> {
+  async registerAccount(
+    input: RegisterAccountInput,
+  ): Promise<RegisterAccountResult> {
     if (this.registeredAccounts.has(input.accountId)) {
       throw this.createError(
         "ACCOUNT_ALREADY_EXISTS",
@@ -147,9 +161,13 @@ export class AcexClientImpl implements AcexClient {
   ): Promise<void> {
     const account = this.registeredAccounts.get(accountId);
     if (!account) {
-      throw this.createError("ACCOUNT_NOT_FOUND", `Account not found: ${accountId}`, {
-        accountId,
-      });
+      throw this.createError(
+        "ACCOUNT_NOT_FOUND",
+        `Account not found: ${accountId}`,
+        {
+          accountId,
+        },
+      );
     }
 
     account.credentials = mergeCredentials(account.credentials, credentials);
@@ -160,16 +178,25 @@ export class AcexClientImpl implements AcexClient {
 
     const accountRecord = this.accountRecords.get(accountId);
     if (accountRecord?.subscribed) {
-      accountRecord.status = this.createAccountStatus(accountId, account.exchange, "active");
+      accountRecord.status = this.createAccountStatus(
+        accountId,
+        account.exchange,
+        "active",
+      );
       accountRecord.status.ready = Boolean(accountRecord.snapshot);
       accountRecord.status.runtimeStatus = "healthy";
-      accountRecord.status.lastReadyAt = accountRecord.snapshot?.updatedAt ?? this.now();
+      accountRecord.status.lastReadyAt =
+        accountRecord.snapshot?.updatedAt ?? this.now();
       this.publishAccountStatus(accountRecord);
     }
 
     const orderRecord = this.orderRecords.get(accountId);
     if (orderRecord?.subscribed) {
-      orderRecord.status = this.createOrderStatus(accountId, account.exchange, "active");
+      orderRecord.status = this.createOrderStatus(
+        accountId,
+        account.exchange,
+        "active",
+      );
       orderRecord.status.ready = true;
       orderRecord.status.runtimeStatus = "healthy";
       orderRecord.status.lastReadyAt = this.now();
@@ -180,9 +207,13 @@ export class AcexClientImpl implements AcexClient {
   async removeAccount(accountId: string): Promise<void> {
     const account = this.registeredAccounts.get(accountId);
     if (!account) {
-      throw this.createError("ACCOUNT_NOT_FOUND", `Account not found: ${accountId}`, {
-        accountId,
-      });
+      throw this.createError(
+        "ACCOUNT_NOT_FOUND",
+        `Account not found: ${accountId}`,
+        {
+          accountId,
+        },
+      );
     }
 
     const now = this.now();
@@ -290,7 +321,10 @@ export class AcexClientImpl implements AcexClient {
     }
   }
 
-  getOrCreateMarketRecord(input: { exchange: Exchange; symbol: string }): MarketRecord {
+  getOrCreateMarketRecord(input: {
+    exchange: Exchange;
+    symbol: string;
+  }): MarketRecord {
     const key = marketKey(input);
     const existing = this.marketRecords.get(key);
     if (existing) {
@@ -314,22 +348,32 @@ export class AcexClientImpl implements AcexClient {
     return record;
   }
 
-  getMarketRecord(input: { exchange: Exchange; symbol: string }): MarketRecord | undefined {
+  getMarketRecord(input: {
+    exchange: Exchange;
+    symbol: string;
+  }): MarketRecord | undefined {
     return this.marketRecords.get(marketKey(input));
   }
 
   getRegisteredAccount(accountId: string): RegisteredAccountRecord {
     const account = this.registeredAccounts.get(accountId);
     if (!account) {
-      throw this.createError("ACCOUNT_NOT_FOUND", `Account not found: ${accountId}`, {
-        accountId,
-      });
+      throw this.createError(
+        "ACCOUNT_NOT_FOUND",
+        `Account not found: ${accountId}`,
+        {
+          accountId,
+        },
+      );
     }
 
     return account;
   }
 
-  getOrCreateAccountRecord(accountId: string, exchange: Exchange): AccountRecord {
+  getOrCreateAccountRecord(
+    accountId: string,
+    exchange: Exchange,
+  ): AccountRecord {
     const existing = this.accountRecords.get(accountId);
     if (existing) {
       return existing;
@@ -426,7 +470,10 @@ export class AcexClientImpl implements AcexClient {
     };
   }
 
-  createEmptyAccountSnapshot(accountId: string, exchange: Exchange): AccountSnapshot {
+  createEmptyAccountSnapshot(
+    accountId: string,
+    exchange: Exchange,
+  ): AccountSnapshot {
     const now = this.now();
 
     return {
@@ -526,15 +573,19 @@ export class AcexClientImpl implements AcexClient {
       fundingRateUpdates: (filter) =>
         this.marketBus.stream(
           (event): event is FundingRateUpdatedEvent =>
-            event.type === "funding_rate.updated" && matchesMarketFilter(event, filter),
+            event.type === "funding_rate.updated" &&
+            matchesMarketFilter(event, filter),
         ),
       l1BookUpdates: (filter) =>
         this.marketBus.stream(
           (event): event is L1BookUpdatedEvent =>
-            event.type === "l1_book.updated" && matchesMarketFilter(event, filter),
+            event.type === "l1_book.updated" &&
+            matchesMarketFilter(event, filter),
         ),
       status: (filter) =>
-        this.marketStatusBus.stream((event) => matchesMarketFilter(event, filter)),
+        this.marketStatusBus.stream((event) =>
+          matchesMarketFilter(event, filter),
+        ),
     };
   }
 
@@ -639,7 +690,10 @@ export class AcexClientImpl implements AcexClient {
         continue;
       }
 
-      record.snapshot ??= this.createEmptyAccountSnapshot(accountId, account.exchange);
+      record.snapshot ??= this.createEmptyAccountSnapshot(
+        accountId,
+        account.exchange,
+      );
       record.status = {
         ...this.createAccountStatus(accountId, account.exchange, "active"),
         ready: true,

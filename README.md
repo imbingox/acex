@@ -6,7 +6,15 @@ To install dependencies:
 bun install
 ```
 
-To run:
+To run checks:
+
+```bash
+bun run lint
+bun run type-check
+bun run test
+```
+
+To run the current entry:
 
 ```bash
 bun run index.ts

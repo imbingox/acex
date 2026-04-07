@@ -87,7 +87,9 @@ export type MarketEvent =
 
 export interface MarketEventStreams {
   l1BookUpdates(filter?: MarketEventFilter): AsyncIterable<L1BookUpdatedEvent>;
-  fundingRateUpdates(filter?: MarketEventFilter): AsyncIterable<FundingRateUpdatedEvent>;
+  fundingRateUpdates(
+    filter?: MarketEventFilter,
+  ): AsyncIterable<FundingRateUpdatedEvent>;
   status(filter?: MarketEventFilter): AsyncIterable<MarketStatusChangedEvent>;
   all(filter?: MarketEventFilter): AsyncIterable<MarketEvent>;
 }

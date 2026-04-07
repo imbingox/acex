@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
+- **Total Sessions**: 2
 - **Last Active**: 2026-04-07
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~60 | Active |
+| `journal-1.md` | ~119 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 2 | 2026-04-07 | Add lint tooling and quality checks | `98729be`, `07fafda` |
 | 1 | 2026-04-07 | Bootstrap Trellis workflow and SDK skeleton | `2de5222` |
 <!-- @@@/auto:session-history -->
 

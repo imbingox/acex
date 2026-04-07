@@ -58,3 +58,62 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Add lint tooling and quality checks
+
+**Date**: 2026-04-07
+**Task**: Add lint tooling and quality checks
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| 项目项 | 说明 |
+|---|---|
+| 非空断言清理 | 移除 `MarketManager` 中的非空断言，满足 `finish-work` 静态约束 |
+| 工程质量命令 | 新增 `bun run lint`、`bun run type-check`、`bun run test` |
+| Lint 工具 | 接入 `Biome`，增加 `biome.json` 并启用 `noConsole`、`noNonNullAssertion` |
+| TS 环境 | 调整 `tsconfig.json`，补 `bun-types` 以支持 Bun 测试类型检查 |
+| Spec 同步 | 新增 backend `quality-guidelines.md`，把质量命令和校验要求写入 spec |
+| 验证 | `bun run lint`、`bun run type-check`、`bun run test` 全部通过 |
+
+**Updated Files**:
+- `src/managers/market-manager.ts`
+- `package.json`
+- `bun.lock`
+- `biome.json`
+- `tsconfig.json`
+- `README.md`
+- `.trellis/spec/backend/index.md`
+- `.trellis/spec/backend/quality-guidelines.md`
+- `src/client/records.ts`
+- `src/client/runtime.ts`
+- `src/managers/account-manager.ts`
+- `src/managers/order-manager.ts`
+- `src/types/client.ts`
+- `src/types/index.ts`
+- `src/types/market.ts`
+- `src/types/shared.ts`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `98729be` | (see git log) |
+| `07fafda` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -24,15 +24,14 @@ export class MarketManagerImpl implements MarketManager {
   async subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void> {
     this.client.assertStarted();
     const record = this.client.getOrCreateMarketRecord(input);
+    const fundingRate =
+      record.fundingRate ??
+      this.client.createFundingRate(input.exchange, input.symbol, record.fundingRate);
+
     if (!record.fundingRateSubscribed) {
       record.fundingRateSubscribed = true;
-      record.fundingRate = this.client.createFundingRate(
-        input.exchange,
-        input.symbol,
-        record.fundingRate,
-      );
+      record.fundingRate = fundingRate;
     }
-    const fundingRate = record.fundingRate!;
 
     record.status = {
       ...record.status,
@@ -59,11 +58,13 @@ export class MarketManagerImpl implements MarketManager {
   async subscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
     this.client.assertStarted();
     const record = this.client.getOrCreateMarketRecord(input);
+    const l1Book =
+      record.l1Book ?? this.client.createL1Book(input.exchange, input.symbol, record.l1Book);
+
     if (!record.l1BookSubscribed) {
       record.l1BookSubscribed = true;
-      record.l1Book = this.client.createL1Book(input.exchange, input.symbol, record.l1Book);
+      record.l1Book = l1Book;
     }
-    const l1Book = record.l1Book!;
 
     record.status = {
       ...record.status,

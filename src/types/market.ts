@@ -4,6 +4,31 @@ import type {
   SubscriptionActivity,
 } from "./shared.ts";
 
+export type MarketType = "spot" | "swap" | "future";
+
+export interface MarketDefinition {
+  exchange: Exchange;
+  symbol: string;
+  id: string;
+  type: MarketType;
+  base: string;
+  quote: string;
+  settle?: string;
+  active: boolean;
+  contract: boolean;
+  linear?: boolean;
+  inverse?: boolean;
+  contractSize?: string;
+  pricePrecision: number;
+  amountPrecision: number;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
+  expiry?: number;
+  raw: Record<string, unknown>;
+}
+
 export interface MarketDataStatus {
   exchange: Exchange;
   symbol: string;
@@ -97,11 +122,14 @@ export interface MarketEventStreams {
 export interface MarketManager {
   readonly events: MarketEventStreams;
 
+  loadMarkets(): Promise<void>;
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
 
+  getMarket(symbol: string): MarketDefinition | undefined;
+  listMarkets(): MarketDefinition[];
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;

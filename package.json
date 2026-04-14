@@ -1,7 +1,16 @@
 {
   "name": "@imbingox/acex",
+  "version": "0.1.0-beta.1",
+  "description": "Multi-exchange trading SDK for market data, account, and order management",
   "module": "index.ts",
   "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "src/"
+  ],
   "scripts": {
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

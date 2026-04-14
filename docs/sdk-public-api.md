@@ -28,7 +28,7 @@
 | 模块 | MVP 承诺 |
 |---|---|
 | `AcexClient` | 创建、启动、停止、注册账户、更新凭证、移除账户、聚合状态与健康信息 |
-| `MarketManager` | L1 Book / Funding Rate 订阅、退订、最新快照读取、状态读取、事件流 |
+| `MarketManager` | Market catalog、L1 Book / Funding Rate 订阅、退订、最新快照读取、状态读取、事件流 |
 | `AccountManager` | 账户快照、余额、持仓、风险读取；账户订阅、退订、状态与事件 |
 | `OrderManager` | 订单数据订阅、退订、最新订单快照与状态读取、事件流 |
 | 生命周期语义 | `subscribe*()` 是 ready barrier；`unsubscribe*()` 后保留最后快照但标记为非活跃 |
@@ -152,10 +152,18 @@ export interface Logger {
   error(msg: string, context?: Record<string, unknown>): void;
 }
 
+export interface MarketRuntimeOptions {
+  l1InitialMessageTimeoutMs?: number;
+  l1StaleAfterMs?: number;
+  l1ReconnectDelayMs?: number;
+  l1ReconnectMaxDelayMs?: number;
+}
+
 export interface CreateClientOptions {
   sandbox?: boolean;
   logger?: Logger;
   logLevel?: LogLevel;
+  market?: MarketRuntimeOptions;
 }
 
 export interface AccountCredentials {
@@ -403,6 +411,31 @@ export interface MarketEventFilter {
   symbol?: string;
 }
 
+export type MarketType = "spot" | "swap" | "future";
+
+export interface MarketDefinition {
+  exchange: Exchange;
+  symbol: string;
+  id: string;
+  type: MarketType;
+  base: string;
+  quote: string;
+  settle?: string;
+  active: boolean;
+  contract: boolean;
+  linear?: boolean;
+  inverse?: boolean;
+  contractSize?: string;
+  pricePrecision: number;
+  amountPrecision: number;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
+  expiry?: number;
+  raw: Record<string, unknown>;
+}
+
 export interface MarketEventStreams {
   l1BookUpdates(filter?: MarketEventFilter): AsyncIterable<L1BookUpdatedEvent>;
   fundingRateUpdates(
@@ -415,12 +448,15 @@ export interface MarketEventStreams {
 export interface MarketManager {
   readonly events: MarketEventStreams;
 
+  loadMarkets(): Promise<void>;
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
 
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
 
+  getMarket(symbol: string): MarketDefinition | undefined;
+  listMarkets(): MarketDefinition[];
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;
@@ -486,12 +522,17 @@ export type MarketEvent =
 
 | 主题 | 约定 |
 |---|---|
+| `loadMarkets()` | 显式加载并缓存标准化 market catalog；当前实现聚焦 `binance` 的 `Spot + USDⓈ-M + COIN-M` |
+| `getMarket()` / `listMarkets()` | 读取已缓存的标准化 market metadata；getter 本身不隐式发起网络请求 |
 | `subscribeL1Book()` / `subscribeFundingRate()` | 幂等；resolve 时对应首个快照必须已经 ready |
+| `subscribeL1Book()` | 内部会确保 market catalog 已加载，然后再按统一 `symbol` 路由到对应 market family 的真实 WS stream |
 | `unsubscribe*()` | 幂等；退订后保留最后快照，但状态改为 `activity = inactive` |
 | `getL1Book()` / `getFundingRate()` | 返回当前最后快照；若从未订阅或未 ready，则返回 `undefined` |
 | `getMarketStatus()` | 调用方判断市场数据是否仍可用于决策的主要入口 |
 | `events.*()` | 每次调用返回独立 `AsyncIterable` consumer；退出循环即释放该 consumer |
 | 事件与快照关系 | 事件 payload 携带本次写入后的最新快照；调用方也可以再调用 `get*()` 获取当前状态 |
+| freshness 语义 | 当前实现区分 “连接仍在但长时间无消息” 的 `heartbeat_timeout` 和 “连接已断开” 的 `ws_disconnected` |
+| 自动重连 | SDK 内部负责 market websocket 的自动重连与重订阅；调用方不需要手工处理重连 |
 
 ## 8. `AccountManager`
 

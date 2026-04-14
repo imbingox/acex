@@ -18,10 +18,18 @@ export interface Logger {
   error(msg: string, context?: Record<string, unknown>): void;
 }
 
+export interface MarketRuntimeOptions {
+  l1InitialMessageTimeoutMs?: number;
+  l1StaleAfterMs?: number;
+  l1ReconnectDelayMs?: number;
+  l1ReconnectMaxDelayMs?: number;
+}
+
 export interface CreateClientOptions {
   sandbox?: boolean;
   logger?: Logger;
   logLevel?: LogLevel;
+  market?: MarketRuntimeOptions;
 }
 
 export interface AccountCredentials {

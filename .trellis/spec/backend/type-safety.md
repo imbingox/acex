@@ -12,7 +12,7 @@
 当前类型入口：
 
 ```ts
-// src/types.ts
+// src/index.ts — 直接从 types/ 导出，无中间层
 export * from "./types/index.ts";
 
 // src/types/index.ts

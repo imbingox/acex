@@ -117,3 +117,57 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Architecture refactor: 5-layer design + beta publish
+
+**Date**: 2026-04-14
+**Task**: Architecture refactor: 5-layer design + beta publish
+
+### Summary
+
+Decomposed God Class into 5-layer architecture, published beta to npm
+
+### Main Changes
+
+## What was done
+
+| Change | Description |
+|--------|-------------|
+| 5-layer architecture | Infrastructure → Adapters → Domain → Orchestration → Public API |
+| God Class decomposition | runtime.ts from ~1050 lines to ~280 lines |
+| Manager state ownership | Each manager now owns its records, event buses, and factory methods |
+| Adapter abstraction | `MarketAdapter` interface + `BinanceMarketAdapter` encapsulating exchange details |
+| Internal contracts | `ClientContext`, `ManagerLifecycle`, `AccountAwareManager`, `HealthReporter<T>` |
+| Cleanup | Deleted 5 obsolete files (src/client.ts, src/types.ts, src/client/records.ts, etc.) |
+| Spec update | Rewrote code-organization.md, index.md, cross-layer-thinking-guide.md |
+| Beta publish | `@imbingox/acex@0.1.0-beta.1` published to npm |
+
+## Key files changed
+
+- `src/client/runtime.ts` — slimmed to thin orchestrator
+- `src/managers/{market,account,order}-manager.ts` — now own domain state
+- `src/adapters/binance/adapter.ts` — new BinanceMarketAdapter
+- `src/adapters/types.ts` — MarketAdapter interface
+- `src/client/context.ts` — ClientContext + lifecycle interfaces
+- `src/internal/filters.ts` — extracted event filter matchers
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0c86a2c` | (see git log) |
+| `7082260` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

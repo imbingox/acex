@@ -1,0 +1,6 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check-backend.md", "reason": "Backend check spec"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "Verify implementation placement and layering"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Verify public types and runtime helpers remain explicit and closed"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run required lint, type-check, and tests"}
+{"file": "tests/client.test.ts", "reason": "Update and verify public semantics through tests"}

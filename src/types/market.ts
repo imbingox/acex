@@ -1,3 +1,4 @@
+import type BigNumber from "bignumber.js";
 import type {
   Exchange,
   MarketFreshness,
@@ -18,13 +19,13 @@ export interface MarketDefinition {
   contract: boolean;
   linear?: boolean;
   inverse?: boolean;
-  contractSize?: string;
+  contractSize?: BigNumber;
   pricePrecision: number;
   amountPrecision: number;
-  priceStep: string;
-  amountStep: string;
-  minAmount?: string;
-  minNotional?: string;
+  priceStep: BigNumber;
+  amountStep: BigNumber;
+  minAmount?: BigNumber;
+  minNotional?: BigNumber;
   expiry?: number;
   raw: Record<string, unknown>;
 }
@@ -58,10 +59,10 @@ export interface MarketEventFilter {
 export interface L1Book {
   exchange: Exchange;
   symbol: string;
-  bidPrice: string;
-  bidSize: string;
-  askPrice: string;
-  askSize: string;
+  bidPrice: BigNumber;
+  bidSize: BigNumber;
+  askPrice: BigNumber;
+  askSize: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -71,10 +72,10 @@ export interface L1Book {
 export interface FundingRateSnapshot {
   exchange: Exchange;
   symbol: string;
-  fundingRate: string;
+  fundingRate: BigNumber;
   nextFundingTime?: number;
-  markPrice?: string;
-  indexPrice?: string;
+  markPrice?: BigNumber;
+  indexPrice?: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -128,8 +129,9 @@ export interface MarketManager {
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
 
-  getMarket(symbol: string): MarketDefinition | undefined;
-  listMarkets(): MarketDefinition[];
+  getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
+  findMarkets(symbol: string): MarketDefinition[];
+  listMarkets(exchange?: Exchange): MarketDefinition[];
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;

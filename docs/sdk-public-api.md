@@ -455,8 +455,9 @@ export interface MarketManager {
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
 
-  getMarket(symbol: string): MarketDefinition | undefined;
-  listMarkets(): MarketDefinition[];
+  getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
+  findMarkets(symbol: string): MarketDefinition[];
+  listMarkets(exchange?: Exchange): MarketDefinition[];
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;
@@ -523,7 +524,7 @@ export type MarketEvent =
 | 主题 | 约定 |
 |---|---|
 | `loadMarkets()` | 显式加载并缓存标准化 market catalog；当前实现聚焦 `binance` 的 `Spot + USDⓈ-M + COIN-M` |
-| `getMarket()` / `listMarkets()` | 读取已缓存的标准化 market metadata；getter 本身不隐式发起网络请求 |
+| `getMarket(exchange, symbol)` / `findMarkets(symbol)` / `listMarkets(exchange?)` | 读取已缓存的标准化 market metadata；getter 本身不隐式发起网络请求 |
 | `subscribeL1Book()` / `subscribeFundingRate()` | 幂等；resolve 时对应首个快照必须已经 ready |
 | `subscribeL1Book()` | 内部会确保 market catalog 已加载，然后再按统一 `symbol` 路由到对应 market family 的真实 WS stream |
 | `unsubscribe*()` | 幂等；退订后保留最后快照，但状态改为 `activity = inactive` |

@@ -1,3 +1,4 @@
+import BigNumber from "bignumber.js";
 import type {
   L1BookStreamCallbacks,
   L1BookStreamOptions,
@@ -208,13 +209,23 @@ export class MarketManagerImpl
     this.updateActivity(record);
   }
 
-  getMarket(symbol: string): MarketDefinition | undefined {
-    const market = this.definitions.get(symbol);
+  getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined {
+    const market = this.definitions.get(marketKey({ exchange, symbol }));
     return market ? cloneMarketDefinition(market) : undefined;
   }
 
-  listMarkets(): MarketDefinition[] {
+  findMarkets(symbol: string): MarketDefinition[] {
     return [...this.definitions.values()]
+      .filter((market) => market.symbol === symbol)
+      .map((market) => cloneMarketDefinition(market));
+  }
+
+  listMarkets(exchange?: Exchange): MarketDefinition[] {
+    const values = [...this.definitions.values()];
+    const filtered = exchange
+      ? values.filter((market) => market.exchange === exchange)
+      : values;
+    return filtered
       .sort((left, right) => left.symbol.localeCompare(right.symbol))
       .map((market) => cloneMarketDefinition(market));
   }
@@ -319,7 +330,7 @@ export class MarketManagerImpl
       this.definitions.clear();
 
       for (const market of markets) {
-        this.definitions.set(market.symbol, market);
+        this.definitions.set(marketKey(market), market);
       }
     } catch (error) {
       const wrapped = new AcexError(
@@ -344,7 +355,7 @@ export class MarketManagerImpl
     this.assertSupportedExchange(input.exchange);
     await this.loadMarketCatalog();
 
-    const market = this.definitions.get(input.symbol);
+    const market = this.definitions.get(marketKey(input));
     if (!market) {
       throw this.createError(
         "MARKET_NOT_FOUND",
@@ -517,10 +528,10 @@ export class MarketManagerImpl
     return {
       exchange,
       symbol,
-      bidPrice: input.bidPrice,
-      bidSize: input.bidSize,
-      askPrice: input.askPrice,
-      askSize: input.askSize,
+      bidPrice: new BigNumber(input.bidPrice),
+      bidSize: new BigNumber(input.bidSize),
+      askPrice: new BigNumber(input.askPrice),
+      askSize: new BigNumber(input.askSize),
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
@@ -538,7 +549,7 @@ export class MarketManagerImpl
     return {
       exchange,
       symbol,
-      fundingRate: previous?.fundingRate ?? "0",
+      fundingRate: previous?.fundingRate ?? new BigNumber(0),
       nextFundingTime: previous?.nextFundingTime,
       markPrice: previous?.markPrice,
       indexPrice: previous?.indexPrice,

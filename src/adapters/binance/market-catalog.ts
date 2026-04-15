@@ -1,3 +1,4 @@
+import BigNumber from "bignumber.js";
 import type { MarketDefinition, MarketType } from "../../types/index.ts";
 
 type FetchLike = typeof fetch;
@@ -131,6 +132,7 @@ function normalizeSpotSymbol(
     getFilter(symbol.filters, "MIN_NOTIONAL");
   const priceStep = normalizeStep(priceFilter?.tickSize);
   const amountStep = normalizeStep(lotSizeFilter?.stepSize);
+  const notionalValue = notionalFilter?.minNotional ?? notionalFilter?.notional;
 
   return {
     exchange: "binance",
@@ -144,10 +146,12 @@ function normalizeSpotSymbol(
     contract: false,
     pricePrecision: precisionFromStep(priceStep),
     amountPrecision: precisionFromStep(amountStep),
-    priceStep,
-    amountStep,
-    minAmount: lotSizeFilter?.minQty,
-    minNotional: notionalFilter?.minNotional ?? notionalFilter?.notional,
+    priceStep: new BigNumber(priceStep),
+    amountStep: new BigNumber(amountStep),
+    minAmount: lotSizeFilter?.minQty
+      ? new BigNumber(lotSizeFilter.minQty)
+      : undefined,
+    minNotional: notionalValue ? new BigNumber(notionalValue) : undefined,
     raw: toRecord(symbol),
   };
 }
@@ -173,6 +177,7 @@ function normalizeDerivativesSymbol(
       : family === "usdm"
         ? "1"
         : undefined;
+  const notionalValue = notionalFilter?.minNotional ?? notionalFilter?.notional;
 
   return {
     exchange: "binance",
@@ -193,13 +198,15 @@ function normalizeDerivativesSymbol(
     contract: true,
     linear: family === "usdm",
     inverse: family === "coinm",
-    contractSize,
+    contractSize: contractSize ? new BigNumber(contractSize) : undefined,
     pricePrecision: precisionFromStep(priceStep),
     amountPrecision: precisionFromStep(amountStep),
-    priceStep,
-    amountStep,
-    minAmount: lotSizeFilter?.minQty,
-    minNotional: notionalFilter?.minNotional ?? notionalFilter?.notional,
+    priceStep: new BigNumber(priceStep),
+    amountStep: new BigNumber(amountStep),
+    minAmount: lotSizeFilter?.minQty
+      ? new BigNumber(lotSizeFilter.minQty)
+      : undefined,
+    minNotional: notionalValue ? new BigNumber(notionalValue) : undefined,
     expiry: type === "future" ? symbol.deliveryDate : undefined,
     raw: toRecord(symbol),
   };

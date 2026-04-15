@@ -1,3 +1,4 @@
+import type BigNumber from "bignumber.js";
 import type {
   Exchange,
   PrivateRuntimeStatus,
@@ -55,9 +56,9 @@ export interface BalanceSnapshot {
   accountId: string;
   exchange: Exchange;
   asset: string;
-  free: string;
-  used: string;
-  total: string;
+  free: BigNumber;
+  used: BigNumber;
+  total: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -69,12 +70,12 @@ export interface PositionSnapshot {
   exchange: Exchange;
   symbol: string;
   side: PositionSide;
-  size: string;
-  entryPrice?: string;
-  markPrice?: string;
-  unrealizedPnl?: string;
-  leverage?: string;
-  liquidationPrice?: string;
+  size: BigNumber;
+  entryPrice?: BigNumber;
+  markPrice?: BigNumber;
+  unrealizedPnl?: BigNumber;
+  leverage?: BigNumber;
+  liquidationPrice?: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -84,10 +85,10 @@ export interface PositionSnapshot {
 export interface RiskSnapshot {
   accountId: string;
   exchange: Exchange;
-  equity?: string;
-  marginRatio?: string;
-  initialMargin?: string;
-  maintenanceMargin?: string;
+  equity?: BigNumber;
+  marginRatio?: BigNumber;
+  initialMargin?: BigNumber;
+  maintenanceMargin?: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;

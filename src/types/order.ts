@@ -1,3 +1,4 @@
+import type BigNumber from "bignumber.js";
 import type { PositionSide } from "./account.ts";
 import type {
   Exchange,
@@ -69,14 +70,14 @@ export interface OrderSnapshot {
   side: OrderSide;
   type: string;
   status: OrderStatus;
-  price?: string;
-  triggerPrice?: string;
-  amount: string;
-  filled: string;
-  remaining?: string;
+  price?: BigNumber;
+  triggerPrice?: BigNumber;
+  amount: BigNumber;
+  filled: BigNumber;
+  remaining?: BigNumber;
   reduceOnly?: boolean;
   positionSide?: PositionSide;
-  avgFillPrice?: string;
+  avgFillPrice?: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;

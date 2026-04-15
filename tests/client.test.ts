@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import BigNumber from "bignumber.js";
 import { AcexError, createClient } from "../index.ts";
 
 const originalFetch = globalThis.fetch;
@@ -380,7 +381,7 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     "ETH/USDT",
   ]);
 
-  expect(client.market.getMarket("BTC/USDT")).toMatchObject({
+  expect(client.market.getMarket("binance", "BTC/USDT")).toMatchObject({
     exchange: "binance",
     symbol: "BTC/USDT",
     type: "spot",
@@ -389,23 +390,25 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     amountPrecision: 4,
   });
 
-  expect(client.market.getMarket("BTC/USDT:USDT")).toMatchObject({
+  expect(client.market.getMarket("binance", "BTC/USDT:USDT")).toMatchObject({
     type: "swap",
     settle: "USDT",
     linear: true,
     contract: true,
-    contractSize: "1",
-    minNotional: "5",
+    contractSize: new BigNumber("1"),
+    minNotional: new BigNumber("5"),
   });
 
-  expect(client.market.getMarket("BTC/USD:BTC")).toMatchObject({
+  expect(client.market.getMarket("binance", "BTC/USD:BTC")).toMatchObject({
     type: "swap",
     settle: "BTC",
     inverse: true,
-    contractSize: "100",
+    contractSize: new BigNumber("100"),
   });
 
-  expect(client.market.getMarket("BTC/USD:BTC-20250627")).toMatchObject({
+  expect(
+    client.market.getMarket("binance", "BTC/USD:BTC-20250627"),
+  ).toMatchObject({
     type: "future",
     expiry: Date.UTC(2025, 5, 27),
   });
@@ -457,8 +460,8 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
 
   expect(book).toMatchObject({
     symbol: "BTC/USDT:USDT",
-    bidPrice: "102000.10",
-    askPrice: "102000.20",
+    bidPrice: new BigNumber("102000.10"),
+    askPrice: new BigNumber("102000.20"),
     version: 1,
   });
   expect(status).toMatchObject({
@@ -468,7 +471,7 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   });
 
   const event = await nextEvent(iterator);
-  expect(event.snapshot.bidSize).toBe("1.500");
+  expect(event.snapshot.bidSize).toEqual(new BigNumber("1.500"));
 
   await client.market.unsubscribeL1Book({
     exchange: "binance",
@@ -494,7 +497,7 @@ test("unknown and inactive markets have explicit semantics", async () => {
   await client.market.loadMarkets();
   await client.start();
 
-  expect(client.market.getMarket("DOGE/USDT")).toBeUndefined();
+  expect(client.market.getMarket("binance", "DOGE/USDT")).toBeUndefined();
 
   await expect(
     client.market.subscribeL1Book({
@@ -634,8 +637,8 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: "101500.10",
-    askPrice: "101500.20",
+    bidPrice: new BigNumber("101500.10"),
+    askPrice: new BigNumber("101500.20"),
     version: 2,
   });
   expect(
@@ -685,8 +688,8 @@ test("caller can observe l1 book keep changing for one minute", async () => {
     await subscribePromise;
 
     let eventCount = 0;
-    let firstBidPrice: string | undefined;
-    let lastBidPrice: string | undefined;
+    let firstBidPrice: BigNumber | undefined;
+    let lastBidPrice: BigNumber | undefined;
     let previousVersion = 0;
 
     while (eventCount < feed.totalTicks) {
@@ -717,7 +720,7 @@ test("caller can observe l1 book keep changing for one minute", async () => {
     expect(emittedTicks).toBe(feed.totalTicks);
     expect(eventCount).toBe(feed.totalTicks);
     expect(previousVersion).toBe(feed.totalTicks);
-    expect(firstBidPrice).not.toBe(lastBidPrice);
+    expect(firstBidPrice?.isEqualTo(lastBidPrice ?? 0)).toBe(false);
     expect(finalBook).toMatchObject({
       version: feed.totalTicks,
       bidPrice: lastBidPrice,

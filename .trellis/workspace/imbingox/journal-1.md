@@ -171,3 +171,55 @@ Decomposed God Class into 5-layer architecture, published beta to npm
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: SDK public API improvements & BigNumber migration
+
+**Date**: 2026-04-15
+**Task**: SDK public API improvements & BigNumber migration
+**Branch**: `main`
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Change | Description |
+|--------|-------------|
+| README rewrite | 完整重写 README，按 8 个使用场景分节，含详细代码示例 |
+| `getMarket(exchange, symbol)` | 添加 exchange 维度，精确查询指定交易所的交易对 |
+| `listMarkets(exchange?)` | 支持按交易所过滤市场列表 |
+| `findMarkets(symbol)` | 新增跨交易所查询同一 symbol 的所有 market |
+| BigNumber migration | 所有价格/数量/金额字段从 `string` 改为 `BigNumber` (bignumber.js) |
+| Event-as-trigger pattern | README 新增"事件当触发器"推荐模式，适合套利等跨 symbol 场景 |
+| Published beta.2 | `@imbingox/acex@0.1.0-beta.2` 发布到 npm |
+
+**Key files modified**:
+- `src/types/market.ts`, `account.ts`, `order.ts` — BigNumber types
+- `src/adapters/binance/market-catalog.ts` — BigNumber conversion at adapter level
+- `src/managers/market-manager.ts` — exchange-aware definitions Map, BigNumber in createL1Book
+- `src/index.ts` — re-export BigNumber
+- `tests/client.test.ts` — updated assertions
+- `README.md` — full rewrite
+- `docs/sdk-public-api.md` — updated signatures
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5e47284` | (see git log) |
+| `c24fc40` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -223,3 +223,36 @@ Decomposed God Class into 5-layer architecture, published beta to npm
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Finalize frontend specs and archive Trellis tasks
+
+**Date**: 2026-04-16
+**Task**: Finalize frontend specs and archive Trellis tasks
+**Branch**: `main`
+
+### Summary
+
+Replaced frontend Trellis placeholder specs with repo-specific SDK-only guidance, archived the bootstrap-guidelines and v0.4.0 migration tasks, and verified lint, type-check, and tests before handoff.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f7897b9` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -1,51 +1,52 @@
 # Quality Guidelines
 
-> Code quality standards for frontend development.
+> There is no frontend package to lint or test today. Quality checks focus on preventing accidental UI code from leaking into the SDK package.
 
 ---
 
-## Overview
+## Repository Quality Gates
 
-<!--
-Document your project's quality standards here.
+The current project-level checks are defined in `package.json`:
 
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
+- `bun run lint`
+- `bun run type-check`
+- `bun test`
 
-(To be filled by the team)
+These validate the SDK package. They do not establish a frontend framework stack.
 
 ---
 
 ## Forbidden Patterns
 
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
+- Adding frontend files directly under the SDK `src/` tree.
+- Adding frontend-only tooling to the root package without an explicit workspace or app plan.
+- Importing private SDK internals into demos, dashboards, or future UI code.
+- Treating generic examples in `CLAUDE.md` as project-approved frontend architecture.
 
 ---
 
 ## Required Patterns
 
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
-
----
-
-## Testing Requirements
-
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
+- Keep frontend work in a dedicated package or app once it exists.
+- Consume the SDK through public exports only.
+- Update this frontend spec directory as soon as real frontend code is introduced.
 
 ---
 
-## Code Review Checklist
+## Review Checklist
 
-<!-- What reviewers should check -->
+When a change mentions UI, demo screens, dashboards, or browser rendering:
 
-(To be filled by the team)
+1. Does the change introduce a dedicated frontend boundary instead of modifying the SDK `src/` tree?
+2. Does the code depend only on public SDK exports?
+3. Are `BigNumber` values formatted at the presentation boundary rather than truncated earlier?
+4. Are frontend conventions documented here before the pattern spreads?
+
+---
+
+## Evidence From The Current Repo
+
+- `package.json`
+- `README.md`
+- `src/index.ts`
+- `tests/client.test.ts`

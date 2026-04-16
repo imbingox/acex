@@ -79,9 +79,19 @@ AI needs to match existing patterns, not introduce new ones.
 
 ## Completion Checklist
 
-- [ ] Guidelines filled for your project type
-- [ ] At least 2-3 real code examples in each guideline
-- [ ] Anti-patterns documented
+- [x] Guidelines filled for the actual project shape
+- [x] Real repository evidence referenced in each guideline
+- [x] Anti-patterns documented
+
+## Outcome
+
+The repository does not currently contain a frontend package. Instead of leaving
+placeholder templates in place, the frontend spec files now document the real
+boundary:
+
+- this repo is an SDK-only package today
+- frontend code must not be added under the current `src/` tree
+- any future UI package must consume public SDK exports and update these specs
 
 When done:
 

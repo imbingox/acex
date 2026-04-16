@@ -1,59 +1,57 @@
 # Component Guidelines
 
-> How components are built in this project.
+> No component system exists in this repository today.
 
 ---
 
 ## Overview
 
-<!--
-Document your project's component conventions here.
-
-Questions to answer:
-- What component patterns do you use?
-- How are props defined?
-- How do you handle composition?
-- What accessibility standards apply?
--->
-
-(To be filled by the team)
+`acex` is a programmatic SDK, not an application. There are no React, Vue, or HTML component files in the repo, so agents must not invent component conventions.
 
 ---
 
-## Component Structure
+## Current Rules
 
-<!-- Standard structure of a component file -->
-
-(To be filled by the team)
-
----
-
-## Props Conventions
-
-<!-- How props should be defined and typed -->
-
-(To be filled by the team)
+- Do not add component files to the current SDK package.
+- Do not introduce a UI layer as part of an SDK feature unless the task explicitly requires a new frontend package.
+- If a first-party frontend package is created later, define component rules from that codebase and update this file immediately.
 
 ---
 
-## Styling Patterns
+## Props And Composition
 
-<!-- How styles are applied (CSS modules, styled-components, Tailwind, etc.) -->
+No props conventions are defined because no component boundary exists yet.
 
-(To be filled by the team)
+If a frontend package is introduced later:
+
+- Keep component props typed inside that package.
+- Consume the SDK via public exports instead of passing adapter internals through props.
+- Document composition patterns after there are at least two real component examples.
 
 ---
 
 ## Accessibility
 
-<!-- A11y requirements and patterns -->
+No repository-level accessibility standard is documented yet because there is no UI surface to audit.
 
-(To be filled by the team)
+The first frontend task must define:
+
+- semantic markup expectations
+- keyboard interaction requirements
+- screen-reader expectations for trading data displays
 
 ---
 
-## Common Mistakes
+## Evidence From The Current Repo
 
-<!-- Component-related mistakes your team has made -->
+- `package.json` exports a library entrypoint instead of an app entrypoint.
+- `README.md` documents programmatic SDK usage only.
+- `src/index.ts` exposes TypeScript APIs, not UI primitives.
 
-(To be filled by the team)
+---
+
+## Common Mistakes To Avoid
+
+- Hiding a product decision inside a "small component" commit.
+- Importing from `src/internal/*` to feed a UI.
+- Building docs or demos on private SDK internals instead of public exports.

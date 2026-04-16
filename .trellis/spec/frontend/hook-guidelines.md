@@ -1,51 +1,55 @@
 # Hook Guidelines
 
-> How hooks are used in this project.
+> No React-style hooks exist in this repository today.
 
 ---
 
 ## Overview
 
-<!--
-Document your project's hook conventions here.
-
-Questions to answer:
-- What custom hooks do you have?
-- How do you handle data fetching?
-- What are the naming conventions?
-- How do you share stateful logic?
--->
-
-(To be filled by the team)
+This SDK has stateful logic, but it is implemented with managers and infrastructure primitives rather than framework hooks.
 
 ---
 
-## Custom Hook Patterns
+## Current Patterns
 
-<!-- How to create and structure custom hooks -->
+Stateful reuse currently lives in:
 
-(To be filled by the team)
+- `src/client/runtime.ts` for lifecycle orchestration
+- `src/internal/managed-websocket.ts` for connection management
+- `src/internal/async-event-bus.ts` for async event delivery
 
----
-
-## Data Fetching
-
-<!-- How data fetching is handled (React Query, SWR, etc.) -->
-
-(To be filled by the team)
+These are not hooks and should not be wrapped in React naming or semantics inside the SDK package.
 
 ---
 
-## Naming Conventions
+## Current Rules
 
-<!-- Hook naming rules (use*, etc.) -->
-
-(To be filled by the team)
+- Do not add files named `use*.ts` or `use*.tsx` to this package.
+- Do not move SDK lifecycle logic into framework-specific abstractions.
+- If consumers want hooks such as `useL1Book`, they should implement them in their own frontend package on top of the public SDK API.
 
 ---
 
-## Common Mistakes
+## Naming Guidance For Future UI Code
 
-<!-- Hook-related mistakes your team has made -->
+If a frontend package is introduced later:
 
-(To be filled by the team)
+- Reserve `use*` names for real framework hooks only.
+- Keep hook responsibilities thin: subscribe through the SDK, then adapt values for rendering.
+- Document data fetching and subscription cleanup patterns here once they exist in code.
+
+---
+
+## Evidence From The Current Repo
+
+- `src/client/runtime.ts`
+- `src/internal/managed-websocket.ts`
+- `src/internal/async-event-bus.ts`
+
+---
+
+## Common Mistakes To Avoid
+
+- Adding React hooks to a package that has no React dependency.
+- Coupling websocket lifecycle to component mount state inside the SDK.
+- Letting a UI abstraction leak back into manager or adapter layers.

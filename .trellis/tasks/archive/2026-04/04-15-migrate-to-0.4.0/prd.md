@@ -7,10 +7,16 @@
 
 ## Status
 
-- [ ] Review migration guide
-- [ ] Update custom files
-- [ ] Run `trellis update --migrate`
-- [ ] Test workflows
+- [x] Review migration guide
+- [x] Update custom files
+- [x] Confirm v0.4.0 migration landed in `c24fc40`
+- [x] Test workflows
+
+## Verification
+
+- Verified old split skills are gone and unified `before-dev` / `check` skills are present.
+- Smoke-tested `python3 ./.trellis/scripts/get_context.py`, `python3 ./.trellis/scripts/get_context.py --json`, `python3 ./.trellis/scripts/task.py list`, and `python3 ./.trellis/scripts/task.py list-archive`.
+- Confirmed the repository is already on the migration commit `c24fc40 chore: upgrade trellis to v0.4.0`.
 
 ---
 
@@ -66,4 +72,3 @@ When helping users migrate to v0.4.0-beta.1:
 2. **If customized**: Help merge their customizations into the new unified `before-dev` and `check` files. The new files use `python3 ./.trellis/scripts/get_context.py --mode packages` to auto-detect which specs to load, replacing the hardcoded backend/frontend split.
 3. **If not customized**: Just run `trellis update` — safe-file-delete will handle cleanup automatically.
 4. **Python scripts**: No user action needed. The refactoring preserves all entry paths. If the user has custom scripts that import from `.trellis/scripts/common/`, they may need to update imports (e.g., `from common.io import read_json` instead of inline `_read_json_file`).
-

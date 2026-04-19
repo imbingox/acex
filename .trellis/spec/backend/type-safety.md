@@ -64,11 +64,18 @@ createOrderStatus(
 - 只在需要运行时值时使用普通 import。
 - 纯类型依赖默认使用 `import type`，减少循环依赖和构建噪音。
 
+#### 3.5 union event filter 请求字段时，缺字段事件必须失败
+
+- `HealthEvent` 是 `client` / `market` / `account` / `order` 的 union，不是每个事件都带 `exchange`、`accountId`、`symbol`。
+- 当 `matchesHealthFilter()` 收到 `exchange`、`accountId` 或 `symbol` 条件时，**没有该字段的事件必须返回 `false`**。
+- 不能写成“字段存在才比较，否则直接跳过”的逻辑，否则会把 `client.status_changed` 这类事件错误放进 `health({ exchange: "binance" })`。
+
 ### 4. Validation & Error Matrix
 
 | 场景 | 正确写法 | 常见错误 |
 |---|---|---|
 | 事件 filter 上的交易所字段 | `exchange?: Exchange` | `exchange?: string` |
+| `HealthEvent` union 上的字段过滤 | 请求 `exchange` / `accountId` / `symbol` 时，缺字段事件直接过滤掉 | 只有字段存在才比较，导致 `client.status_changed` 被错误放行 |
 | runtime 创建状态对象 | 显式返回 `OrderDataStatus` | 省略返回类型导致 `runtimeStatus` 被推成 `string` |
 | manager 返回状态 | 直接返回 `OrderDataStatus` | 通过自引用 alias 或重复定义接口 |
 | 纯类型依赖 | `import type { Foo }` | 普通 import 造成不必要运行时依赖 |
@@ -80,6 +87,14 @@ createOrderStatus(
 ```ts
 export interface HealthEventFilter {
   exchange?: Exchange;
+}
+```
+
+```ts
+if (filter.exchange) {
+  if (!("exchange" in event) || event.exchange !== filter.exchange) {
+    return false;
+  }
 }
 ```
 
@@ -112,6 +127,16 @@ export interface HealthEventFilter {
 ```
 
 ```ts
+if ("exchange" in event && filter.exchange && event.exchange !== filter.exchange) {
+  return false;
+}
+```
+
+问题：
+- `client.status_changed` 没有 `exchange` 字段，会直接漏过这段判断
+- 调用 `health({ exchange: "binance" })` 时会错误收到 client 级事件
+
+```ts
 createOrderStatus(...) {
   return {
     runtimeStatus: activity === "active" ? "bootstrap_pending" : "stopped",
@@ -133,6 +158,7 @@ bun test
 - public contract 仍可从根入口正确导入
 - `Exchange`、状态枚举、事件 filter 等没有被宽化成 `string`
 - 重构后 manager 返回值仍符合文档约定
+- `health({ exchange })` / `health({ accountId })` / `health({ symbol })` 不会收到缺少对应字段的 union 成员事件
 
 ### 7. Wrong vs Correct
 

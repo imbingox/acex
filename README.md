@@ -595,4 +595,23 @@ bun run type-check
 bun test
 ```
 
+真实 Binance 公网 smoke test 单独执行，不放进默认 `bun test`：
+
+```bash
+bun run test:live:market -- --duration 10
+bun run test:live:market -- --duration 60 --disconnect-after 5 --disconnect-target perp
+bun run test:live:market:smoke
+bun run test:live:market:soak
+```
+
+这个脚本会验证：
+- `loadMarkets()` 的真实 market catalog
+- `subscribeL1Book()` 的 ready barrier
+- `getL1Book()` / `events.l1BookUpdates()` 的真实持续更新
+- 可选的主动断线后自动重连
+
+约定：
+- `smoke` 是快速连通性检查，默认跑 10 秒，不主动断线
+- `soak` 是短时稳定性检查，默认跑 60 秒，并对 perp 链路做一次主动断线重连验证
+
 更完整的公开接口设计说明见 [docs/sdk-public-api.md](./docs/sdk-public-api.md)。

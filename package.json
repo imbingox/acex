@@ -15,7 +15,10 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "type-check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "test:live:market": "bun run scripts/live-market-smoke.ts",
+    "test:live:market:smoke": "bun run scripts/live-market-smoke.ts --duration 10",
+    "test:live:market:soak": "bun run scripts/live-market-smoke.ts --duration 60 --disconnect-after 5 --disconnect-target perp"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",

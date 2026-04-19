@@ -95,24 +95,22 @@ export function matchesHealthFilter(
     }
   }
 
-  if (
-    "exchange" in event &&
-    filter.exchange &&
-    event.exchange !== filter.exchange
-  ) {
-    return false;
+  if (filter.exchange) {
+    if (!("exchange" in event) || event.exchange !== filter.exchange) {
+      return false;
+    }
   }
 
-  if (
-    "accountId" in event &&
-    filter.accountId &&
-    event.accountId !== filter.accountId
-  ) {
-    return false;
+  if (filter.accountId) {
+    if (!("accountId" in event) || event.accountId !== filter.accountId) {
+      return false;
+    }
   }
 
-  if ("symbol" in event && filter.symbol && event.symbol !== filter.symbol) {
-    return false;
+  if (filter.symbol) {
+    if (!("symbol" in event) || event.symbol !== filter.symbol) {
+      return false;
+    }
   }
 
   return true;

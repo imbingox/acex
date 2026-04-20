@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "新增私有 adapter contract 并保持 5 层架构"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "新增账户 raw/standard 类型和状态事件，避免类型宽化"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用 ManagedWebSocket 和现有事件/错误模式"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "PAPI REST/WS 到 adapter/manager/runtime 的跨层数据流"}

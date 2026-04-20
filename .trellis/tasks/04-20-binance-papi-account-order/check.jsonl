@@ -1,0 +1,6 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "检查新增私有 adapter contract 的层级边界"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "检查 public/raw 类型和状态事件无宽化"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "检查 adapter/manager/runtime 数据流职责边界"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "检查是否复用现有 WS 和事件模式"}

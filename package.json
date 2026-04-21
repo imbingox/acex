@@ -34,7 +34,7 @@
     "test:live:order": "bun run scripts/live-order-smoke.ts",
     "test:live:order:smoke": "bun run scripts/live-order-smoke.ts --duration 10",
     "test:live:order:soak": "bun run scripts/live-order-smoke.ts --duration 60 --disconnect-after 5",
-    "version-packages": "changeset version"
+    "version-packages": "changeset version && if [ -f CHANGELOG.md ]; then biome check --write .changeset/pre.json package.json CHANGELOG.md; else biome check --write .changeset/pre.json package.json; fi"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",

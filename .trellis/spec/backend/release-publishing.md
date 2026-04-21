@@ -42,6 +42,12 @@ bun run version-packages
 bun run release
 ```
 
+当前 `version-packages` contract：
+
+```bash
+changeset version && if [ -f CHANGELOG.md ]; then biome check --write .changeset/pre.json package.json CHANGELOG.md; else biome check --write .changeset/pre.json package.json; fi
+```
+
 ### 3. Contracts
 
 #### 3.1 触发方式
@@ -74,6 +80,7 @@ bun run release
   - `bun run lint`
   - `bun run type-check`
   - `bun run test`
+- `version-packages` 不能只跑裸 `changeset version`；必须在版本文件生成后立刻格式化 `.changeset/pre.json`、`package.json`，以及存在时的 `CHANGELOG.md`，避免 release PR merge 后因为格式问题把 `main` 上的 release workflow 跑挂。
 
 #### 3.5 Changesets 与 beta 策略
 

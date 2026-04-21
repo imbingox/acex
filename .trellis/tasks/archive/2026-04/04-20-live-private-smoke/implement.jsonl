@@ -1,0 +1,4 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Package scripts must remain executable quality entry points"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Extract shared live private smoke helpers instead of duplicating script logic"}

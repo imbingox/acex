@@ -1,0 +1,6 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "Verify layer boundaries after shared private stream refactor"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Verify public contract and helper return types remain precise"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify adapter-manager-runtime boundaries and data flow"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Ensure account/order reuse a single private stream mechanism"}

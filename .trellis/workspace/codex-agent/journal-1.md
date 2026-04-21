@@ -102,3 +102,38 @@ Implemented Binance private account and order management with shared private sub
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Stabilize npm release workflow after release PR rollout
+
+**Date**: 2026-04-21
+**Task**: Stabilize npm release workflow after release PR rollout
+**Branch**: `fix/release-version-packages-formatting`
+
+### Summary
+
+Debugged the post-merge Release workflow, fixed the Changesets prerelease file formatting regression, switched package.json repository metadata to the canonical GitHub URL, and hardened version-packages so future release PRs auto-format generated metadata after changeset version. Human-side npm provenance/trusted publishing settings were then adjusted and publishing succeeded.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `678d760` | (see git log) |
+| `fdcb892` | (see git log) |
+| `0a4c717` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

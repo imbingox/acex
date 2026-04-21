@@ -1,0 +1,7 @@
+# @imbingox/acex
+
+## 0.1.0-beta.3
+
+### Minor Changes
+
+- baeab15: Add Binance PAPI private account and order support, including the first `createOrder`, `cancelOrder`, and `cancelAllOrders` APIs.

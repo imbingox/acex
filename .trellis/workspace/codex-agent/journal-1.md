@@ -67,3 +67,38 @@ Implemented Binance Portfolio Margin PAPI account read-only support for the SDK.
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Ship Binance private trading MVP and release automation
+
+**Date**: 2026-04-21
+**Task**: Ship Binance private trading MVP and release automation
+**Branch**: `feat/order_account`
+
+### Summary
+
+Implemented Binance private account and order management with shared private subscription coordination, live smoke coverage for limit place/cancel, public docs/spec updates, and a Changesets plus npm Trusted Publishing release workflow.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `baeab15` | (see git log) |
+| `f85a9b0` | (see git log) |
+| `82ef26a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

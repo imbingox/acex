@@ -1,12 +1,20 @@
+import BigNumber from "bignumber.js";
+import type { RawOrderUpdate } from "../adapters/types.ts";
 import type {
   AccountAwareManager,
   ClientContext,
   HealthReporter,
   ManagerLifecycle,
+  PrivateOrderDataConsumer,
+  PrivateSubscriptionState,
 } from "../client/context.ts";
+import { AcexError } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
 import type {
+  CancelAllOrdersInput,
+  CancelOrderInput,
+  CreateOrderInput,
   Exchange,
   GetOrderInput,
   OrderDataStatus,
@@ -32,12 +40,28 @@ function cloneOrderStatus(status: OrderDataStatus): OrderDataStatus {
   return { ...status };
 }
 
+function getOrderLookupKey(input: {
+  orderId?: string;
+  clientOrderId?: string;
+}): string | undefined {
+  if (input.orderId) {
+    return `order:${input.orderId}`;
+  }
+
+  if (input.clientOrderId) {
+    return `client:${input.clientOrderId}`;
+  }
+
+  return undefined;
+}
+
 export class OrderManagerImpl
   implements
     OrderManager,
     ManagerLifecycle,
     AccountAwareManager,
-    HealthReporter<OrderDataStatus>
+    HealthReporter<OrderDataStatus>,
+    PrivateOrderDataConsumer
 {
   readonly events: OrderEventStreams;
 
@@ -81,24 +105,13 @@ export class OrderManagerImpl
 
     const record = this.getOrCreateRecord(input.accountId, account.exchange);
     record.subscribed = true;
-    record.status = {
-      ...this.createStatus(input.accountId, account.exchange, "active"),
-      ready: true,
-      runtimeStatus: "healthy",
-      lastReceivedAt: this.context.now(),
-      lastReadyAt: this.context.now(),
-    };
 
-    const event: OrderSnapshotReplacedEvent = {
-      type: "order.snapshot_replaced",
-      accountId: record.accountId,
-      exchange: record.exchange,
-      snapshot: [...record.snapshots.values()],
-      ts: this.context.now(),
-    };
-
-    this.orderBus.publish(event);
-    this.publishStatus(record);
+    try {
+      await this.context.subscribePrivateOrderFeed(input.accountId);
+    } catch (error) {
+      record.subscribed = false;
+      throw error;
+    }
   }
 
   async unsubscribeOrders(input: UnsubscribeOrdersInput): Promise<void> {
@@ -107,14 +120,88 @@ export class OrderManagerImpl
       return;
     }
 
+    this.context.unsubscribePrivateOrderFeed(input.accountId);
     record.subscribed = false;
     record.status = {
       ...record.status,
       activity: "inactive",
       runtimeStatus: "stopped",
+      reason: undefined,
       inactiveSince: this.context.now(),
     };
     this.publishStatus(record);
+  }
+
+  async createOrder(input: CreateOrderInput): Promise<OrderSnapshot> {
+    this.context.assertStarted();
+    const account = this.context.getRegisteredAccount(input.accountId);
+    this.context.ensurePrivateCredentials(input.accountId);
+    this.validateCreateOrderInput(input, account.exchange);
+
+    try {
+      const update = await this.context.createOrder(input);
+      return this.applyCommandUpdate(input.accountId, account.exchange, update);
+    } catch (error) {
+      throw this.wrapCommandError(
+        "ORDER_CREATE_FAILED",
+        `Failed to create order for ${input.accountId}: ${input.symbol}`,
+        error,
+        {
+          accountId: input.accountId,
+          exchange: account.exchange,
+          symbol: input.symbol,
+        },
+      );
+    }
+  }
+
+  async cancelOrder(input: CancelOrderInput): Promise<OrderSnapshot> {
+    this.context.assertStarted();
+    const account = this.context.getRegisteredAccount(input.accountId);
+    this.context.ensurePrivateCredentials(input.accountId);
+    this.validateCancelOrderInput(input, account.exchange);
+
+    try {
+      const update = await this.context.cancelOrder(input);
+      return this.applyCommandUpdate(input.accountId, account.exchange, update);
+    } catch (error) {
+      throw this.wrapCommandError(
+        "ORDER_CANCEL_FAILED",
+        `Failed to cancel order for ${input.accountId}: ${input.symbol}`,
+        error,
+        {
+          accountId: input.accountId,
+          exchange: account.exchange,
+          symbol: input.symbol,
+        },
+      );
+    }
+  }
+
+  async cancelAllOrders(input: CancelAllOrdersInput): Promise<OrderSnapshot[]> {
+    this.context.assertStarted();
+    const account = this.context.getRegisteredAccount(input.accountId);
+    this.context.ensurePrivateCredentials(input.accountId);
+
+    try {
+      const updates = await this.context.cancelAllOrders(input);
+      return this.applyCommandUpdates(
+        input.accountId,
+        account.exchange,
+        updates,
+      );
+    } catch (error) {
+      throw this.wrapCommandError(
+        "ORDER_CANCEL_ALL_FAILED",
+        `Failed to cancel all orders for ${input.accountId}: ${input.symbol}`,
+        error,
+        {
+          accountId: input.accountId,
+          exchange: account.exchange,
+          symbol: input.symbol,
+        },
+      );
+    }
   }
 
   getOrder(input: GetOrderInput): OrderSnapshot | undefined {
@@ -167,30 +254,7 @@ export class OrderManagerImpl
 
   // --- ManagerLifecycle ---
 
-  onClientStarted(): void {
-    const now = this.context.now();
-
-    for (const [accountId, record] of this.records) {
-      if (!record.subscribed) {
-        continue;
-      }
-
-      const account = this.context.getRegisteredAccount(accountId);
-      const creds = account.credentials;
-      if (!creds?.apiKey || !creds.secret) {
-        continue;
-      }
-
-      record.status = {
-        ...this.createStatus(accountId, account.exchange, "active"),
-        ready: true,
-        runtimeStatus: "healthy",
-        lastReceivedAt: now,
-        lastReadyAt: now,
-      };
-      this.publishStatus(record);
-    }
-  }
+  onClientStarted(): void {}
 
   onClientStopping(now: number): void {
     for (const record of this.records.values()) {
@@ -202,6 +266,7 @@ export class OrderManagerImpl
         ...record.status,
         activity: "inactive",
         runtimeStatus: "stopped",
+        reason: undefined,
         inactiveSince: now,
       };
       this.publishStatus(record);
@@ -221,6 +286,7 @@ export class OrderManagerImpl
       ...record.status,
       activity: "inactive",
       runtimeStatus: "stopped",
+      reason: undefined,
       inactiveSince: now,
     };
     this.publishStatus(record);
@@ -233,10 +299,144 @@ export class OrderManagerImpl
       return;
     }
 
-    record.status = this.createStatus(accountId, exchange, "active");
-    record.status.ready = true;
-    record.status.runtimeStatus = "healthy";
-    record.status.lastReadyAt = this.context.now();
+    this.onPrivateOrderPending(accountId, exchange);
+  }
+
+  // --- PrivateOrderDataConsumer ---
+
+  onPrivateOrderPending(accountId: string, exchange: Exchange): void {
+    const record = this.getOrCreateRecord(accountId, exchange);
+    if (!record.subscribed) {
+      return;
+    }
+
+    record.status = {
+      ...this.createStatus(accountId, exchange, "active"),
+      ready: record.snapshots.size > 0,
+      runtimeStatus: "bootstrap_pending",
+      reason: undefined,
+      lastReceivedAt: record.status.lastReceivedAt,
+      lastReadyAt: record.status.lastReadyAt,
+      inactiveSince: undefined,
+    };
+    this.publishStatus(record);
+  }
+
+  onPrivateOrderBootstrap(
+    accountId: string,
+    exchange: Exchange,
+    snapshots: RawOrderUpdate[],
+  ): void {
+    const record = this.getOrCreateRecord(accountId, exchange);
+    if (!record.subscribed) {
+      return;
+    }
+
+    const nextSnapshots = new Map<string, OrderSnapshot>();
+    for (const update of snapshots) {
+      const snapshot = this.createSnapshot(
+        accountId,
+        exchange,
+        update,
+        this.getExistingSnapshot(record, update),
+      );
+      this.setSnapshot(nextSnapshots, snapshot);
+    }
+
+    record.snapshots = nextSnapshots;
+    const orderedSnapshots = [...record.snapshots.values()];
+    const latestTs = orderedSnapshots.reduce(
+      (max, snapshot) => Math.max(max, snapshot.updatedAt),
+      0,
+    );
+    record.status = {
+      ...record.status,
+      activity: "active",
+      ready: true,
+      runtimeStatus: "healthy",
+      reason: undefined,
+      lastReceivedAt: latestTs || record.status.lastReceivedAt,
+      lastReadyAt: latestTs || this.context.now(),
+      inactiveSince: undefined,
+    };
+
+    const event: OrderSnapshotReplacedEvent = {
+      type: "order.snapshot_replaced",
+      accountId,
+      exchange,
+      snapshot: orderedSnapshots,
+      ts: this.context.now(),
+    };
+
+    this.orderBus.publish(event);
+    this.publishStatus(record);
+  }
+
+  onPrivateOrderUpdate(
+    accountId: string,
+    exchange: Exchange,
+    update: RawOrderUpdate,
+  ): void {
+    const record = this.getOrCreateRecord(accountId, exchange);
+    if (!record.subscribed) {
+      return;
+    }
+
+    const previous = this.getExistingSnapshot(record, update);
+    const snapshot = this.createSnapshot(accountId, exchange, update, previous);
+    this.setSnapshot(record.snapshots, snapshot);
+
+    const eventType =
+      snapshot.status === "filled"
+        ? "order.filled"
+        : snapshot.status === "rejected"
+          ? "order.rejected"
+          : snapshot.status === "canceled" || snapshot.status === "expired"
+            ? "order.canceled"
+            : "order.updated";
+
+    this.orderBus.publish({
+      type: eventType,
+      accountId,
+      exchange,
+      symbol: snapshot.symbol,
+      snapshot,
+      ts: this.context.now(),
+    });
+
+    record.status = {
+      ...record.status,
+      activity: "active",
+      ready: true,
+      runtimeStatus: "healthy",
+      reason: undefined,
+      lastReceivedAt: snapshot.receivedAt,
+      lastReadyAt: snapshot.updatedAt,
+      inactiveSince: undefined,
+    };
+    this.publishStatus(record);
+  }
+
+  onPrivateOrderStreamState(
+    accountId: string,
+    exchange: Exchange,
+    state: PrivateSubscriptionState,
+  ): void {
+    const record = this.getOrCreateRecord(accountId, exchange);
+    if (!record.subscribed) {
+      return;
+    }
+
+    record.status = {
+      ...record.status,
+      activity: "active",
+      ready: state.ready,
+      runtimeStatus: state.runtimeStatus,
+      reason: state.reason,
+      lastReceivedAt: state.lastReceivedAt ?? record.status.lastReceivedAt,
+      lastReadyAt: state.lastReadyAt ?? record.status.lastReadyAt,
+      inactiveSince: undefined,
+    };
     this.publishStatus(record);
   }
 
@@ -289,6 +489,86 @@ export class OrderManagerImpl
     };
   }
 
+  private getExistingSnapshot(
+    record: OrderRecord,
+    update: { orderId?: string; clientOrderId?: string },
+  ): OrderSnapshot | undefined {
+    for (const snapshot of record.snapshots.values()) {
+      if (update.orderId && snapshot.orderId === update.orderId) {
+        return snapshot;
+      }
+
+      if (
+        update.clientOrderId &&
+        snapshot.clientOrderId === update.clientOrderId
+      ) {
+        return snapshot;
+      }
+    }
+
+    return undefined;
+  }
+
+  private setSnapshot(
+    snapshots: Map<string, OrderSnapshot>,
+    snapshot: OrderSnapshot,
+  ): void {
+    const lookupKey =
+      getOrderLookupKey(snapshot) ??
+      getOrderLookupKey({
+        clientOrderId: snapshot.clientOrderId,
+      });
+    if (lookupKey) {
+      snapshots.set(lookupKey, snapshot);
+    }
+  }
+
+  private createSnapshot(
+    accountId: string,
+    exchange: Exchange,
+    input: RawOrderUpdate,
+    previous?: OrderSnapshot,
+  ): OrderSnapshot {
+    const amount = new BigNumber(input.amount);
+    const filled = new BigNumber(input.filled);
+    const remaining =
+      input.remaining === undefined
+        ? amount.minus(filled)
+        : new BigNumber(input.remaining);
+
+    return {
+      accountId,
+      exchange,
+      orderId: input.orderId,
+      clientOrderId: input.clientOrderId,
+      symbol: input.symbol,
+      side: input.side,
+      type: input.type,
+      status: input.status,
+      price:
+        input.price === undefined
+          ? previous?.price
+          : new BigNumber(input.price),
+      triggerPrice:
+        input.triggerPrice === undefined
+          ? previous?.triggerPrice
+          : new BigNumber(input.triggerPrice),
+      amount,
+      filled,
+      remaining,
+      reduceOnly: input.reduceOnly ?? previous?.reduceOnly,
+      positionSide: input.positionSide ?? previous?.positionSide,
+      avgFillPrice:
+        input.avgFillPrice === undefined
+          ? previous?.avgFillPrice
+          : new BigNumber(input.avgFillPrice),
+      exchangeTs: input.exchangeTs,
+      receivedAt: input.receivedAt,
+      updatedAt: input.receivedAt,
+      seq: (previous?.seq ?? 0) + 1,
+    };
+  }
+
   private publishStatus(record: OrderRecord): void {
     const event: OrderStatusChangedEvent = {
       type: "order.status_changed",
@@ -300,5 +580,106 @@ export class OrderManagerImpl
 
     this.orderStatusBus.publish(event);
     this.context.publishHealthEvent(event);
+  }
+
+  private validateCreateOrderInput(
+    input: CreateOrderInput,
+    exchange: Exchange,
+  ): void {
+    if (input.type === "limit" && !input.price) {
+      throw this.createError(
+        "ORDER_INPUT_INVALID",
+        `Limit orders require price: ${input.accountId}`,
+        {
+          accountId: input.accountId,
+          exchange,
+          symbol: input.symbol,
+        },
+      );
+    }
+  }
+
+  private validateCancelOrderInput(
+    input: CancelOrderInput,
+    exchange: Exchange,
+  ): void {
+    if (input.orderId || input.clientOrderId) {
+      return;
+    }
+
+    throw this.createError(
+      "ORDER_INPUT_INVALID",
+      `cancelOrder requires orderId or clientOrderId: ${input.accountId}`,
+      {
+        accountId: input.accountId,
+        exchange,
+        symbol: input.symbol,
+      },
+    );
+  }
+
+  private applyCommandUpdate(
+    accountId: string,
+    exchange: Exchange,
+    update: RawOrderUpdate,
+  ): OrderSnapshot {
+    const record = this.getOrCreateRecord(accountId, exchange);
+    const previous = this.getExistingSnapshot(record, update);
+    const snapshot = this.createSnapshot(accountId, exchange, update, previous);
+    this.setSnapshot(record.snapshots, snapshot);
+    return snapshot;
+  }
+
+  private applyCommandUpdates(
+    accountId: string,
+    exchange: Exchange,
+    updates: RawOrderUpdate[],
+  ): OrderSnapshot[] {
+    return updates.map((update) =>
+      this.applyCommandUpdate(accountId, exchange, update),
+    );
+  }
+
+  private createError(
+    code:
+      | "ORDER_CANCEL_ALL_FAILED"
+      | "ORDER_CANCEL_FAILED"
+      | "ORDER_CREATE_FAILED"
+      | "ORDER_INPUT_INVALID",
+    message: string,
+    metadata: {
+      accountId: string;
+      exchange: Exchange;
+      symbol?: string;
+    },
+  ): AcexError {
+    const error = new AcexError(code, message);
+    this.context.publishRuntimeError("order", error, metadata);
+    return error;
+  }
+
+  private wrapCommandError(
+    code:
+      | "ORDER_CANCEL_ALL_FAILED"
+      | "ORDER_CANCEL_FAILED"
+      | "ORDER_CREATE_FAILED",
+    message: string,
+    error: unknown,
+    metadata: {
+      accountId: string;
+      exchange: Exchange;
+      symbol: string;
+    },
+  ): AcexError {
+    if (error instanceof AcexError) {
+      return error;
+    }
+
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error ? error : new Error(message),
+      metadata,
+    );
+    return new AcexError(code, message);
   }
 }

@@ -11,14 +11,17 @@ export interface ManagedWebSocketReconnectOptions {
   initialDelayMs: number;
   maxDelayMs: number;
   backoffMultiplier?: number;
+  reconnectWithoutMessages?: boolean;
 }
 
 export interface ManagedWebSocketOptions<TMessage> {
   url: string;
   initialMessageTimeoutMs: number;
+  readyWhen?: "message" | "open";
   parseMessage(data: string): TMessage | undefined;
   onMessage(message: TMessage, receivedAt: number): void;
   onUnexpectedClose(event: CloseEvent): void;
+  onOpen?(): void;
   onError?(event: Event): void;
   messageWatchdog?: ManagedWebSocketWatchdogOptions;
   reconnect?: ManagedWebSocketReconnectOptions;
@@ -52,6 +55,7 @@ export function createManagedWebSocket<TMessage>(
   const messageWatchdog = options.messageWatchdog;
   const reconnect = options.reconnect;
   const reconnectMultiplier = reconnect?.backoffMultiplier ?? 2;
+  const readyWhen = options.readyWhen ?? "message";
 
   let closed = false;
   let staleNotified = false;
@@ -131,7 +135,12 @@ export function createManagedWebSocket<TMessage>(
   };
 
   const scheduleReconnect = () => {
-    if (closed || !reconnect || !hasMessage || reconnectTimeout) {
+    if (
+      closed ||
+      !reconnect ||
+      reconnectTimeout ||
+      (!hasMessage && !reconnect.reconnectWithoutMessages)
+    ) {
       return;
     }
 
@@ -171,6 +180,17 @@ export function createManagedWebSocket<TMessage>(
       scheduleStaleTimeout();
     }
 
+    socket.addEventListener("open", () => {
+      if (closed || activeSocket !== socket) {
+        return;
+      }
+
+      options.onOpen?.();
+      if (readyWhen === "open") {
+        resolveIfPending();
+      }
+    });
+
     socket.addEventListener("message", (event) => {
       if (closed || activeSocket !== socket || typeof event.data !== "string") {
         return;
@@ -206,7 +226,9 @@ export function createManagedWebSocket<TMessage>(
         scheduleStaleTimeout();
       }
       options.onMessage(parsed, lastMessageAt);
-      resolveIfPending();
+      if (readyWhen === "message") {
+        resolveIfPending();
+      }
     });
 
     socket.addEventListener("error", (event) => {

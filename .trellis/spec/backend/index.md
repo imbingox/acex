@@ -30,6 +30,8 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Code Organization](./code-organization.md) | 5 层架构、目录结构、接口契约、各层职责边界 | Active |
+| [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
+| [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |
 | [Type Safety](./type-safety.md) | 类型定义位置、显式返回类型、避免宽化和循环引用 | Active |
 
 ---
@@ -52,6 +54,8 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 当你修改以下内容时，先读对应规范：
 
 - 调整目录结构、增加 manager、增加适配器、修改层级依赖：读 [Code Organization](./code-organization.md)
+- 新增或修改 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`、Binance 持仓模式约束、交易命令错误语义：读 [Order Execution](./order-execution.md)
+- 新增或修改 GitHub Actions 发布流程、npm publish 参数、发布前质量门禁：读 [Release Publishing](./release-publishing.md)
 - 新增公共类型、修复类型错误、改返回值语义：读 [Type Safety](./type-safety.md)
 
 ---

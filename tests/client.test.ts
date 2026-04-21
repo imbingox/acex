@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { AcexError, BigNumber, createClient } from "../index.ts";
+import { stopAllClientsForTests } from "../src/client/runtime.ts";
 
 const originalFetch = globalThis.fetch;
 const originalWebSocket = globalThis.WebSocket;
@@ -7,6 +8,9 @@ const originalWebSocket = globalThis.WebSocket;
 const SPOT_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo";
 const USDM_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
 const COINM_EXCHANGE_INFO_URL = "https://dapi.binance.com/dapi/v1/exchangeInfo";
+const PAPI_REST_BASE_URL = "https://papi.binance.com";
+const PAPI_LISTEN_KEY = "test-listen-key";
+const PAPI_ACCOUNT_WS_URL = `wss://fstream.binance.com/pm/ws/${PAPI_LISTEN_KEY}`;
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -140,6 +144,59 @@ const binanceFixtures = {
             stepSize: "1",
           },
         ],
+      },
+    ],
+  },
+  papi: {
+    balance: [
+      {
+        asset: "USDT",
+        totalWalletBalance: "1250.50",
+        crossMarginFree: "1000.25",
+        crossMarginLocked: "250.25",
+      },
+      {
+        asset: "BTC",
+        totalWalletBalance: "0.0500",
+        crossMarginFree: "0.0400",
+      },
+    ],
+    account: {
+      accountEquity: "1400.75",
+      accountInitialMargin: "120.10",
+      accountMaintMargin: "45.20",
+      uniMMR: "31.0",
+      updateTime: 1710000000100,
+    },
+    umPositions: [
+      {
+        symbol: "BTCUSDT",
+        positionAmt: "0.010",
+        entryPrice: "100000.10",
+        markPrice: "101000.20",
+        unRealizedProfit: "10.50",
+        liquidationPrice: "80000.00",
+        leverage: "5",
+        positionSide: "BOTH",
+        updateTime: 1710000000200,
+      },
+    ],
+    openOrders: [
+      {
+        symbol: "BTCUSDT",
+        orderId: 1001,
+        clientOrderId: "cid-1001",
+        side: "BUY",
+        type: "LIMIT",
+        status: "NEW",
+        price: "100500.00",
+        stopPrice: "0",
+        origQty: "0.020",
+        executedQty: "0.005",
+        avgPrice: "100400.00",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000300,
       },
     ],
   },
@@ -332,6 +389,67 @@ function installBinanceMarketInfra(): void {
   });
 }
 
+function installBinancePrivateAccountInfra(options?: {
+  failBootstrap?: boolean;
+  balance?: unknown;
+  account?: unknown;
+  umPositions?: unknown;
+  openOrders?: unknown;
+}): void {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: string | URL | Request, init?: RequestInit) => {
+      const rawUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const url = new URL(rawUrl);
+      const method =
+        init?.method ?? (input instanceof Request ? input.method : "GET");
+
+      if (url.origin !== PAPI_REST_BASE_URL) {
+        throw new Error(`Unexpected fetch URL: ${url.toString()}`);
+      }
+
+      if (options?.failBootstrap && url.pathname === "/papi/v1/account") {
+        return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+          status: 401,
+          statusText: "Unauthorized",
+        });
+      }
+
+      switch (`${method} ${url.pathname}`) {
+        case "GET /papi/v1/balance":
+          return jsonResponse(options?.balance ?? binanceFixtures.papi.balance);
+        case "GET /papi/v1/account":
+          return jsonResponse(options?.account ?? binanceFixtures.papi.account);
+        case "GET /papi/v1/um/positionRisk":
+          return jsonResponse(
+            options?.umPositions ?? binanceFixtures.papi.umPositions,
+          );
+        case "GET /papi/v1/um/openOrders":
+          return jsonResponse(
+            options?.openOrders ?? binanceFixtures.papi.openOrders,
+          );
+        case "POST /papi/v1/listenKey":
+          return jsonResponse({ listenKey: PAPI_LISTEN_KEY });
+        case "PUT /papi/v1/listenKey":
+        case "DELETE /papi/v1/listenKey":
+          return jsonResponse({});
+        default:
+          throw new Error(`Unexpected fetch URL: ${method} ${url.toString()}`);
+      }
+    },
+  });
+
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+}
+
 async function nextEvent<T>(
   iterator: AsyncIterator<T>,
   timeoutMs = 1000,
@@ -376,6 +494,7 @@ async function expectPending<T>(
 }
 
 afterEach(() => {
+  stopAllClientsForTests();
   FakeWebSocket.reset();
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -546,7 +665,14 @@ test("health exchange filters only emit matching market events", async () => {
 });
 
 test("health account filters only emit matching private status events", async () => {
-  const client = createClient();
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
   await client.registerAccount({
     accountId: "main-binance",
     exchange: "binance",
@@ -564,7 +690,7 @@ test("health account filters only emit matching private status events", async ()
   await client.start();
   await expectPending(firstAccountHealthEvent, 20);
 
-  await client.account.subscribeAccount({
+  const subscribePromise = client.account.subscribeAccount({
     accountId: "main-binance",
   });
 
@@ -575,6 +701,20 @@ test("health account filters only emit matching private status events", async ()
   }
 
   expect(accountEvent.value).toMatchObject({
+    type: "account.status_changed",
+    accountId: "main-binance",
+    exchange: "binance",
+    status: {
+      activity: "active",
+      ready: false,
+      runtimeStatus: "bootstrap_pending",
+    },
+  });
+
+  await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+
+  expect(await nextEvent(accountHealth)).toMatchObject({
     type: "account.status_changed",
     accountId: "main-binance",
     exchange: "binance",
@@ -1020,7 +1160,14 @@ test("caller can observe l1 book keep changing for one minute", async () => {
 }, 75_000);
 
 test("private subscriptions validate credentials at subscribe time", async () => {
-  const client = createClient();
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
 
   await client.start();
   await client.registerAccount({
@@ -1042,6 +1189,7 @@ test("private subscriptions validate credentials at subscribe time", async () =>
   await client.account.subscribeAccount({
     accountId: "main-binance",
   });
+  await waitForSocket(PAPI_ACCOUNT_WS_URL);
 
   const snapshot = client.account.getAccountSnapshot("main-binance");
   const status = client.account.getAccountStatus("main-binance");
@@ -1052,7 +1200,14 @@ test("private subscriptions validate credentials at subscribe time", async () =>
 });
 
 test("removeAccount auto-cleans active private subscriptions and caches", async () => {
-  const client = createClient();
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
 
   await client.registerAccount({
     accountId: "main-binance",
@@ -1067,6 +1222,7 @@ test("removeAccount auto-cleans active private subscriptions and caches", async 
   await client.account.subscribeAccount({
     accountId: "main-binance",
   });
+  await waitForSocket(PAPI_ACCOUNT_WS_URL);
   await client.order.subscribeOrders({
     accountId: "main-binance",
   });

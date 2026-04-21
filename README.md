@@ -1,6 +1,6 @@
 # @imbingox/acex
 
-`acex` 是一个面向交易场景的状态型 SDK。调用方只需要持有一个 `AcexClient`，就可以通过统一的 `market`、`account`、`order` manager 读取最新快照、订阅增量事件、观察健康状态，而不需要自己维护本地缓存、ready barrier 或 websocket 生命周期。
+`acex` 是一个面向交易场景的状态型 SDK。调用方只需要持有一个 `AcexClient`，就可以通过统一的 `market`、`account`、`order` manager 读取最新快照、订阅增量事件、观察健康状态，并在当前 Binance MVP 范围内执行第一版下单/撤单命令，而不需要自己维护本地缓存、ready barrier 或 websocket 生命周期。
 
 ## 安装
 
@@ -262,7 +262,7 @@ await client.market.unsubscribeL1Book({
 
 ### 5. Account（账户余额和仓位）
 
-> 当前 account 是占位实现，contract 已稳定但不是完整真实私有流。
+> 当前 account 已接通 Binance PAPI UM 私有链路，可读取余额、仓位、风险和账户状态。
 
 ```ts
 // ① 注册账户（start 之前或之后均可）
@@ -270,8 +270,8 @@ await client.registerAccount({
   accountId: "main-binance",
   exchange: "binance",
   credentials: {
-    apiKey: process.env.BINANCE_API_KEY,
-    secret: process.env.BINANCE_API_SECRET,
+    apiKey: process.env.BINANCE_PAPI_API_KEY,
+    secret: process.env.BINANCE_PAPI_SECRET,
   },
 });
 
@@ -333,7 +333,7 @@ await client.removeAccount("main-binance");
 
 ### 6. Order（订单）
 
-> 当前 order 是占位实现，contract 已稳定但不是完整真实私有流。
+> 当前 order 已接通 Binance PAPI UM 订单私有链路，并支持第一版交易命令：`createOrder()`、`cancelOrder()`、`cancelAllOrders()`。
 
 ```ts
 // 订阅订单流（需要先 registerAccount）
@@ -353,6 +353,40 @@ const order = client.order.getOrder({
 });
 // → OrderSnapshot | undefined
 // { symbol, side, type, status, price, amount, filled, remaining, ... }
+
+// 下单：第一版只支持 limit / market
+const created = await client.order.createOrder({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+  side: "buy",
+  type: "limit",
+  price: "71830.6",
+  amount: "0.001",
+});
+
+// 如果账户是双向持仓模式（hedge mode），必须显式传 positionSide
+const hedgeCreated = await client.order.createOrder({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+  side: "buy",
+  type: "limit",
+  price: "71900.9",
+  amount: "0.001",
+  positionSide: "long",
+});
+
+// 撤单：需要 accountId + symbol，并提供 orderId / clientOrderId 其一
+const canceled = await client.order.cancelOrder({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+  orderId: created.orderId,
+});
+
+// 某个 symbol 下全撤
+const canceledAll = await client.order.cancelAllOrders({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
 
 // 消费订单事件
 for await (const event of client.order.events.updates({
@@ -377,6 +411,8 @@ for await (const event of client.order.events.updates({
 // 退订
 await client.order.unsubscribeOrders({ accountId: "main-binance" });
 ```
+
+`createOrder()` / `cancelOrder()` resolve 的是 REST 成功后标准化的 `OrderSnapshot`；`events.updates()` 是后续生命周期变化流，不是唯一 ack 来源。
 
 ### 7. 健康监控
 
@@ -581,9 +617,13 @@ client.stop()
 ## 当前限制
 
 - 运行时真正支持的市场数据交易所只有 **Binance**（`okx`、`bybit`、`gate` 仅类型定义）
-- 真实落地的数据链路只有 Binance **L1 Book**
+- 真实落地的 market 数据链路当前是 Binance **L1 Book**
+- 私有账户与订单链路当前只支持 **Binance PAPI UM**
 - `fundingRate` 接口已暴露，但当前是占位快照
-- `account` / `order` 当前是占位实现，不是完整真实私有流
+- 第一版交易命令只支持 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`
+- `createOrder()` 当前只支持 `limit` / `market`
+- 双向持仓模式账户下单时必须显式传 `positionSide`
+- 条件单、改单、账户级全撤当前还不支持
 - `CreateClientOptions` 中 `sandbox`、`logger`、`logLevel` 仍是预留位
 
 ## 仓库内开发
@@ -595,23 +635,46 @@ bun run type-check
 bun test
 ```
 
+### 发布流程
+
+当前仓库使用 **Changesets + GitHub Actions + npm Trusted Publishing**：
+
+1. 开发 PR 时，如果改动会影响用户，执行 `bun run changeset`
+2. 按提示选择 `patch` / `minor` / `major`，并写一段对外 release note
+3. PR merge 到 `main` 后，[release.yml](/projects/acex-feat-order_account/.github/workflows/release.yml) 会自动：
+   - 安装依赖
+   - 执行 `bun run lint`
+   - 执行 `bun run type-check`
+   - 执行 `bun run test`
+   - 若存在未消费的 changeset，则创建或更新 release PR
+4. merge release PR 后，同一条 workflow 会自动发布到 npm
+
+当前仓库处于 Changesets 的 `beta` prerelease 模式，自动发布默认走 npm `beta` dist-tag。
+
+npm 侧配置 Trusted Publisher 时，需要确保：
+
+- workflow 文件名是 `release.yml`
+- `package.json.repository.url` 与 GitHub 仓库地址完全一致
+- npm 包 settings 里绑定的是 GitHub Actions trusted publisher，而不是长期 `NPM_TOKEN`
+
 真实 Binance 公网 smoke test 单独执行，不放进默认 `bun test`：
 
 ```bash
-bun run test:live:market -- --duration 10
-bun run test:live:market -- --duration 60 --disconnect-after 5 --disconnect-target perp
 bun run test:live:market:smoke
 bun run test:live:market:soak
+bun run test:live:account:smoke
+bun run test:live:account:soak
+bun run test:live:order:smoke
+bun run test:live:order:soak
 ```
 
-这个脚本会验证：
-- `loadMarkets()` 的真实 market catalog
-- `subscribeL1Book()` 的 ready barrier
-- `getL1Book()` / `events.l1BookUpdates()` 的真实持续更新
-- 可选的主动断线后自动重连
+这些脚本会验证：
+- `market`：`loadMarkets()`、`subscribeL1Book()`、`getL1Book()` / `events.l1BookUpdates()`，以及可选的主动断线后自动重连
+- `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
+- `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连
 
 约定：
 - `smoke` 是快速连通性检查，默认跑 10 秒，不主动断线
-- `soak` 是短时稳定性检查，默认跑 60 秒，并对 perp 链路做一次主动断线重连验证
+- `soak` 是短时稳定性检查，默认跑 60 秒，并做一次主动断线重连验证
 
 更完整的公开接口设计说明见 [docs/sdk-public-api.md](./docs/sdk-public-api.md)。

@@ -1,0 +1,6 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "5-layer boundaries for adapter/manager/runtime responsibilities"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Public/private stream types and explicit status helper return types"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Private stream crosses adapter, manager, runtime, and public API layers"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Shared per-account private stream should replace duplicated account/order websocket logic"}

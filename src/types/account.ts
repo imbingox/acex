@@ -1,6 +1,7 @@
 import type BigNumber from "bignumber.js";
 import type {
   Exchange,
+  PrivateRuntimeReason,
   PrivateRuntimeStatus,
   SubscriptionActivity,
 } from "./shared.ts";
@@ -14,12 +15,7 @@ export interface AccountDataStatus {
   lastReceivedAt?: number;
   lastReadyAt?: number;
   inactiveSince?: number;
-  reason?:
-    | "credentials_missing"
-    | "auth_failed"
-    | "ws_disconnected"
-    | "heartbeat_timeout"
-    | "reconciling";
+  reason?: PrivateRuntimeReason;
 }
 
 export interface AccountStatusChangedEvent {

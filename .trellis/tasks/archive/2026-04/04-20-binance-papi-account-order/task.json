@@ -1,0 +1,68 @@
+{
+  "id": "binance-papi-account-order",
+  "name": "binance-papi-account-order",
+  "title": "调研：接入 Binance PAPI 统一账户 Account Read-only",
+  "description": "已实现 Binance Portfolio Margin PAPI 私有底座和 UM account read-only，不做 order tracking 和下单撤单。",
+  "status": "completed",
+  "dev_type": "backend",
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "codex-agent",
+  "assignee": "codex-agent",
+  "createdAt": "2026-04-20",
+  "completedAt": "2026-04-20",
+  "branch": null,
+  "base_branch": "feat/order_account",
+  "worktree_path": null,
+  "current_phase": 0,
+  "next_action": [
+    {
+      "phase": 1,
+      "action": "brainstorm"
+    },
+    {
+      "phase": 2,
+      "action": "research"
+    },
+    {
+      "phase": 3,
+      "action": "implement"
+    },
+    {
+      "phase": 4,
+      "action": "check"
+    },
+    {
+      "phase": 5,
+      "action": "update-spec"
+    },
+    {
+      "phase": 6,
+      "action": "record-session"
+    }
+  ],
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "src/adapters/types.ts",
+    "src/adapters/binance/private-adapter.ts",
+    "src/client/runtime.ts",
+    "src/internal/managed-websocket.ts",
+    "src/managers/account-manager.ts",
+    "src/types/shared.ts",
+    "scripts/live-account-smoke.ts",
+    "package.json",
+    "tests/account.test.ts",
+    "tests/client-lifecycle.test.ts",
+    "tests/market.test.ts",
+    "tests/support/client-test-utils.ts",
+    ".trellis/spec/backend/code-organization.md",
+    ".trellis/spec/backend/type-safety.md"
+  ],
+  "notes": "用户确认目标为 Binance PAPI，首版范围为 UM only。已实现 PAPI 认证 REST、listenKey 私有 WS、account bootstrap、ACCOUNT_UPDATE 增量、断线重连状态和 removeAccount 清理。测试已从单一 client.test.ts 拆为 lifecycle/market/account/support。已新增 test:live:account smoke/soak 手动脚本，并将 60s 稳定性验证从常规 bun test 迁移到 live soak。验证通过：bun run lint、bun run type-check、bun test。",
+  "meta": {}
+}

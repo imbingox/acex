@@ -1,4 +1,12 @@
 import { BinanceMarketAdapter } from "../adapters/binance/adapter.ts";
+import { BinancePrivateAdapter } from "../adapters/binance/private-adapter.ts";
+import type {
+  CancelAllOrdersRequest,
+  CancelOrderRequest,
+  CreateOrderRequest,
+  PrivateUserDataAdapter,
+  RawOrderUpdate,
+} from "../adapters/types.ts";
 import { AcexError, type AcexErrorCode } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesHealthFilter } from "../internal/filters.ts";
@@ -10,11 +18,14 @@ import type {
   AccountManager,
   AcexClient,
   AcexInternalError,
+  CancelAllOrdersInput,
+  CancelOrderInput,
   ClientEventStreams,
   ClientHealthSnapshot,
   ClientStatus,
   ClientStatusChangedEvent,
   CreateClientOptions,
+  CreateOrderInput,
   HealthEvent,
   HealthEventFilter,
   MarketManager,
@@ -27,8 +38,23 @@ import {
   type ClientContext,
   hasPrivateCredentials,
   mergeCredentials,
+  type PrivateAccountDataConsumer,
+  type PrivateOrderDataConsumer,
   type RegisteredAccountRecord,
 } from "./context.ts";
+import { PrivateSubscriptionCoordinator } from "./private-subscription-coordinator.ts";
+
+const activeClients = new Set<AcexClientImpl>();
+
+export function stopAllClientsForTests(): void {
+  const clients = [...activeClients];
+  activeClients.clear();
+  for (const client of clients) {
+    void client.stop().catch(() => {
+      // Test cleanup should be best-effort and never mask the original failure.
+    });
+  }
+}
 
 class ClientEventStreamsImpl implements ClientEventStreams {
   constructor(
@@ -61,11 +87,16 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketManager: MarketManagerImpl;
   private readonly accountManager: AccountManagerImpl;
   private readonly orderManager: OrderManagerImpl;
+  private readonly privateAdapter: PrivateUserDataAdapter;
+  private readonly privateCoordinator: PrivateSubscriptionCoordinator;
 
   constructor(options: CreateClientOptions = {}) {
-    const adapter = new BinanceMarketAdapter();
+    activeClients.add(this);
 
-    this.marketManager = new MarketManagerImpl(this, adapter, {
+    const marketAdapter = new BinanceMarketAdapter();
+    this.privateAdapter = new BinancePrivateAdapter();
+
+    this.marketManager = new MarketManagerImpl(this, marketAdapter, {
       initialL1TimeoutMs: options.market?.l1InitialMessageTimeoutMs,
       l1StaleAfterMs: options.market?.l1StaleAfterMs,
       l1ReconnectDelayMs: options.market?.l1ReconnectDelayMs,
@@ -73,6 +104,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     });
     this.accountManager = new AccountManagerImpl(this);
     this.orderManager = new OrderManagerImpl(this);
+    this.privateCoordinator = new PrivateSubscriptionCoordinator(
+      this,
+      this.privateAdapter,
+      this.accountManager as PrivateAccountDataConsumer,
+      this.orderManager as PrivateOrderDataConsumer,
+      options.account,
+    );
 
     this.market = this.marketManager;
     this.account = this.accountManager;
@@ -141,6 +179,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
     this.accountManager.onCredentialsUpdated(accountId, account.exchange);
     this.orderManager.onCredentialsUpdated(accountId, account.exchange);
+    this.privateCoordinator.onCredentialsUpdated(accountId);
   }
 
   async removeAccount(accountId: string): Promise<void> {
@@ -154,6 +193,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     const now = this.now();
+    this.privateCoordinator.onAccountRemoved(accountId);
     this.accountManager.onAccountRemoved(accountId, now);
     this.orderManager.onAccountRemoved(accountId, now);
     this.registeredAccounts.delete(accountId);
@@ -170,6 +210,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.marketManager.onClientStarted();
     this.accountManager.onClientStarted();
     this.orderManager.onClientStarted();
+    this.privateCoordinator.onClientStarted();
   }
 
   async stop(_options?: StopOptions): Promise<void> {
@@ -183,6 +224,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.setClientStatus("stopping");
 
     const now = this.now();
+    this.privateCoordinator.onClientStopping();
     this.marketManager.onClientStopping(now);
     this.accountManager.onClientStopping(now);
     this.orderManager.onClientStopping(now);
@@ -228,6 +270,70 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       "CREDENTIALS_MISSING",
       `Account credentials are required for private subscriptions: ${accountId}`,
       { accountId, exchange: account.exchange },
+    );
+  }
+
+  subscribePrivateAccountFeed(accountId: string): Promise<void> {
+    return this.privateCoordinator.subscribeAccountFeed(accountId);
+  }
+
+  unsubscribePrivateAccountFeed(accountId: string): void {
+    this.privateCoordinator.unsubscribeAccountFeed(accountId);
+  }
+
+  subscribePrivateOrderFeed(accountId: string): Promise<void> {
+    return this.privateCoordinator.subscribeOrderFeed(accountId);
+  }
+
+  unsubscribePrivateOrderFeed(accountId: string): void {
+    this.privateCoordinator.unsubscribeOrderFeed(accountId);
+  }
+
+  createOrder(input: CreateOrderInput): Promise<RawOrderUpdate> {
+    const account = this.getPrivateCommandAccount(input.accountId);
+    const request: CreateOrderRequest = {
+      symbol: input.symbol,
+      side: input.side,
+      type: input.type,
+      amount: input.amount,
+      price: input.type === "limit" ? input.price : undefined,
+      clientOrderId: input.clientOrderId,
+      reduceOnly: input.reduceOnly,
+      positionSide: input.positionSide,
+    };
+
+    return this.privateAdapter.createOrder(
+      account.credentials ?? {},
+      request,
+      account.options,
+    );
+  }
+
+  cancelOrder(input: CancelOrderInput): Promise<RawOrderUpdate> {
+    const account = this.getPrivateCommandAccount(input.accountId);
+    const request: CancelOrderRequest = {
+      symbol: input.symbol,
+      orderId: input.orderId,
+      clientOrderId: input.clientOrderId,
+    };
+
+    return this.privateAdapter.cancelOrder(
+      account.credentials ?? {},
+      request,
+      account.options,
+    );
+  }
+
+  cancelAllOrders(input: CancelAllOrdersInput): Promise<RawOrderUpdate[]> {
+    const account = this.getPrivateCommandAccount(input.accountId);
+    const request: CancelAllOrdersRequest = {
+      symbol: input.symbol,
+    };
+
+    return this.privateAdapter.cancelAllOrders(
+      account.credentials ?? {},
+      request,
+      account.options,
     );
   }
 
@@ -279,5 +385,26 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       ...metadata,
     });
     return error;
+  }
+
+  private getPrivateCommandAccount(accountId: string): RegisteredAccountRecord {
+    const account = this.getRegisteredAccount(accountId);
+    if (account.exchange !== this.privateAdapter.exchange) {
+      throw this.createError(
+        "EXCHANGE_NOT_SUPPORTED",
+        `Exchange is not supported yet: ${account.exchange}`,
+        { accountId, exchange: account.exchange },
+      );
+    }
+
+    if (!hasPrivateCredentials(account.credentials)) {
+      throw this.createError(
+        "CREDENTIALS_MISSING",
+        `Account credentials are required for private order commands: ${accountId}`,
+        { accountId, exchange: account.exchange },
+      );
+    }
+
+    return account;
   }
 }

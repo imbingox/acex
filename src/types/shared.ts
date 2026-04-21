@@ -25,11 +25,19 @@ export interface MarketRuntimeOptions {
   l1ReconnectMaxDelayMs?: number;
 }
 
+export interface AccountRuntimeOptions {
+  streamOpenTimeoutMs?: number;
+  streamReconnectDelayMs?: number;
+  streamReconnectMaxDelayMs?: number;
+  listenKeyKeepAliveMs?: number;
+}
+
 export interface CreateClientOptions {
   sandbox?: boolean;
   logger?: Logger;
   logLevel?: LogLevel;
   market?: MarketRuntimeOptions;
+  account?: AccountRuntimeOptions;
 }
 
 export interface AccountCredentials {
@@ -76,3 +84,10 @@ export type PrivateRuntimeStatus =
   | "reconnecting"
   | "reconciling"
   | "stopped";
+
+export type PrivateRuntimeReason =
+  | "credentials_missing"
+  | "auth_failed"
+  | "ws_disconnected"
+  | "heartbeat_timeout"
+  | "reconciling";

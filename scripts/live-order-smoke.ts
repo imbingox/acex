@@ -1,4 +1,4 @@
-import { type AccountEvent, createClient } from "../index.ts";
+import { createClient, type OrderEvent, type OrderSnapshot } from "../index.ts";
 import {
   cloneStatus,
   collectEventsUntil,
@@ -21,14 +21,44 @@ interface CliOptions {
   durationSec: number;
   disconnectAfterSec?: number;
   reconnectWaitSec: number;
-  showAmounts: boolean;
+  showOrders: boolean;
 }
 
-interface AccountEventSummary {
-  type: AccountEvent["type"];
-  asset?: string;
+interface OrderEventSummary {
+  type: OrderEvent["type"];
+  orderCount?: number;
+  symbols?: string[];
   symbol?: string;
+  orderId?: string;
+  clientOrderId?: string;
+  status?: OrderSnapshot["status"];
   ts: number;
+}
+
+interface OpenOrderSummary {
+  orderId?: string;
+  clientOrderId?: string;
+  symbol: string;
+  side: OrderSnapshot["side"];
+  type: string;
+  status: OrderSnapshot["status"];
+  price?: string;
+  triggerPrice?: string;
+  amount: string;
+  filled: string;
+  remaining?: string;
+  reduceOnly?: boolean;
+  positionSide?: OrderSnapshot["positionSide"];
+  avgFillPrice?: string;
+  exchangeTs?: number;
+  updatedAt: number;
+}
+
+interface OpenOrdersSnapshot {
+  count: number;
+  symbols: string[];
+  orderIds: string[];
+  orders?: OpenOrderSummary[];
 }
 
 interface ReconnectSummary {
@@ -36,6 +66,7 @@ interface ReconnectSummary {
   staleStatus: Record<string, unknown>;
   reconnectedSocketUrl: string;
   recoveredStatus: Record<string, unknown>;
+  recoveredOpenOrderCount: number;
 }
 
 interface SmokeResult {
@@ -43,8 +74,8 @@ interface SmokeResult {
   subscribeLatencyMs: number;
   socketUrl: string;
   statusAfterSubscribe: Record<string, unknown>;
-  snapshot: Record<string, unknown>;
-  firstEvent: AccountEventSummary;
+  cachedOpenOrders: OpenOrdersSnapshot;
+  firstEvent: OrderEventSummary;
   updateEventsAfterFirstEvent: number;
   reconnect?: ReconnectSummary;
 }
@@ -55,7 +86,7 @@ const DEFAULT_RECONNECT_WAIT_SEC = 10;
 
 function printHelp(): void {
   writeStdout(`Usage:
-  bun run test:live:account -- [options]
+  bun run test:live:order -- [options]
 
 Environment:
   BINANCE_PAPI_API_KEY      Required Binance PAPI API key
@@ -66,12 +97,12 @@ Options:
   --duration <seconds>       Total observation duration (default: ${DEFAULT_DURATION_SEC})
   --disconnect-after <sec>   Force-close the private websocket after N seconds and verify reconnect
   --reconnect-wait <sec>     Max reconnect recovery wait (default: ${DEFAULT_RECONNECT_WAIT_SEC})
-  --show-amounts             Include balance/position/risk amounts in output
+  --show-orders              Include cached open-order details in output
   --help                     Show this help
 
 Examples:
-  bun run test:live:account -- --duration 10
-  bun run test:live:account -- --duration 60 --disconnect-after 5 --show-amounts`);
+  bun run test:live:order -- --duration 10
+  bun run test:live:order -- --duration 60 --disconnect-after 5 --show-orders`);
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -79,7 +110,7 @@ function parseArgs(argv: string[]): CliOptions {
     accountId: DEFAULT_ACCOUNT_ID,
     durationSec: DEFAULT_DURATION_SEC,
     reconnectWaitSec: DEFAULT_RECONNECT_WAIT_SEC,
-    showAmounts: false,
+    showOrders: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -111,8 +142,8 @@ function parseArgs(argv: string[]): CliOptions {
           "--reconnect-wait",
         );
         break;
-      case "--show-amounts":
-        options.showAmounts = true;
+      case "--show-orders":
+        options.showOrders = true;
         break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
@@ -126,81 +157,85 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
-function summarizeEvent(event: AccountEvent): AccountEventSummary {
+function summarizeOrder(snapshot: OrderSnapshot): OpenOrderSummary {
+  return {
+    orderId: snapshot.orderId,
+    clientOrderId: snapshot.clientOrderId,
+    symbol: snapshot.symbol,
+    side: snapshot.side,
+    type: snapshot.type,
+    status: snapshot.status,
+    price: snapshot.price?.toFixed(),
+    triggerPrice: snapshot.triggerPrice?.toFixed(),
+    amount: snapshot.amount.toFixed(),
+    filled: snapshot.filled.toFixed(),
+    remaining: snapshot.remaining?.toFixed(),
+    reduceOnly: snapshot.reduceOnly,
+    positionSide: snapshot.positionSide,
+    avgFillPrice: snapshot.avgFillPrice?.toFixed(),
+    exchangeTs: snapshot.exchangeTs,
+    updatedAt: snapshot.updatedAt,
+  };
+}
+
+function summarizeOpenOrders(
+  snapshots: OrderSnapshot[],
+  showOrders: boolean,
+): OpenOrdersSnapshot {
+  const symbols = [...new Set(snapshots.map((snapshot) => snapshot.symbol))];
+  symbols.sort((left, right) => left.localeCompare(right));
+
+  const orderIds = snapshots
+    .map(
+      (snapshot) =>
+        snapshot.orderId ??
+        snapshot.clientOrderId ??
+        `${snapshot.symbol}:${snapshot.updatedAt}`,
+    )
+    .sort((left, right) => left.localeCompare(right));
+
+  return {
+    count: snapshots.length,
+    symbols,
+    orderIds,
+    orders: showOrders ? snapshots.map(summarizeOrder) : undefined,
+  };
+}
+
+function summarizeEvent(event: OrderEvent): OrderEventSummary {
+  if (event.type === "order.snapshot_replaced") {
+    const symbols = [
+      ...new Set(event.snapshot.map((snapshot) => snapshot.symbol)),
+    ];
+    symbols.sort((left, right) => left.localeCompare(right));
+
+    return {
+      type: event.type,
+      orderCount: event.snapshot.length,
+      symbols,
+      ts: event.ts,
+    };
+  }
+
   return {
     type: event.type,
-    asset: "asset" in event ? event.asset : undefined,
-    symbol: "symbol" in event ? event.symbol : undefined,
+    symbol: event.symbol,
+    orderId: event.snapshot.orderId,
+    clientOrderId: event.snapshot.clientOrderId,
+    status: event.snapshot.status,
     ts: event.ts,
   };
 }
 
-function summarizeSnapshot(
-  client: ReturnType<typeof createClient>,
-  accountId: string,
-  showAmounts: boolean,
-): Record<string, unknown> {
-  const balances = client.account.getBalances(accountId);
-  const positions = client.account.getPositions(accountId);
-  const risk = client.account.getRiskSnapshot(accountId);
-
-  return {
-    balanceCount: balances.length,
-    balanceAssets: balances.map((balance) => balance.asset).sort(),
-    balances: showAmounts
-      ? balances.map((balance) => ({
-          asset: balance.asset,
-          free: balance.free.toFixed(),
-          used: balance.used.toFixed(),
-          total: balance.total.toFixed(),
-          exchangeTs: balance.exchangeTs,
-          updatedAt: balance.updatedAt,
-        }))
-      : undefined,
-    positionCount: positions.length,
-    positionSymbols: positions.map((position) => position.symbol).sort(),
-    positions: showAmounts
-      ? positions.map((position) => ({
-          symbol: position.symbol,
-          side: position.side,
-          size: position.size.toFixed(),
-          entryPrice: position.entryPrice?.toFixed(),
-          markPrice: position.markPrice?.toFixed(),
-          unrealizedPnl: position.unrealizedPnl?.toFixed(),
-          exchangeTs: position.exchangeTs,
-          updatedAt: position.updatedAt,
-        }))
-      : undefined,
-    risk: risk
-      ? {
-          hasEquity: risk.equity !== undefined,
-          hasMarginRatio: risk.marginRatio !== undefined,
-          hasInitialMargin: risk.initialMargin !== undefined,
-          hasMaintenanceMargin: risk.maintenanceMargin !== undefined,
-          equity: showAmounts ? risk.equity?.toFixed() : undefined,
-          marginRatio: showAmounts ? risk.marginRatio?.toFixed() : undefined,
-          initialMargin: showAmounts
-            ? risk.initialMargin?.toFixed()
-            : undefined,
-          maintenanceMargin: showAmounts
-            ? risk.maintenanceMargin?.toFixed()
-            : undefined,
-          exchangeTs: risk.exchangeTs,
-          updatedAt: risk.updatedAt,
-        }
-      : null,
-  };
-}
-
-async function smokeAccount(options: {
+async function smokeOrders(options: {
   client: ReturnType<typeof createClient>;
   accountId: string;
   durationMs: number;
   disconnectAfterMs?: number;
   reconnectWaitMs: number;
-  showAmounts: boolean;
+  showOrders: boolean;
 }): Promise<SmokeResult> {
-  const iterator = options.client.account.events
+  const iterator = options.client.order.events
     .updates({
       accountId: options.accountId,
       exchange: "binance",
@@ -210,7 +245,7 @@ async function smokeAccount(options: {
 
   try {
     const subscribeStartedAt = Date.now();
-    await options.client.account.subscribeAccount({
+    await options.client.order.subscribeOrders({
       accountId: options.accountId,
     });
     const subscribeLatencyMs = Date.now() - subscribeStartedAt;
@@ -218,22 +253,19 @@ async function smokeAccount(options: {
     const socket = await waitForTrackedSocket(
       socketIndex,
       5_000,
-      "Timed out waiting for tracked account websocket",
+      "Timed out waiting for tracked order websocket",
     );
-    const statusAfterSubscribe = options.client.account.getAccountStatus(
+    const statusAfterSubscribe = options.client.order.getOrderStatus(
       options.accountId,
     );
-    const snapshot = options.client.account.getAccountSnapshot(
-      options.accountId,
-    );
-    if (!statusAfterSubscribe || !snapshot) {
-      throw new Error("Missing account snapshot or status after subscribe");
+    if (!statusAfterSubscribe) {
+      throw new Error("Missing order status after subscribe");
     }
 
     const firstEvent = await nextEvent(
       iterator,
       5_000,
-      "Timed out waiting for first account event",
+      "Timed out waiting for first order event",
     );
 
     let updateEventsAfterFirstEvent = 0;
@@ -250,14 +282,14 @@ async function smokeAccount(options: {
         iterator,
         Math.min(disconnectAt, deadline),
         {
-          doneLabel: "Account update stream closed unexpectedly",
+          doneLabel: "Order update stream closed unexpectedly",
         },
       );
       socket.forceClose();
 
       const staleStatus = await waitForCondition(
         () => {
-          const current = options.client.account.getAccountStatus(
+          const current = options.client.order.getOrderStatus(
             options.accountId,
           );
           if (current?.reason === "ws_disconnected") {
@@ -266,18 +298,18 @@ async function smokeAccount(options: {
           return undefined;
         },
         options.reconnectWaitMs,
-        "Timed out waiting for account ws_disconnected",
+        "Timed out waiting for order ws_disconnected",
       );
 
       const reconnectedSocket = await waitForTrackedSocket(
         socketIndex + 1,
         options.reconnectWaitMs,
-        "Timed out waiting for reconnected account websocket",
+        "Timed out waiting for reconnected order websocket",
       );
 
       const recoveredStatus = await waitForCondition(
         () => {
-          const current = options.client.account.getAccountStatus(
+          const current = options.client.order.getOrderStatus(
             options.accountId,
           );
           if (current?.runtimeStatus === "healthy" && current.ready) {
@@ -286,7 +318,7 @@ async function smokeAccount(options: {
           return undefined;
         },
         options.reconnectWaitMs,
-        "Timed out waiting for account reconnect recovery",
+        "Timed out waiting for order reconnect recovery",
       );
 
       reconnect = {
@@ -294,6 +326,9 @@ async function smokeAccount(options: {
         staleStatus,
         reconnectedSocketUrl: reconnectedSocket.url,
         recoveredStatus,
+        recoveredOpenOrderCount: options.client.order.getOpenOrders(
+          options.accountId,
+        ).length,
       };
 
       if (deadline > Date.now()) {
@@ -301,7 +336,7 @@ async function smokeAccount(options: {
           iterator,
           deadline,
           {
-            doneLabel: "Account update stream closed unexpectedly",
+            doneLabel: "Order update stream closed unexpectedly",
           },
         );
       }
@@ -310,7 +345,7 @@ async function smokeAccount(options: {
         iterator,
         deadline,
         {
-          doneLabel: "Account update stream closed unexpectedly",
+          doneLabel: "Order update stream closed unexpectedly",
         },
       );
     }
@@ -320,10 +355,9 @@ async function smokeAccount(options: {
       subscribeLatencyMs,
       socketUrl: socket.url,
       statusAfterSubscribe: cloneStatus(statusAfterSubscribe),
-      snapshot: summarizeSnapshot(
-        options.client,
-        options.accountId,
-        options.showAmounts,
+      cachedOpenOrders: summarizeOpenOrders(
+        options.client.order.getOpenOrders(options.accountId),
+        options.showOrders,
       ),
       firstEvent: summarizeEvent(firstEvent),
       updateEventsAfterFirstEvent,
@@ -372,7 +406,7 @@ async function main(): Promise<void> {
     });
     await client.start();
 
-    const result = await smokeAccount({
+    const result = await smokeOrders({
       client,
       accountId: cli.accountId,
       durationMs: cli.durationSec * 1_000,
@@ -381,7 +415,7 @@ async function main(): Promise<void> {
           ? undefined
           : cli.disconnectAfterSec * 1_000,
       reconnectWaitMs: cli.reconnectWaitSec * 1_000,
-      showAmounts: cli.showAmounts,
+      showOrders: cli.showOrders,
     });
 
     const summary = {

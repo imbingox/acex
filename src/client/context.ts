@@ -1,8 +1,18 @@
 import type {
+  RawAccountBootstrap,
+  RawAccountUpdate,
+  RawOrderUpdate,
+} from "../adapters/types.ts";
+import type {
   AccountCredentials,
   AcexInternalError,
+  CancelAllOrdersInput,
+  CancelOrderInput,
+  CreateOrderInput,
   Exchange,
   HealthEvent,
+  PrivateRuntimeReason,
+  PrivateRuntimeStatus,
 } from "../types/index.ts";
 
 export interface RegisteredAccountRecord {
@@ -17,6 +27,13 @@ export interface ClientContext {
   assertStarted(): void;
   getRegisteredAccount(accountId: string): RegisteredAccountRecord;
   ensurePrivateCredentials(accountId: string): void;
+  subscribePrivateAccountFeed(accountId: string): Promise<void>;
+  unsubscribePrivateAccountFeed(accountId: string): void;
+  subscribePrivateOrderFeed(accountId: string): Promise<void>;
+  unsubscribePrivateOrderFeed(accountId: string): void;
+  createOrder(input: CreateOrderInput): Promise<RawOrderUpdate>;
+  cancelOrder(input: CancelOrderInput): Promise<RawOrderUpdate>;
+  cancelAllOrders(input: CancelAllOrdersInput): Promise<RawOrderUpdate[]>;
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,
@@ -37,6 +54,52 @@ export interface AccountAwareManager {
 
 export interface HealthReporter<T> {
   getStatuses(): T[];
+}
+
+export interface PrivateSubscriptionState {
+  runtimeStatus: PrivateRuntimeStatus;
+  ready: boolean;
+  reason?: PrivateRuntimeReason;
+  lastReceivedAt?: number;
+  lastReadyAt?: number;
+}
+
+export interface PrivateAccountDataConsumer {
+  onPrivateAccountPending(accountId: string, exchange: Exchange): void;
+  onPrivateAccountBootstrap(
+    accountId: string,
+    exchange: Exchange,
+    bootstrap: RawAccountBootstrap,
+  ): void;
+  onPrivateAccountUpdate(
+    accountId: string,
+    exchange: Exchange,
+    update: RawAccountUpdate,
+  ): void;
+  onPrivateAccountStreamState(
+    accountId: string,
+    exchange: Exchange,
+    state: PrivateSubscriptionState,
+  ): void;
+}
+
+export interface PrivateOrderDataConsumer {
+  onPrivateOrderPending(accountId: string, exchange: Exchange): void;
+  onPrivateOrderBootstrap(
+    accountId: string,
+    exchange: Exchange,
+    snapshots: RawOrderUpdate[],
+  ): void;
+  onPrivateOrderUpdate(
+    accountId: string,
+    exchange: Exchange,
+    update: RawOrderUpdate,
+  ): void;
+  onPrivateOrderStreamState(
+    accountId: string,
+    exchange: Exchange,
+    state: PrivateSubscriptionState,
+  ): void;
 }
 
 export function hasPrivateCredentials(

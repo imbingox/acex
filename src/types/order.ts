@@ -2,6 +2,7 @@ import type BigNumber from "bignumber.js";
 import type { PositionSide } from "./account.ts";
 import type {
   Exchange,
+  PrivateRuntimeReason,
   PrivateRuntimeStatus,
   SubscriptionActivity,
 } from "./shared.ts";
@@ -15,12 +16,7 @@ export interface OrderDataStatus {
   lastReceivedAt?: number;
   lastReadyAt?: number;
   inactiveSince?: number;
-  reason?:
-    | "credentials_missing"
-    | "auth_failed"
-    | "ws_disconnected"
-    | "heartbeat_timeout"
-    | "reconciling";
+  reason?: PrivateRuntimeReason;
 }
 
 export interface OrderStatusChangedEvent {
@@ -41,6 +37,8 @@ export type OrderStatus =
   | "rejected"
   | "expired";
 
+export type CreateOrderType = "limit" | "market";
+
 export interface SubscribeOrdersInput {
   accountId: string;
 }
@@ -53,6 +51,39 @@ export interface GetOrderInput {
   accountId: string;
   orderId?: string;
   clientOrderId?: string;
+}
+
+interface CreateOrderInputBase {
+  accountId: string;
+  symbol: string;
+  side: OrderSide;
+  amount: string;
+  clientOrderId?: string;
+  reduceOnly?: boolean;
+  positionSide?: PositionSide;
+}
+
+export interface CreateLimitOrderInput extends CreateOrderInputBase {
+  type: "limit";
+  price: string;
+}
+
+export interface CreateMarketOrderInput extends CreateOrderInputBase {
+  type: "market";
+}
+
+export type CreateOrderInput = CreateLimitOrderInput | CreateMarketOrderInput;
+
+export interface CancelOrderInput {
+  accountId: string;
+  symbol: string;
+  orderId?: string;
+  clientOrderId?: string;
+}
+
+export interface CancelAllOrdersInput {
+  accountId: string;
+  symbol: string;
 }
 
 export interface OrderEventFilter {
@@ -136,6 +167,9 @@ export interface OrderManager {
 
   subscribeOrders(input: SubscribeOrdersInput): Promise<void>;
   unsubscribeOrders(input: UnsubscribeOrdersInput): Promise<void>;
+  createOrder(input: CreateOrderInput): Promise<OrderSnapshot>;
+  cancelOrder(input: CancelOrderInput): Promise<OrderSnapshot>;
+  cancelAllOrders(input: CancelAllOrdersInput): Promise<OrderSnapshot[]>;
 
   getOrder(input: GetOrderInput): OrderSnapshot | undefined;
   getOpenOrders(accountId: string, symbol?: string): OrderSnapshot[];

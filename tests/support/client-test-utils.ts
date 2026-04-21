@@ -1,4 +1,5 @@
 import { afterEach } from "bun:test";
+import { stopAllClientsForTests } from "../../src/client/runtime.ts";
 
 const originalFetch = globalThis.fetch;
 const originalWebSocket = globalThis.WebSocket;
@@ -180,6 +181,24 @@ const binanceFixtures = {
         updateTime: 1710000000200,
       },
     ],
+    openOrders: [
+      {
+        symbol: "BTCUSDT",
+        orderId: 1001,
+        clientOrderId: "cid-1001",
+        side: "BUY",
+        type: "LIMIT",
+        status: "NEW",
+        price: "100500.00",
+        stopPrice: "0",
+        origQty: "0.020",
+        executedQty: "0.005",
+        avgPrice: "100400.00",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000300,
+      },
+    ],
   },
 };
 
@@ -266,6 +285,9 @@ export async function waitForSocket(
 }
 
 export function installBinanceMarketInfra(): void {
+  stopAllClientsForTests();
+  FakeWebSocket.reset();
+
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: string | URL | Request) => {
@@ -298,11 +320,21 @@ export interface FetchRequestRecord {
 
 export function installBinancePrivateAccountInfra(options?: {
   failBootstrap?: boolean;
+  failCreateOrder?: boolean;
+  failCancelOrder?: boolean;
+  failCancelAllOrders?: boolean;
   balance?: unknown;
   account?: unknown;
   umPositions?: unknown;
+  openOrders?: unknown;
+  createOrder?: unknown;
+  cancelOrder?: unknown;
+  cancelAllOrders?: unknown;
 }): FetchRequestRecord[] {
   const requests: FetchRequestRecord[] = [];
+
+  stopAllClientsForTests();
+  FakeWebSocket.reset();
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -337,6 +369,39 @@ export function installBinancePrivateAccountInfra(options?: {
         });
       }
 
+      if (
+        options?.failCreateOrder &&
+        `${method} ${url.pathname}` === "POST /papi/v1/um/order"
+      ) {
+        return textResponse(
+          '{"code":-2010,"msg":"Order would immediately trigger."}',
+          {
+            status: 400,
+            statusText: "Bad Request",
+          },
+        );
+      }
+
+      if (
+        options?.failCancelOrder &&
+        `${method} ${url.pathname}` === "DELETE /papi/v1/um/order"
+      ) {
+        return textResponse('{"code":-2011,"msg":"Unknown order sent."}', {
+          status: 400,
+          statusText: "Bad Request",
+        });
+      }
+
+      if (
+        options?.failCancelAllOrders &&
+        `${method} ${url.pathname}` === "DELETE /papi/v1/um/allOpenOrders"
+      ) {
+        return textResponse('{"code":-2011,"msg":"Unknown order sent."}', {
+          status: 400,
+          statusText: "Bad Request",
+        });
+      }
+
       switch (`${method} ${url.pathname}`) {
         case "GET /papi/v1/balance":
           return jsonResponse(options?.balance ?? binanceFixtures.papi.balance);
@@ -345,6 +410,69 @@ export function installBinancePrivateAccountInfra(options?: {
         case "GET /papi/v1/um/positionRisk":
           return jsonResponse(
             options?.umPositions ?? binanceFixtures.papi.umPositions,
+          );
+        case "GET /papi/v1/um/openOrders":
+          return jsonResponse(
+            options?.openOrders ?? binanceFixtures.papi.openOrders,
+          );
+        case "POST /papi/v1/um/order":
+          return jsonResponse(
+            options?.createOrder ?? {
+              symbol: "BTCUSDT",
+              orderId: 2001,
+              clientOrderId: "cid-2001",
+              side: "BUY",
+              type: "LIMIT",
+              status: "NEW",
+              price: "101000.00",
+              stopPrice: "0",
+              origQty: "0.010",
+              executedQty: "0",
+              avgPrice: "0",
+              reduceOnly: false,
+              positionSide: "BOTH",
+              updateTime: 1710000000400,
+            },
+          );
+        case "DELETE /papi/v1/um/order":
+          return jsonResponse(
+            options?.cancelOrder ?? {
+              symbol: "BTCUSDT",
+              orderId: 1001,
+              clientOrderId: "cid-1001",
+              side: "BUY",
+              type: "LIMIT",
+              status: "CANCELED",
+              price: "100500.00",
+              stopPrice: "0",
+              origQty: "0.020",
+              executedQty: "0.005",
+              avgPrice: "100400.00",
+              reduceOnly: false,
+              positionSide: "BOTH",
+              updateTime: 1710000000350,
+            },
+          );
+        case "DELETE /papi/v1/um/allOpenOrders":
+          return jsonResponse(
+            options?.cancelAllOrders ?? [
+              {
+                symbol: "BTCUSDT",
+                orderId: 1001,
+                clientOrderId: "cid-1001",
+                side: "BUY",
+                type: "LIMIT",
+                status: "CANCELED",
+                price: "100500.00",
+                stopPrice: "0",
+                origQty: "0.020",
+                executedQty: "0.005",
+                avgPrice: "100400.00",
+                reduceOnly: false,
+                positionSide: "BOTH",
+                updateTime: 1710000000350,
+              },
+            ],
           );
         case "POST /papi/v1/listenKey":
           return jsonResponse({ listenKey: PAPI_LISTEN_KEY });
@@ -409,6 +537,7 @@ export async function expectPending<T>(
 }
 
 afterEach(() => {
+  stopAllClientsForTests();
   FakeWebSocket.reset();
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,

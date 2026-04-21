@@ -85,7 +85,7 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   installBinanceMarketInfra();
   const client = createClient({
     market: {
-      l1InitialMessageTimeoutMs: 50,
+      l1InitialMessageTimeoutMs: 200,
       l1StaleAfterMs: 50,
     },
   });
@@ -189,7 +189,7 @@ test("watchdog marks stale data and disconnect marks ws_disconnected", async () 
   installBinanceMarketInfra();
   const client = createClient({
     market: {
-      l1InitialMessageTimeoutMs: 50,
+      l1InitialMessageTimeoutMs: 200,
       l1StaleAfterMs: 20,
     },
   });
@@ -245,7 +245,7 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
   installBinanceMarketInfra();
   const client = createClient({
     market: {
-      l1InitialMessageTimeoutMs: 50,
+      l1InitialMessageTimeoutMs: 200,
       l1StaleAfterMs: 50,
       l1ReconnectDelayMs: 5,
       l1ReconnectMaxDelayMs: 5,

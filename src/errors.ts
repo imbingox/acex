@@ -1,5 +1,6 @@
 export type AcexErrorCode =
   | "ACCOUNT_ALREADY_EXISTS"
+  | "ACCOUNT_BOOTSTRAP_FAILED"
   | "ACCOUNT_NOT_FOUND"
   | "CLIENT_NOT_STARTED"
   | "CREDENTIALS_MISSING"
@@ -7,7 +8,12 @@ export type AcexErrorCode =
   | "MARKET_CATALOG_LOAD_FAILED"
   | "MARKET_INACTIVE"
   | "MARKET_NOT_FOUND"
-  | "MARKET_STREAM_TIMEOUT";
+  | "MARKET_STREAM_TIMEOUT"
+  | "ORDER_BOOTSTRAP_FAILED"
+  | "ORDER_CANCEL_ALL_FAILED"
+  | "ORDER_CANCEL_FAILED"
+  | "ORDER_CREATE_FAILED"
+  | "ORDER_INPUT_INVALID";
 
 export class AcexError extends Error {
   readonly code: AcexErrorCode;

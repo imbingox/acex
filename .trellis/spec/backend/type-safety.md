@@ -35,6 +35,13 @@ export interface HealthEventFilter {
   symbol?: string;
 }
 
+export type PrivateRuntimeReason =
+  | "credentials_missing"
+  | "auth_failed"
+  | "ws_disconnected"
+  | "heartbeat_timeout"
+  | "reconciling";
+
 createOrderStatus(
   accountId: string,
   exchange: Exchange,
@@ -48,6 +55,9 @@ createOrderStatus(
 
 - 已有 `Exchange`、`ClientStatus`、`PrivateRuntimeStatus` 这类闭合集合时，不要重新写成裸 `string`。
 - filter、status、event 上下游必须共用同一个联合类型。
+- 当两个领域共享同一组原因码时，提取到 `src/types/shared.ts`。
+  - 当前 `AccountDataStatus.reason` 与 `OrderDataStatus.reason` 都必须复用 `PrivateRuntimeReason`
+  - 不允许两个文件各自复制 `"auth_failed" | "ws_disconnected" | ...` 这一组字面量联合
 
 #### 3.2 runtime helper 的返回类型显式标注
 
@@ -79,6 +89,7 @@ createOrderStatus(
 | runtime 创建状态对象 | 显式返回 `OrderDataStatus` | 省略返回类型导致 `runtimeStatus` 被推成 `string` |
 | manager 返回状态 | 直接返回 `OrderDataStatus` | 通过自引用 alias 或重复定义接口 |
 | 纯类型依赖 | `import type { Foo }` | 普通 import 造成不必要运行时依赖 |
+| account/order 共享状态 reason | 提取 `PrivateRuntimeReason` | 两个领域各自复制一份同样的联合类型 |
 
 ### 5. Good / Base / Bad Cases
 
@@ -88,6 +99,15 @@ createOrderStatus(
 export interface HealthEventFilter {
   exchange?: Exchange;
 }
+```
+
+```ts
+export type PrivateRuntimeReason =
+  | "credentials_missing"
+  | "auth_failed"
+  | "ws_disconnected"
+  | "heartbeat_timeout"
+  | "reconciling";
 ```
 
 ```ts
@@ -124,6 +144,14 @@ import type { MarketManager } from "../types/index.ts";
 export interface HealthEventFilter {
   exchange?: string;
 }
+```
+
+```ts
+// src/types/account.ts
+reason?: "auth_failed" | "ws_disconnected" | "reconciling";
+
+// src/types/order.ts
+reason?: "auth_failed" | "ws_disconnected" | "reconciling";
 ```
 
 ```ts

@@ -1,7 +1,7 @@
-# 多交易所 SDK 数据面对外 API 设计
+# 多交易所 SDK MVP 对外 API 设计
 
-> 本文档只定义 MVP 阶段“数据面 API”的公开接口、关键语义和设计边界。
-> 本轮不包含下单、撤单、改单等交易命令接口，也不展开 adapter、恢复状态机和内部调度实现。
+> 本文档定义当前 MVP 阶段公开接口、关键语义和设计边界。
+> 当前已包含 market/account/order 数据面能力，以及第一版 Binance PAPI UM 交易命令接口。
 
 ## 1. 文档定位
 
@@ -16,7 +16,6 @@
 
 | 主题 | 说明 |
 |---|---|
-| 交易命令接口 | 本轮不设计 `placeOrder` / `cancelOrder` / `amendOrder` |
 | 交易所 adapter 合同 | 属于内部实现设计 |
 | reconnect / reconcile 状态机 | 属于内部实现设计 |
 | 完整错误码体系 | 本文档只定义关键失败语义，不穷举所有错误码 |
@@ -30,7 +29,7 @@
 | `AcexClient` | 创建、启动、停止、注册账户、更新凭证、移除账户、聚合状态与健康信息 |
 | `MarketManager` | Market catalog、L1 Book / Funding Rate 订阅、退订、最新快照读取、状态读取、事件流 |
 | `AccountManager` | 账户快照、余额、持仓、风险读取；账户订阅、退订、状态与事件 |
-| `OrderManager` | 订单数据订阅、退订、最新订单快照与状态读取、事件流 |
+| `OrderManager` | 订单数据订阅、退订、最新订单快照与状态读取、事件流，以及第一版交易命令 |
 | 生命周期语义 | `subscribe*()` 是 ready barrier；`unsubscribe*()` 后保留最后快照但标记为非活跃 |
 | 事件模型 | 事件接口统一放在 `events` 子命名空间下，以 `AsyncIterable` 为主 |
 
@@ -95,6 +94,21 @@ async function main() {
     accountId: "main-binance",
   });
 
+  const created = await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "100000.0",
+    amount: "0.001",
+  });
+
+  const canceled = await client.order.cancelOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    orderId: created.orderId,
+  });
+
   const book = client.market.getL1Book({
     exchange: "binance",
     symbol: "BTC/USDT:USDT",
@@ -109,6 +123,8 @@ async function main() {
     book,
     account,
     orderStatus,
+    created,
+    canceled,
   });
 
   await client.stop();
@@ -736,6 +752,9 @@ export interface OrderManager {
 
   subscribeOrders(input: SubscribeOrdersInput): Promise<void>;
   unsubscribeOrders(input: UnsubscribeOrdersInput): Promise<void>;
+  createOrder(input: CreateOrderInput): Promise<OrderSnapshot>;
+  cancelOrder(input: CancelOrderInput): Promise<OrderSnapshot>;
+  cancelAllOrders(input: CancelAllOrdersInput): Promise<OrderSnapshot[]>;
 
   getOrder(input: GetOrderInput): OrderSnapshot | undefined;
   getOpenOrders(accountId: string, symbol?: string): OrderSnapshot[];
@@ -746,6 +765,43 @@ export interface OrderManager {
 ### 9.2 数据结构
 
 ```ts
+export type CreateOrderType = "limit" | "market";
+
+export type CreateOrderInput =
+  | {
+      accountId: string;
+      symbol: string;
+      side: OrderSide;
+      type: "limit";
+      price: string;
+      amount: string;
+      clientOrderId?: string;
+      reduceOnly?: boolean;
+      positionSide?: PositionSide;
+    }
+  | {
+      accountId: string;
+      symbol: string;
+      side: OrderSide;
+      type: "market";
+      amount: string;
+      clientOrderId?: string;
+      reduceOnly?: boolean;
+      positionSide?: PositionSide;
+    };
+
+export interface CancelOrderInput {
+  accountId: string;
+  symbol: string;
+  orderId?: string;
+  clientOrderId?: string;
+}
+
+export interface CancelAllOrdersInput {
+  accountId: string;
+  symbol: string;
+}
+
 export interface OrderSnapshot {
   accountId: string;
   exchange: Exchange;
@@ -823,10 +879,21 @@ export type OrderEvent =
 | `subscribeOrders()` | 幂等；resolve 时订单投影必须 ready，`getOrderStatus()` 应立即可用 |
 | credentials 校验 | 在 `subscribeOrders()` 时执行；若凭证不足，应直接失败 |
 | `unsubscribeOrders()` | 幂等；退订后保留最后订单快照，但状态改为 `activity = inactive` |
+| `createOrder()` | 第一版仅支持 Binance PAPI UM 的 `LIMIT` / `MARKET`；返回规范化后的 `OrderSnapshot` |
+| `cancelOrder()` | 需要 `accountId + symbol`，并要求 `orderId` / `clientOrderId` 至少一个；返回被撤销后的 `OrderSnapshot` |
+| `cancelAllOrders()` | 第一版需要 `accountId + symbol`，不支持账户级全撤；返回被撤销订单的 `OrderSnapshot[]` |
 | `getOrder()` | 根据 `orderId` 或 `clientOrderId` 读取当前最新订单快照 |
 | `getOpenOrders()` | 返回当前仍视为活跃的订单集合 |
 | `events.updates()` | 用于消费订单状态变化事件；不是交易命令 ack 流 |
-| 当前范围 | 本轮只设计订单“数据面”，不设计下单/撤单/改单接口 |
+| 当前范围 | 条件单、改单、账户级全撤不在第一版范围内 |
+
+### 9.5 Binance 第一版落地约束
+
+| 主题 | 约定 |
+|---|---|
+| `positionSide` 与持仓模式 | 单向持仓模式可以省略 `positionSide`，返回 snapshot 通常归一成 `net`；双向持仓模式必须显式传 `long` / `short` |
+| 精度与最小名义金额 | `price` / `amount` 由调用方按 `MarketDefinition.priceStep`、`amountStep`、`minAmount`、`minNotional` 处理；SDK 第一版不自动纠偏 |
+| 命令结果与事件 | `createOrder()` / `cancelOrder()` resolve 的是 REST 成功后标准化的 snapshot；`events.updates()` 是后续生命周期变化流，不是唯一 ack 来源 |
 
 ## 10. 关键失败语义
 
@@ -838,6 +905,9 @@ export type OrderEvent =
 | 未注册账户就订阅私有数据 | 直接失败 |
 | 未 `start()` 就调用 `subscribe*()` | 直接失败 |
 | 私有订阅缺少必需 credentials | 直接失败 |
+| `cancelOrder()` 未提供 `orderId` 与 `clientOrderId` | 本地输入校验直接失败 |
+| Binance 双向持仓模式下未传或传错 `positionSide` | 交易所拒单；SDK 对外表现为 `ORDER_CREATE_FAILED` |
+| `price` / `amount` 不满足交易所精度或最小名义金额 | 交易所拒单；SDK 对外表现为对应命令失败 |
 | `updateAccountCredentials()` 指向不存在的账户 | 直接失败 |
 | `removeAccount()` 指向不存在的账户 | 直接失败 |
 | 重复 `subscribe*()` / `unsubscribe*()` | 应视为幂等 |
@@ -857,7 +927,7 @@ export type OrderEvent =
 | `AcexClient` | `create/start/stop/registerAccount/updateAccountCredentials/removeAccount/getStatus/getHealth/events` | 更细粒度配置项 |
 | `MarketManager` | L1 Book、Funding Rate、状态、事件 | 更多 market 数据类型 |
 | `AccountManager` | 账户快照、余额、持仓、风险、状态、事件 | 更复杂风险指标 |
-| `OrderManager` | 订单快照、open orders、状态、事件 | 交易命令接口 |
+| `OrderManager` | 订单快照、open orders、状态、事件、`createOrder/cancelOrder/cancelAllOrders` | 条件单、改单、更宽撤单范围 |
 
 明确保留空间：
 

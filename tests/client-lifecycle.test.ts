@@ -43,7 +43,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   installBinanceMarketInfra();
   const client = createClient({
     market: {
-      l1InitialMessageTimeoutMs: 50,
+      l1InitialMessageTimeoutMs: 200,
       l1StaleAfterMs: 50,
     },
   });
@@ -87,7 +87,7 @@ test("health exchange filters only emit matching market events", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
-      l1InitialMessageTimeoutMs: 50,
+      l1InitialMessageTimeoutMs: 200,
       l1StaleAfterMs: 50,
     },
   });

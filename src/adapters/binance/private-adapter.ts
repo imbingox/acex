@@ -2,18 +2,23 @@ import { createHmac } from "node:crypto";
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type { AccountCredentials, PositionSide } from "../../types/index.ts";
 import type {
-  PrivateAccountAdapter,
-  PrivateAccountStreamCallbacks,
-  PrivateAccountStreamOptions,
+  CancelAllOrdersRequest,
+  CancelOrderRequest,
+  CreateOrderRequest,
+  PrivateStreamCallbacks,
+  PrivateStreamOptions,
+  PrivateUserDataAdapter,
   RawAccountBootstrap,
   RawAccountUpdate,
   RawBalanceUpdate,
+  RawOrderUpdate,
   RawPositionUpdate,
   RawRiskUpdate,
   StreamHandle,
 } from "../types.ts";
 
 type TimerHandle = ReturnType<typeof setInterval>;
+type SignedRequestMethod = "GET" | "POST" | "DELETE";
 
 interface BinancePapiBalance {
   asset?: string;
@@ -49,6 +54,24 @@ interface BinancePapiUmPosition {
   updateTime?: number;
 }
 
+interface BinancePapiOpenOrder {
+  symbol?: string;
+  orderId?: number | string;
+  clientOrderId?: string;
+  side?: string;
+  type?: string;
+  status?: string;
+  price?: string;
+  stopPrice?: string;
+  origQty?: string;
+  executedQty?: string;
+  avgPrice?: string;
+  reduceOnly?: boolean;
+  positionSide?: string;
+  updateTime?: number;
+  time?: number;
+}
+
 interface BinanceListenKeyResponse {
   listenKey?: string;
 }
@@ -81,6 +104,34 @@ interface BinanceAccountUpdateMessage {
     P?: BinanceAccountUpdatePosition[];
   };
 }
+
+interface BinanceOrderTradeUpdatePayload {
+  s?: string;
+  i?: number | string;
+  c?: string;
+  S?: string;
+  o?: string;
+  X?: string;
+  p?: string;
+  sp?: string;
+  q?: string;
+  z?: string;
+  ap?: string;
+  R?: boolean;
+  ps?: string;
+  T?: number;
+}
+
+interface BinanceOrderTradeUpdateMessage {
+  e?: string;
+  E?: number;
+  T?: number;
+  o?: BinanceOrderTradeUpdatePayload;
+}
+
+type BinancePrivateMessage =
+  | BinanceAccountUpdateMessage
+  | BinanceOrderTradeUpdateMessage;
 
 const BINANCE_PAPI_REST_BASE_URL = "https://papi.binance.com";
 const BINANCE_PAPI_WS_BASE_URL = "wss://fstream.binance.com/pm/ws";
@@ -129,6 +180,15 @@ function normalizeUmSymbol(symbol: string): string {
   return symbol;
 }
 
+function encodeUmSymbol(symbol: string): string {
+  const matched = /^([^/]+)\/([^:]+):([^:]+)$/.exec(symbol);
+  if (matched && matched[2] === matched[3]) {
+    return `${matched[1]}${matched[2]}`;
+  }
+
+  return symbol;
+}
+
 function normalizePositionSide(value?: string): PositionSide {
   switch (value) {
     case "LONG":
@@ -137,6 +197,56 @@ function normalizePositionSide(value?: string): PositionSide {
       return "short";
     default:
       return "net";
+  }
+}
+
+function normalizeOrderSide(value?: string): "buy" | "sell" {
+  return value === "SELL" ? "sell" : "buy";
+}
+
+function encodeOrderSide(value: CreateOrderRequest["side"]): "BUY" | "SELL" {
+  return value === "sell" ? "SELL" : "BUY";
+}
+
+function encodeOrderType(
+  value: CreateOrderRequest["type"],
+): "LIMIT" | "MARKET" {
+  return value === "market" ? "MARKET" : "LIMIT";
+}
+
+function encodePositionSide(
+  value?: PositionSide,
+): "BOTH" | "LONG" | "SHORT" | undefined {
+  switch (value) {
+    case "long":
+      return "LONG";
+    case "short":
+      return "SHORT";
+    case "net":
+      return "BOTH";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeOrderStatus(
+  value?: string,
+): RawOrderUpdate["status"] | undefined {
+  switch (value) {
+    case "PARTIALLY_FILLED":
+      return "partially_filled";
+    case "FILLED":
+      return "filled";
+    case "CANCELED":
+    case "CANCELLED":
+      return "canceled";
+    case "REJECTED":
+      return "rejected";
+    case "EXPIRED":
+    case "EXPIRED_IN_MATCH":
+      return "expired";
+    default:
+      return value ? "open" : undefined;
   }
 }
 
@@ -219,6 +329,34 @@ function mapUmPosition(
   };
 }
 
+function mapOpenOrder(
+  input: BinancePapiOpenOrder,
+  receivedAt: number,
+): RawOrderUpdate | undefined {
+  const status = normalizeOrderStatus(input.status);
+  if (!input.symbol || !status) {
+    return undefined;
+  }
+
+  return {
+    orderId: input.orderId === undefined ? undefined : `${input.orderId}`,
+    clientOrderId: input.clientOrderId,
+    symbol: normalizeUmSymbol(input.symbol),
+    side: normalizeOrderSide(input.side),
+    type: input.type ?? "unknown",
+    status,
+    price: input.price,
+    triggerPrice: input.stopPrice,
+    amount: input.origQty ?? "0",
+    filled: input.executedQty ?? "0",
+    avgFillPrice: input.avgPrice,
+    reduceOnly: input.reduceOnly,
+    positionSide: normalizePositionSide(input.positionSide),
+    exchangeTs: input.updateTime ?? input.time,
+    receivedAt,
+  };
+}
+
 function mapAccountUpdateBalance(
   input: BinanceAccountUpdateBalance,
   exchangeTs: number | undefined,
@@ -258,11 +396,17 @@ function mapAccountUpdatePosition(
   };
 }
 
-function parseAccountUpdateMessage(
-  data: string,
-): BinanceAccountUpdateMessage | undefined {
-  const parsed = JSON.parse(data) as BinanceAccountUpdateMessage;
-  return parsed.e === "ACCOUNT_UPDATE" ? parsed : undefined;
+function parsePrivateMessage(data: string): BinancePrivateMessage | undefined {
+  const parsed = JSON.parse(data) as BinancePrivateMessage;
+  return parsed.e === "ACCOUNT_UPDATE" || parsed.e === "ORDER_TRADE_UPDATE"
+    ? parsed
+    : undefined;
+}
+
+function isAccountUpdateMessage(
+  message: BinancePrivateMessage,
+): message is BinanceAccountUpdateMessage {
+  return message.e === "ACCOUNT_UPDATE";
 }
 
 function mapAccountUpdate(
@@ -284,6 +428,35 @@ function mapAccountUpdate(
   };
 }
 
+function mapOrderUpdate(
+  message: BinanceOrderTradeUpdateMessage,
+  receivedAt: number,
+): RawOrderUpdate | undefined {
+  const payload = message.o;
+  const status = normalizeOrderStatus(payload?.X);
+  if (!payload?.s || !status) {
+    return undefined;
+  }
+
+  return {
+    orderId: payload.i === undefined ? undefined : `${payload.i}`,
+    clientOrderId: payload.c,
+    symbol: normalizeUmSymbol(payload.s),
+    side: normalizeOrderSide(payload.S),
+    type: payload.o ?? "unknown",
+    status,
+    price: payload.p,
+    triggerPrice: payload.sp,
+    amount: payload.q ?? "0",
+    filled: payload.z ?? "0",
+    avgFillPrice: payload.ap,
+    reduceOnly: payload.R,
+    positionSide: normalizePositionSide(payload.ps),
+    exchangeTs: payload.T ?? message.T ?? message.E,
+    receivedAt,
+  };
+}
+
 async function readJson<T>(response: Response, url: string): Promise<T> {
   const text = await response.text();
   if (!response.ok) {
@@ -299,7 +472,7 @@ async function readJson<T>(response: Response, url: string): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-export class BinancePrivateAdapter implements PrivateAccountAdapter {
+export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   readonly exchange = "binance" as const;
 
   async bootstrapAccount(
@@ -343,10 +516,115 @@ export class BinancePrivateAdapter implements PrivateAccountAdapter {
     };
   }
 
-  createAccountStream(
+  async bootstrapOpenOrders(
     credentials: AccountCredentials,
-    callbacks: PrivateAccountStreamCallbacks,
-    options: PrivateAccountStreamOptions,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOrderUpdate[]> {
+    const receivedAt = Date.now();
+    const orders = await this.signedRequest<BinancePapiOpenOrder[]>(
+      "GET",
+      "/papi/v1/um/openOrders",
+      credentials,
+      accountOptions,
+    );
+
+    return orders.flatMap((order) => {
+      const mapped = mapOpenOrder(order, receivedAt);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async createOrder(
+    credentials: AccountCredentials,
+    request: CreateOrderRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOrderUpdate> {
+    const receivedAt = Date.now();
+    const response = await this.signedRequest<BinancePapiOpenOrder>(
+      "POST",
+      "/papi/v1/um/order",
+      credentials,
+      accountOptions,
+      {
+        symbol: encodeUmSymbol(request.symbol),
+        side: encodeOrderSide(request.side),
+        type: encodeOrderType(request.type),
+        quantity: request.amount,
+        price: request.price,
+        timeInForce: request.type === "limit" ? "GTC" : undefined,
+        newClientOrderId: request.clientOrderId,
+        reduceOnly:
+          request.reduceOnly === undefined
+            ? undefined
+            : `${request.reduceOnly}`,
+        positionSide: encodePositionSide(request.positionSide),
+      },
+    );
+
+    const mapped = mapOpenOrder(response, receivedAt);
+    if (!mapped) {
+      throw new Error(
+        "Binance PAPI createOrder response did not contain an order",
+      );
+    }
+
+    return mapped;
+  }
+
+  async cancelOrder(
+    credentials: AccountCredentials,
+    request: CancelOrderRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOrderUpdate> {
+    const receivedAt = Date.now();
+    const response = await this.signedRequest<BinancePapiOpenOrder>(
+      "DELETE",
+      "/papi/v1/um/order",
+      credentials,
+      accountOptions,
+      {
+        symbol: encodeUmSymbol(request.symbol),
+        orderId: request.orderId,
+        origClientOrderId: request.clientOrderId,
+      },
+    );
+
+    const mapped = mapOpenOrder(response, receivedAt);
+    if (!mapped) {
+      throw new Error(
+        "Binance PAPI cancelOrder response did not contain an order",
+      );
+    }
+
+    return mapped;
+  }
+
+  async cancelAllOrders(
+    credentials: AccountCredentials,
+    request: CancelAllOrdersRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOrderUpdate[]> {
+    const receivedAt = Date.now();
+    const responses = await this.signedRequest<BinancePapiOpenOrder[]>(
+      "DELETE",
+      "/papi/v1/um/allOpenOrders",
+      credentials,
+      accountOptions,
+      {
+        symbol: encodeUmSymbol(request.symbol),
+      },
+    );
+
+    return responses.flatMap((response) => {
+      const mapped = mapOpenOrder(response, receivedAt);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  createPrivateStream(
+    credentials: AccountCredentials,
+    callbacks: PrivateStreamCallbacks,
+    options: PrivateStreamOptions,
     _accountOptions?: Record<string, unknown>,
   ): StreamHandle {
     let closed = false;
@@ -401,12 +679,12 @@ export class BinancePrivateAdapter implements PrivateAccountAdapter {
         );
       }, options.listenKeyKeepAliveMs);
 
-      websocket = createManagedWebSocket<BinanceAccountUpdateMessage>({
+      websocket = createManagedWebSocket<BinancePrivateMessage>({
         url: `${BINANCE_PAPI_WS_BASE_URL}/${listenKey}`,
         initialMessageTimeoutMs: options.openTimeoutMs,
         readyWhen: "open",
         now: options.now,
-        parseMessage: parseAccountUpdateMessage,
+        parseMessage: parsePrivateMessage,
         onOpen() {
           if (openedOnce) {
             callbacks.onReconnected();
@@ -414,14 +692,22 @@ export class BinancePrivateAdapter implements PrivateAccountAdapter {
           openedOnce = true;
         },
         onMessage(message, receivedAt) {
-          callbacks.onUpdate(mapAccountUpdate(message, receivedAt));
+          if (isAccountUpdateMessage(message)) {
+            callbacks.onAccountUpdate(mapAccountUpdate(message, receivedAt));
+            return;
+          }
+
+          const orderUpdate = mapOrderUpdate(message, receivedAt);
+          if (orderUpdate) {
+            callbacks.onOrderUpdate(orderUpdate);
+          }
         },
         onUnexpectedClose() {
           callbacks.onDisconnected();
         },
         onError() {
           callbacks.onError(
-            new Error("WebSocket error for Binance PAPI account stream"),
+            new Error("WebSocket error for Binance PAPI private stream"),
           );
         },
         reconnect: {
@@ -450,13 +736,19 @@ export class BinancePrivateAdapter implements PrivateAccountAdapter {
   }
 
   private async signedRequest<T>(
-    method: "GET",
+    method: SignedRequestMethod,
     path: string,
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
+    queryParams?: Record<string, string | undefined>,
   ): Promise<T> {
     const { apiKey, secret } = requirePrivateCredentials(credentials);
     const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(queryParams ?? {})) {
+      if (value !== undefined) {
+        params.set(key, value);
+      }
+    }
     params.set(
       "timestamp",
       `${getNumberOption(accountOptions, "timestamp") ?? Date.now()}`,

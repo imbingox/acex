@@ -44,6 +44,7 @@ src/
 └── client/                               # Layer 3: 编排层
     ├── create-client.ts
     ├── context.ts                        # ClientContext 接口 + 生命周期接口
+    ├── private-subscription-coordinator.ts
     └── runtime.ts                        # AcexClientImpl（薄编排器）
 ```
 
@@ -119,6 +120,11 @@ export * from "./types/index.ts";
   - 跨域事件总线（healthBus、errorBus）
   - 生命周期协调（调用 manager 的 lifecycle 方法）
   - Health 聚合（调用 manager 的 `getStatuses()`）
+- `private-subscription-coordinator.ts`：每账户一条 private user stream 的编排器，只做：
+  - 复用 account / order 共用的 private stream
+  - 协调 adapter bootstrap、reconnect、credentials refresh、account remove
+  - 把标准化后的 raw update 分发给 `AccountManagerImpl` / `OrderManagerImpl`
+  - **不持有 account/order 领域快照**，这些状态仍归对应 manager
 
 ### 4. Validation & Error Matrix
 
@@ -129,6 +135,7 @@ export * from "./types/index.ts";
 | 新增 client 生命周期逻辑 | `src/client/runtime.ts` | 分散到三个 manager 各写一份 |
 | 新增通用异步流原语 | `src/internal/*` | 混进某个 manager 文件 |
 | 新增交易所适配逻辑 | `src/adapters/<exchange>/` | 混进 manager 或 runtime |
+| 新增 account/order 共享 private stream 编排 | `src/client/private-subscription-coordinator.ts` | 让两个 manager 各自维护一条 websocket |
 | 新增根导出 | `src/index.ts` | 让调用方直接依赖深层内部路径 |
 | Manager 需要访问 runtime | 通过 `ClientContext` 接口 | 直接 import `AcexClientImpl` 具体类 |
 | 交易所特定类型 | 留在 `adapters/<exchange>/` 内部 | 泄漏到 manager 或 runtime 的类型签名中 |
@@ -156,6 +163,12 @@ export * from "./types/index.ts";
 - 类型放 `src/types/market.ts`
 - 实现放 `src/managers/market-manager.ts`（新方法 + 新 record 字段）
 - 若需适配器支持，在 `MarketAdapter` 接口上添加方法
+
+新增 private account/order 流时：
+
+- listenKey、REST bootstrap、WS payload parsing 放在 `src/adapters/binance/private-adapter.ts`
+- 每账户流复用、reconnect/reconcile 放在 `src/client/private-subscription-coordinator.ts`
+- account/order manager 只维护自己的 snapshot/status/event bus，不直接拥有 websocket
 
 #### Base
 
@@ -250,10 +263,18 @@ export class MarketManagerImpl
 // src/client/runtime.ts (~280 行，薄编排器)
 export class AcexClientImpl implements AcexClient, ClientContext {
   constructor(options: CreateClientOptions = {}) {
-    const adapter = new BinanceMarketAdapter();
-    this.marketManager = new MarketManagerImpl(this, adapter, marketOptions);
+    const marketAdapter = new BinanceMarketAdapter();
+    const privateAdapter = new BinancePrivateAdapter();
+    this.marketManager = new MarketManagerImpl(this, marketAdapter, marketOptions);
     this.accountManager = new AccountManagerImpl(this);
     this.orderManager = new OrderManagerImpl(this);
+    this.privateCoordinator = new PrivateSubscriptionCoordinator(
+      this,
+      privateAdapter,
+      this.accountManager,
+      this.orderManager,
+      options.account,
+    );
   }
 }
 ```
@@ -261,5 +282,6 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 效果：
 - Manager 持有自己的状态和事件总线
 - 通过 `ClientContext` 接口与 runtime 交互
+- private stream 复用逻辑收敛在 client 层，不再散落到两个 manager
 - 交易所细节封装在 adapter 中
 - 各层职责清晰，可独立演进

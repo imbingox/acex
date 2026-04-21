@@ -63,6 +63,6 @@ jobs:
       - name: Publish to npm
         if: steps.changesets.outputs.hasChangesets == 'false'
         env:
-          NPM_CONFIG_PROVENANCE: true
+          NPM_CONFIG_PROVENANCE: false
           NPM_CONFIG_TAG: beta
         run: bun run release

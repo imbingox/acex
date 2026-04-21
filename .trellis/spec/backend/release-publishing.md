@@ -64,6 +64,7 @@ bun run release
   - `id-token: write`
 - `id-token: write` 用于 npm Trusted Publishing / provenance。
 - `package.json.repository.url` 必须和 GitHub 仓库 URL 精确匹配。
+- 当前仓库应写成 `https://github.com/imbingox/acex`，不要写成 `git+https://...git` 形式。
 - npm 包 settings 中 Trusted Publisher 绑定的 workflow 文件名必须是 `release.yml`。
 
 #### 3.4 发布前质量门禁

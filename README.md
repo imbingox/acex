@@ -654,7 +654,7 @@ bun test
 npm 侧配置 Trusted Publisher 时，需要确保：
 
 - workflow 文件名是 `release.yml`
-- `package.json.repository.url` 与 GitHub 仓库地址完全一致
+- `package.json.repository.url` 必须直接写仓库地址，例如 `https://github.com/imbingox/acex`
 - npm 包 settings 里绑定的是 GitHub Actions trusted publisher，而不是长期 `NPM_TOKEN`
 
 真实 Binance 公网 smoke test 单独执行，不放进默认 `bun test`：

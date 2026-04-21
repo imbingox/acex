@@ -4,7 +4,7 @@
   "description": "Multi-exchange trading SDK for market data, account, and order management",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/imbingox/acex.git"
+    "url": "https://github.com/imbingox/acex"
   },
   "module": "index.ts",
   "type": "module",

@@ -289,3 +289,37 @@ Aligned Trellis specs and workflow, restored placeholder frontend/database/loggi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: Finalize Trellis 0.5 migration workflow
+
+**Date**: 2026-04-23
+**Task**: Finalize Trellis 0.5 migration workflow
+**Branch**: `main`
+
+### Summary
+
+完成 Trellis 0.5 迁移收尾，清理旧 multi-agent/worktree 入口，补齐全局中文文档约束，并归档迁移任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5673eeb` | (see git log) |
+| `6ee7ac7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

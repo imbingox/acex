@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-04-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~291 | Active |
+| `journal-1.md` | ~325 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-04-23 | Finalize Trellis 0.5 migration workflow | `5673eeb`, `6ee7ac7` | `main` |
 | 6 | 2026-04-23 | Reconcile specs and API docs | `8ef8dc2` | `main` |
 | 5 | 2026-04-16 | Finalize frontend specs and archive Trellis tasks | `f7897b9` | `main` |
 | 4 | 2026-04-15 | SDK public API improvements & BigNumber migration | `5e47284`, `c24fc40` | `main` |

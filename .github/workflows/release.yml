@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      reenter_beta_mode:
+        description: Re-enter Changesets beta prerelease mode after stable publish
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -15,7 +22,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  beta-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip release]')
     runs-on: ubuntu-latest
 
     steps:
@@ -38,6 +46,11 @@ jobs:
           npm install --global npm@11.6.2
           npm --version
 
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -50,7 +63,7 @@ jobs:
       - name: Run tests
         run: bun run test
 
-      - name: Create release pull request or prepare publish
+      - name: Create beta release pull request or prepare publish
         id: changesets
         uses: changesets/action@v1
         with:
@@ -60,9 +73,129 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish to npm
+      - name: Check whether current beta version is already published
+        id: beta-publish-state
         if: steps.changesets.outputs.hasChangesets == 'false'
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Current version ${PACKAGE_NAME}@${PACKAGE_VERSION} is already published; skipping beta publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish beta to npm
+        if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-publish-state.outputs.already_published != 'true'
         env:
           NPM_CONFIG_PROVENANCE: false
           NPM_CONFIG_TAG: beta
         run: bun run release
+
+      - name: Push beta git tags
+        if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-publish-state.outputs.already_published != 'true'
+        run: git push --follow-tags origin HEAD:${GITHUB_REF_NAME}
+
+  stable-release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ensure stable release runs from main
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "Stable release must be dispatched from main. Current ref: ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install --global npm@11.6.2
+          npm --version
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run lint
+        run: bun run lint
+
+      - name: Run type-check
+        run: bun run type-check
+
+      - name: Run tests
+        run: bun run test
+
+      - name: Exit prerelease mode
+        run: bun run changeset:pre:exit
+
+      - name: Version packages for stable release
+        run: bun run version-packages
+
+      - name: Ensure stable release produced changes
+        run: |
+          if git diff --quiet; then
+            echo "No stable release changes were generated. The repository may already be out of prerelease mode or there is nothing new to release." >&2
+            exit 1
+          fi
+
+      - name: Check whether target stable version is already published
+        id: stable-publish-state
+        run: |
+          PACKAGE_NAME=$(node -p "require('./package.json').name")
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "Target version ${PACKAGE_NAME}@${PACKAGE_VERSION} is already published." >&2
+            exit 1
+          fi
+
+      - name: Commit stable release metadata
+        run: |
+          git add -A
+          git commit -m "chore(release): publish stable v${{ steps.stable-publish-state.outputs.package_version }} [skip release]"
+
+      - name: Publish stable to npm
+        env:
+          NPM_CONFIG_PROVENANCE: false
+        run: bun run release
+
+      - name: Push stable commit and tags
+        run: git push --follow-tags origin HEAD:main
+
+      - name: Re-enter beta prerelease mode
+        if: ${{ inputs.reenter_beta_mode }}
+        run: bun run changeset:pre:enter:beta
+
+      - name: Commit beta prerelease metadata
+        if: ${{ inputs.reenter_beta_mode }}
+        run: |
+          git add .changeset/pre.json
+          git commit -m "chore(release): re-enter beta prerelease mode [skip release]"
+
+      - name: Push beta prerelease metadata
+        if: ${{ inputs.reenter_beta_mode }}
+        run: git push origin HEAD:main

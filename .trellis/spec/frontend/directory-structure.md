@@ -1,14 +1,12 @@
 # Directory Structure
 
-> There is no frontend directory structure in this repository today. The only documented rule is where frontend code must not go.
+> 当前仓库没有前端目录结构；这里记录的是“哪些地方不能放 UI 代码”。
 
 ---
 
 ## Overview
 
-This repo is a single-package SDK. The root `src/` tree is reserved for SDK runtime code and shared public types.
-
-Current layout:
+当前仓库是单包 SDK，根目录结构如下：
 
 ```text
 src/
@@ -21,34 +19,20 @@ tests/
 docs/
 ```
 
+`src/` 整棵树保留给 SDK runtime 和 public types，不是 app shell。
+
 ---
 
 ## Current Rules
 
-- Do not add `src/components`, `src/hooks`, `app/`, `pages/`, or browser assets to this package.
-- Do not mix demo UI code with SDK runtime code under `src/`.
-- If the project gains a frontend, create a dedicated top-level package or app first, then document its real structure here.
+- 不要在当前包下新增 `src/components`、`src/hooks`、`app/`、`pages/` 或浏览器静态资源目录。
+- 不要把 demo 页面、调试面板或 dashboard 混进 SDK `src/`。
+- 如果未来引入 frontend，先建立独立顶层 package / app，再回写真实目录规范。
 
 ---
 
-## Naming Conventions
+## Naming Guidance
 
-- Current source names describe SDK roles: `runtime`, `manager`, `adapter`, `types`, `internal`.
-- UI-oriented names such as `Button.tsx`, `Dashboard.tsx`, or `useMarkets.ts` do not belong in this package today.
-- If a future frontend package is introduced, keep its naming rules local to that package instead of reusing SDK folder names blindly.
-
----
-
-## Evidence From The Current Repo
-
-- `src/client/runtime.ts` shows orchestration code living under `client/`, not a UI shell.
-- `src/managers/market-manager.ts` shows domain state living under `managers/`.
-- `tests/client.test.ts` shows the repository tests SDK behavior, not rendered components.
-
----
-
-## Common Mistakes To Avoid
-
-- Adding a quick demo screen directly under the SDK `src/` tree.
-- Treating the repository root as both a library package and an application package.
-- Creating frontend folders before the project has decided on a real app boundary.
+- 当前目录命名反映的是 SDK 职责：`runtime`、`manager`、`adapter`、`types`、`internal`。
+- 类似 `Button.tsx`、`Dashboard.tsx`、`useMarkets.ts` 这类 UI 命名，不属于当前包。
+- 如果未来新增前端，命名规范应以那个 package 的真实代码为准，不要机械复用 SDK 目录语义。

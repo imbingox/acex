@@ -1,15 +1,15 @@
 # Frontend Development Guidelines
 
-> This repository currently has no frontend or UI package. These documents exist to stop AI agents from inventing one.
+> 当前仓库没有 frontend / UI package。保留这组文档是为了让 Trellis workflow 和脚本始终指向有效路径，同时明确告诉贡献者：不要在当前 SDK 包里发明前端架构。
 
 ---
 
 ## Current Reality
 
-- `package.json` defines `@imbingox/acex` as a trading SDK and exports only `index.ts`.
-- `src/` contains SDK runtime code only: `client/`, `managers/`, `adapters/`, `internal/`, and `types/`.
-- The repository has no `.tsx` files, no `components/`, no `app/`, and no frontend build config.
-- `CLAUDE.md` contains generic Bun frontend examples, but they are tool defaults, not established project conventions.
+- `@imbingox/acex` 当前是单包 Bun SDK，不是应用仓库。
+- 根目录 `src/` 只包含 SDK runtime 代码：`client/`、`managers/`、`adapters/`、`internal/`、`types/`。
+- 仓库里没有 `.tsx` 文件、没有 `components/` / `app/` / `pages/`、也没有前端构建配置。
+- 如果未来真的引入 frontend，需要先建立独立 package 或 app，再把这组占位文档改写成真实规范。
 
 ---
 
@@ -17,45 +17,33 @@
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Where future frontend code must live and what must stay out of the SDK package | Active |
-| [Component Guidelines](./component-guidelines.md) | Rules for the first component layer, if one is introduced later | Active |
-| [Hook Guidelines](./hook-guidelines.md) | Rules for keeping React-style hooks out of the SDK package | Active |
-| [State Management](./state-management.md) | Current state ownership in the SDK and boundaries for any future UI state | Active |
-| [Quality Guidelines](./quality-guidelines.md) | Quality gates and forbidden patterns for frontend-related changes | Active |
-| [Type Safety](./type-safety.md) | Type import boundaries for future UI code | Active |
+| [Directory Structure](./directory-structure.md) | 当前哪些目录禁止放 UI 代码；未来若引入前端，应该如何建立独立边界 | Placeholder |
+| [Component Guidelines](./component-guidelines.md) | 当前没有组件系统；防止在 SDK 包内引入组件约定 | Placeholder |
+| [Hook Guidelines](./hook-guidelines.md) | 当前没有 React-style hooks；防止把 SDK 状态机改写成 hooks | Placeholder |
+| [State Management](./state-management.md) | 当前状态由 SDK managers 持有；不是前端状态层 | Placeholder |
+| [Quality Guidelines](./quality-guidelines.md) | 前端相关变更的质量门禁与禁用模式 | Placeholder |
+| [Type Safety](./type-safety.md) | 未来 UI 代码的类型导入边界 | Placeholder |
 
 ---
 
-## Pre-Development Checklist
+## How To Use These Docs
 
-Before writing any frontend code:
+如果你正在做普通 SDK 开发：
 
-1. Confirm the task really requires a frontend surface. Most tasks in this repo are backend SDK work and should follow `backend/` specs instead.
-2. Confirm the new UI code will live in a dedicated package or app, not inside the current SDK `src/` tree.
-3. Update these frontend spec files with the actual stack and patterns before adding the second frontend module.
-4. Keep UI code dependent on public SDK exports only.
+- 优先阅读 `../backend/` 和 `../guides/`。
+- 把这里的文档当成“不要误加前端”的边界说明，而不是现成的前端规范。
 
----
+如果任务真的要求新增 frontend：
 
-## Quality Check
-
-When reviewing frontend-related changes:
-
-1. Reject changes that add UI files directly under the SDK `src/` tree.
-2. Reject imports from `src/internal/*`, `src/client/*`, or exchange adapter internals into UI code.
-3. Reject new frontend tooling in the root package unless the task explicitly converts this repo into a multi-package workspace.
-4. Confirm any UI example or demo consumes the SDK through `src/index.ts` exports.
+1. 先确认前端代码不会直接落进当前 SDK `src/` 树。
+2. 先建立独立 package / app 边界。
+3. 用真实代码结构回填本目录文档，不要继续保留占位描述。
 
 ---
 
-## Evidence From The Current Repo
+## Review Checklist
 
-- `package.json`
-- `src/index.ts`
-- `src/client/runtime.ts`
-- `src/managers/market-manager.ts`
-- `tests/client.test.ts`
-
----
-
-**Language**: Write future additions in English and document real code, not aspirational architecture.
+- 拒绝把 UI 文件直接加到当前 SDK `src/` 目录。
+- 拒绝从 `src/internal/*`、`src/client/*` 或 adapter 私有实现直接喂给 UI。
+- 拒绝把泛用 AI 模板里的前端栈，当成当前仓库已经采纳的规范。
+- 如果新增 demo / dashboard / app，要求先建立明确的前端边界。

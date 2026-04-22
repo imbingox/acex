@@ -94,11 +94,14 @@ export * from "./types/index.ts";
 
 #### 3.4 `src/adapters/*` 封装交易所特定实现
 
-- `src/adapters/types.ts` 定义 `MarketAdapter` 接口、`StreamHandle`、`RawL1BookUpdate`、回调和选项类型。
+- `src/adapters/types.ts` 定义 `MarketAdapter` 接口、`PrivateUserDataAdapter` 接口、`StreamHandle`、所有 `Raw*` 标准化类型（`RawL1BookUpdate`、`RawAccountBootstrap`、`RawAccountUpdate`、`RawOrderUpdate`）、回调和选项类型。
 - 每个交易所一个子目录（如 `binance/`），内含：
-  - `adapter.ts`：实现 `MarketAdapter` 接口。
+  - `adapter.ts`：实现 `MarketAdapter` 接口（行情 catalog + L1 Book 流）。
+  - `private-adapter.ts`：实现 `PrivateUserDataAdapter` 接口（账户 bootstrap、open orders bootstrap、交易命令、私有 WS 流、listenKey keepalive）。
   - 交易所特定的 WS/REST 逻辑文件。
-- **交易所特定类型（如 `BinanceMarketDefinition.family`）不得泄漏到适配器之外**。适配器对外只返回标准 `MarketDefinition`。
+- 私有 adapter 必须把交易所特定 REST / WS 细节、签名方案、listenKey 维护完全封装在 `adapters/<exchange>/` 内部，对外只返回标准化的 `RawAccountBootstrap` / `RawAccountUpdate` / `RawOrderUpdate`。
+- **交易所特定类型（如 `BinanceMarketDefinition.family`）不得泄漏到适配器之外**。适配器对外只返回标准 `MarketDefinition` / `Raw*` 类型。
+- 完整接口级契约见 [Adapter Contract](./adapter-contract.md)。
 
 #### 3.5 `src/managers/*` 各自持有领域状态
 
@@ -154,9 +157,10 @@ export * from "./types/index.ts";
 新增 OKX 交易所支持时：
 
 - 创建 `src/adapters/okx/` 子目录
-- 在其中实现 `OkxMarketAdapter`（implements `MarketAdapter`）
-- runtime 的适配器选择逻辑补上 OKX
-- Manager 代码无需改动
+- 在其中实现 `OkxMarketAdapter`（implements `MarketAdapter`）与 `OkxPrivateAdapter`（implements `PrivateUserDataAdapter`）
+- **当前 runtime 硬编码单一 Binance adapter**（`src/client/runtime.ts:96-97` 直接 `new BinanceMarketAdapter()` / `new BinancePrivateAdapter()`），接入第二家交易所前需要先引入 adapter registry（按 `Exchange` 分派），或在 plan 里明确这一步；仅实现 adapter 类本身不够。这一结构性限制也记录在 `docs/architecture.md`
+- Manager 代码不需要改动（Manager 通过 `ClientContext` 与 runtime 交互，不直接持有 adapter 引用）
+- 新 adapter 的接口级约束见 [Adapter Contract](./adapter-contract.md)
 
 新增 `ticker` 市场能力时：
 
@@ -192,7 +196,7 @@ export * from "./types/index.ts";
 
 ```bash
 bun run type-check
-bun test
+bun run test
 bun run lint
 ```
 

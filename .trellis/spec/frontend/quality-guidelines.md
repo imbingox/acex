@@ -1,52 +1,32 @@
 # Quality Guidelines
 
-> There is no frontend package to lint or test today. Quality checks focus on preventing accidental UI code from leaking into the SDK package.
+> 当前仓库没有 frontend package。这里的质量门禁重点是防止 UI 代码误入 SDK 包。
 
 ---
 
 ## Repository Quality Gates
 
-The current project-level checks are defined in `package.json`:
+当前项目级检查命令定义在 `package.json`：
 
 - `bun run lint`
 - `bun run type-check`
-- `bun test`
+- `bun run test`
 
-These validate the SDK package. They do not establish a frontend framework stack.
+这些命令验证的是 SDK 包，不代表仓库已经建立了 frontend stack。
 
 ---
 
 ## Forbidden Patterns
 
-- Adding frontend files directly under the SDK `src/` tree.
-- Adding frontend-only tooling to the root package without an explicit workspace or app plan.
-- Importing private SDK internals into demos, dashboards, or future UI code.
-- Treating generic examples in `CLAUDE.md` as project-approved frontend architecture.
+- 把 frontend 文件直接加到 SDK `src/` 树下。
+- 在没有显式 workspace / app 计划时，把 frontend-only tooling 塞进当前根包。
+- 让 demo / dashboard / UI 代码 import SDK 私有实现。
+- 把通用 AI 模板里的前端建议，当成当前项目已经采纳的规范。
 
 ---
 
 ## Required Patterns
 
-- Keep frontend work in a dedicated package or app once it exists.
-- Consume the SDK through public exports only.
-- Update this frontend spec directory as soon as real frontend code is introduced.
-
----
-
-## Review Checklist
-
-When a change mentions UI, demo screens, dashboards, or browser rendering:
-
-1. Does the change introduce a dedicated frontend boundary instead of modifying the SDK `src/` tree?
-2. Does the code depend only on public SDK exports?
-3. Are `BigNumber` values formatted at the presentation boundary rather than truncated earlier?
-4. Are frontend conventions documented here before the pattern spreads?
-
----
-
-## Evidence From The Current Repo
-
-- `package.json`
-- `README.md`
-- `src/index.ts`
-- `tests/client.test.ts`
+- 若未来引入前端，先建立独立 package / app。
+- UI 代码只消费 public SDK exports。
+- 一旦出现真实前端代码，立即用真实规则覆盖本目录占位文档。

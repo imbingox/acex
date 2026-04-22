@@ -42,7 +42,8 @@ export type PrivateRuntimeReason =
   | "heartbeat_timeout"
   | "reconciling";
 
-createOrderStatus(
+// src/managers/order-manager.ts:478
+private createStatus(
   accountId: string,
   exchange: Exchange,
   activity: "active" | "inactive",
@@ -61,7 +62,7 @@ createOrderStatus(
 
 #### 3.2 runtime helper 的返回类型显式标注
 
-- 像 `createOrderStatus()` 这种返回 public status 的 helper，必须写显式返回类型。
+- 像 `OrderManagerImpl.createStatus()`（`src/managers/order-manager.ts:478`）、`AccountManagerImpl.createStatus()`（`src/managers/account-manager.ts:436`）这类返回 public status 的 helper，必须写显式返回类型。
 - 原因是对象字面量很容易把联合字面量推宽成 `string`，重构后会悄悄破坏 contract。
 
 #### 3.3 不允许自引用 type import
@@ -119,7 +120,7 @@ if (filter.exchange) {
 ```
 
 ```ts
-createOrderStatus(...): OrderDataStatus {
+createStatus(...): OrderDataStatus {
   return {
     accountId,
     exchange,
@@ -165,7 +166,7 @@ if ("exchange" in event && filter.exchange && event.exchange !== filter.exchange
 - 调用 `health({ exchange: "binance" })` 时会错误收到 client 级事件
 
 ```ts
-createOrderStatus(...) {
+createStatus(...) {
   return {
     runtimeStatus: activity === "active" ? "bootstrap_pending" : "stopped",
   };
@@ -177,8 +178,8 @@ createOrderStatus(...) {
 每次改 public types 或导出结构，至少执行：
 
 ```bash
-bunx tsc --noEmit
-bun test
+bun run type-check
+bun run test
 ```
 
 断言重点：

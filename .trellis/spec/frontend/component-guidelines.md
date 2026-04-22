@@ -1,57 +1,27 @@
 # Component Guidelines
 
-> No component system exists in this repository today.
+> 当前仓库没有组件系统。
 
 ---
 
 ## Overview
 
-`acex` is a programmatic SDK, not an application. There are no React, Vue, or HTML component files in the repo, so agents must not invent component conventions.
+`acex` 是程序化 SDK，不是 Web / Native 应用。目前仓库里没有 React、Vue 或 HTML 组件边界，因此不要凭空发明组件约定。
 
 ---
 
 ## Current Rules
 
-- Do not add component files to the current SDK package.
-- Do not introduce a UI layer as part of an SDK feature unless the task explicitly requires a new frontend package.
-- If a first-party frontend package is created later, define component rules from that codebase and update this file immediately.
+- 不要在当前 SDK 包内新增组件文件。
+- 不要把“顺手补个小面板 / demo 组件”包装成 SDK 功能的一部分。
+- 如果未来引入第一方 frontend package，应基于那份真实代码重新定义组件规则。
 
 ---
 
-## Props And Composition
+## Future Boundary
 
-No props conventions are defined because no component boundary exists yet.
+如果未来真的有组件层：
 
-If a frontend package is introduced later:
-
-- Keep component props typed inside that package.
-- Consume the SDK via public exports instead of passing adapter internals through props.
-- Document composition patterns after there are at least two real component examples.
-
----
-
-## Accessibility
-
-No repository-level accessibility standard is documented yet because there is no UI surface to audit.
-
-The first frontend task must define:
-
-- semantic markup expectations
-- keyboard interaction requirements
-- screen-reader expectations for trading data displays
-
----
-
-## Evidence From The Current Repo
-
-- `package.json` exports a library entrypoint instead of an app entrypoint.
-- `README.md` documents programmatic SDK usage only.
-- `src/index.ts` exposes TypeScript APIs, not UI primitives.
-
----
-
-## Common Mistakes To Avoid
-
-- Hiding a product decision inside a "small component" commit.
-- Importing from `src/internal/*` to feed a UI.
-- Building docs or demos on private SDK internals instead of public exports.
+- 组件 props 只依赖 public SDK exports。
+- 不把 adapter / internal 细节透传到 props。
+- 等出现至少两个真实组件以后，再在这里沉淀 composition 约定。

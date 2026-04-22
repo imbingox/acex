@@ -68,7 +68,7 @@ cat .trellis/spec/backend/index.md
 **Why read both?**
 - Understand the full project architecture
 - Know coding standards for the entire codebase
-- See how frontend and backend interact
+- Confirm whether the repository actually contains a frontend boundary
 - Learn the overall code quality requirements
 
 ### Step 3: Before Coding - Read Specific Guidelines (Required)
@@ -82,12 +82,16 @@ cat .trellis/spec/frontend/component-guidelines.md # For components
 cat .trellis/spec/frontend/type-safety.md          # For types
 ```
 
+> 如果这些文档写明“当前仓库没有 frontend / UI package”，按占位约束执行即可；不要凭空发明前端目录或组件系统。
+
 **Backend Task**:
 ```bash
 cat .trellis/spec/backend/database-guidelines.md   # For DB operations
 cat .trellis/spec/backend/type-safety.md           # For types
 cat .trellis/spec/backend/logging-guidelines.md    # For logging
 ```
+
+> 如果 database / logging 文档写明“当前仓库无此模块”，把它们当边界说明使用，而不是补一套想象中的数据库或日志架构。
 
 ---
 

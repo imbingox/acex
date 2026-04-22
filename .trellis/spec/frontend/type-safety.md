@@ -1,50 +1,27 @@
 # Type Safety
 
-> There is no frontend type layer in this repository today. The relevant rule is where future UI code may import types from.
+> 当前仓库没有 frontend 类型层；这里定义的是未来 UI 代码可以从哪里导入类型。
 
 ---
 
 ## Overview
 
-The SDK already exposes public contracts through `src/types/*` and `src/index.ts`. Any future frontend code must depend on those public contracts instead of reaching into implementation details.
+SDK 已经通过 `src/types/*` 和 `src/index.ts` 暴露 public contract。未来若有 UI 代码，只能依赖这些公开边界，不能直接碰实现细节。
 
 ---
 
 ## Current Rules
 
-- Import SDK-facing types from public exports or `src/types/*`.
-- Do not import from `src/internal/*`, `src/client/*`, or adapter-private files in UI code.
-- Preserve `BigNumber` values until the presentation boundary. Format them for display there instead of converting early to `number`.
+- UI 相关代码只能从 public exports 或 `src/types/*` 导入 SDK-facing types。
+- 不要从 `src/internal/*`、`src/client/*` 或 adapter 私有文件导入类型。
+- `BigNumber` 应保留到展示边界再格式化，不要过早转成 `number`。
 
 ---
 
-## Current Type Sources
+## Current Public Type Sources
 
-- `src/types/client.ts` defines client-facing contracts.
-- `src/types/market.ts` defines market-facing public data structures.
-- `src/types/account.ts` and `src/types/order.ts` define account and order contracts.
-
----
-
-## If A Frontend Package Is Added Later
-
-- Treat the SDK public API as the only stable import surface.
-- Add package-local view models only when the raw SDK contract is not directly renderable.
-- Document runtime validation choices here if UI input parsing is introduced.
-
----
-
-## Forbidden Patterns
-
-- Importing implementation details from `src/internal/managed-websocket.ts`.
-- Using `any` to paper over exchange payload differences in UI code.
-- Converting precise money and quantity values to floating-point numbers before formatting.
-
----
-
-## Evidence From The Current Repo
-
-- `src/index.ts`
 - `src/types/client.ts`
 - `src/types/market.ts`
-- `README.md`
+- `src/types/account.ts`
+- `src/types/order.ts`
+- `src/index.ts`

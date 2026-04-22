@@ -30,6 +30,9 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Code Organization](./code-organization.md) | 5 层架构、目录结构、接口契约、各层职责边界 | Active |
+| [Adapter Contract](./adapter-contract.md) | MarketAdapter / PrivateUserDataAdapter 接口契约、StreamHandle 语义、回调与错误传播规则 | Active |
+| [Database Guidelines](./database-guidelines.md) | 占位文档：当前仓库无数据库 / ORM / migration 层，防止 workflow 指向空路径 | Placeholder |
+| [Logging Guidelines](./logging-guidelines.md) | 占位文档：当前仓库无正式 logger 集成，`logger` / `logLevel` 仍为预留位 | Placeholder |
 | [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
 | [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |
 | [Type Safety](./type-safety.md) | 类型定义位置、显式返回类型、避免宽化和循环引用 | Active |
@@ -45,7 +48,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 - `src/managers/*` 各自持有领域状态，实现 `ManagerLifecycle` + `HealthReporter<T>` 接口。
 - `src/client/runtime.ts` 只做编排，实现 `AcexClient` + `ClientContext` 接口。
 - `src/client/context.ts` 定义内部契约接口（`ClientContext`、`ManagerLifecycle`、`AccountAwareManager`、`HealthReporter<T>`）。
-- 项目级检查命令统一使用 `bun run lint`、`bun run type-check`、`bun test`。
+- 项目级检查命令统一使用 `bun run lint`、`bun run type-check`、`bun run test`。
 
 ---
 
@@ -54,6 +57,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 当你修改以下内容时，先读对应规范：
 
 - 调整目录结构、增加 manager、增加适配器、修改层级依赖：读 [Code Organization](./code-organization.md)
+- 新增或修改交易所 adapter、修改 `MarketAdapter` / `PrivateUserDataAdapter` 接口、接入新的 `StreamHandle` 或 `Raw*` 类型：读 [Adapter Contract](./adapter-contract.md)
 - 新增或修改 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`、Binance 持仓模式约束、交易命令错误语义：读 [Order Execution](./order-execution.md)
 - 新增或修改 GitHub Actions 发布流程、npm publish 参数、发布前质量门禁：读 [Release Publishing](./release-publishing.md)
 - 新增公共类型、修复类型错误、改返回值语义：读 [Type Safety](./type-safety.md)

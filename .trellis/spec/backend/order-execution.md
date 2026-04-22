@@ -173,7 +173,7 @@ await client.order.createOrder({
 每次改交易命令 contract 或 Binance 下单字段，至少执行：
 
 ```bash
-bun test
+bun run test
 bun run type-check
 ```
 

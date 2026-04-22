@@ -17,7 +17,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "type-check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test --max-concurrency=1"
   }
 }
 ```
@@ -39,6 +39,9 @@ package.json
   - 用于统一跑 TypeScript 类型检查
 - `bun run test`
   - 用于统一跑 Bun 测试
+  - 当前脚本固定为 `bun test --max-concurrency=1`。
+  - `--max-concurrency` 控制的是并发测试的同时执行上限；默认路径虽然没有显式开启 `test.concurrent()` / `bun test --concurrent`，但当前测试基建依赖全局 `fetch` / `WebSocket` mock、共享 `FakeWebSocket` 状态，以及 `stopAllClientsForTests()` 全局清理。
+  - 实测在启用并发测试时会出现超时、全局 mock 污染和 client 被其他测试提前停止的问题；除非先完成测试隔离，否则不要去掉这个参数，也不要绕过 `bun run test` 直接改用其他入口。
 
 #### 3.2 lint 工具约定
 
@@ -75,7 +78,7 @@ package.json
   "scripts": {
     "lint": "biome check .",
     "type-check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test --max-concurrency=1"
   }
 }
 ```
@@ -147,7 +150,7 @@ bun run test
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "type-check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test --max-concurrency=1"
   }
 }
 ```

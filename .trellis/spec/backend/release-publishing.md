@@ -178,7 +178,7 @@ on:
 ```bash
 bun run lint
 bun run type-check
-bun test
+bun run test
 ```
 
 检查点：

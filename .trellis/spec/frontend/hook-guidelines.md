@@ -1,55 +1,27 @@
 # Hook Guidelines
 
-> No React-style hooks exist in this repository today.
+> 当前仓库没有 React-style hooks。
 
 ---
 
 ## Overview
 
-This SDK has stateful logic, but it is implemented with managers and infrastructure primitives rather than framework hooks.
-
----
-
-## Current Patterns
-
-Stateful reuse currently lives in:
-
-- `src/client/runtime.ts` for lifecycle orchestration
-- `src/internal/managed-websocket.ts` for connection management
-- `src/internal/async-event-bus.ts` for async event delivery
-
-These are not hooks and should not be wrapped in React naming or semantics inside the SDK package.
+这个 SDK 里确实有状态和生命周期，但它们由 managers、runtime 和基础设施原语实现，而不是框架 hooks。
 
 ---
 
 ## Current Rules
 
-- Do not add files named `use*.ts` or `use*.tsx` to this package.
-- Do not move SDK lifecycle logic into framework-specific abstractions.
-- If consumers want hooks such as `useL1Book`, they should implement them in their own frontend package on top of the public SDK API.
+- 不要在当前包里新增 `use*.ts` 或 `use*.tsx`。
+- 不要把 SDK 生命周期逻辑改写成 framework-specific abstraction。
+- 如果调用方需要 `useL1Book` 之类的 hooks，应在自己的 frontend package 基于 public SDK API 实现。
 
 ---
 
-## Naming Guidance For Future UI Code
+## Current Stateful Reuse
 
-If a frontend package is introduced later:
+- `src/client/runtime.ts` 负责生命周期编排
+- `src/internal/managed-websocket.ts` 负责连接管理
+- `src/internal/async-event-bus.ts` 负责异步事件分发
 
-- Reserve `use*` names for real framework hooks only.
-- Keep hook responsibilities thin: subscribe through the SDK, then adapt values for rendering.
-- Document data fetching and subscription cleanup patterns here once they exist in code.
-
----
-
-## Evidence From The Current Repo
-
-- `src/client/runtime.ts`
-- `src/internal/managed-websocket.ts`
-- `src/internal/async-event-bus.ts`
-
----
-
-## Common Mistakes To Avoid
-
-- Adding React hooks to a package that has no React dependency.
-- Coupling websocket lifecycle to component mount state inside the SDK.
-- Letting a UI abstraction leak back into manager or adapter layers.
+这些都不是 hooks，不应在当前包里套上 hooks 语义。

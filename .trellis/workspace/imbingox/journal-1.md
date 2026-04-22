@@ -256,3 +256,36 @@ Replaced frontend Trellis placeholder specs with repo-specific SDK-only guidance
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Reconcile specs and API docs
+
+**Date**: 2026-04-23
+**Task**: Reconcile specs and API docs
+**Branch**: `main`
+
+### Summary
+
+Aligned Trellis specs and workflow, restored placeholder frontend/database/logging docs, split public docs into api/architecture, fixed runnable quick-start examples, merged remote release workflow updates, and pushed main.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8ef8dc2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

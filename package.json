@@ -20,6 +20,8 @@
   ],
   "scripts": {
     "changeset": "changeset",
+    "changeset:pre:enter:beta": "changeset pre enter beta && if [ -f .changeset/pre.json ]; then biome check --write .changeset/pre.json; fi",
+    "changeset:pre:exit": "changeset pre exit && if [ -f .changeset/pre.json ]; then biome check --write .changeset/pre.json; fi",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "release": "changeset publish",
@@ -34,7 +36,7 @@
     "test:live:order": "bun run scripts/live-order-smoke.ts",
     "test:live:order:smoke": "bun run scripts/live-order-smoke.ts --duration 10",
     "test:live:order:soak": "bun run scripts/live-order-smoke.ts --duration 60 --disconnect-after 5",
-    "version-packages": "changeset version && if [ -f CHANGELOG.md ]; then biome check --write .changeset/pre.json package.json CHANGELOG.md; else biome check --write .changeset/pre.json package.json; fi"
+    "version-packages": "changeset version && files=\"package.json\"; if [ -f .changeset/pre.json ]; then files=\"$files .changeset/pre.json\"; fi; if [ -f CHANGELOG.md ]; then files=\"$files CHANGELOG.md\"; fi; biome check --write $files"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",

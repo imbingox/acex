@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Registry utility functions for multi-agent pipeline.
+Registry utility functions for Trellis agent workspace metadata.
 
 Provides:
     registry_get_file        - Get registry file path

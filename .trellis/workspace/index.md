@@ -120,4 +120,4 @@ Use this template when recording sessions:
 
 ---
 
-**Language**: All documentation must be written in **English**.
+**Language**: 面向人的文档默认使用 **中文**；技术术语、命令、代码标识符和 API 名称可以保留 **English**。

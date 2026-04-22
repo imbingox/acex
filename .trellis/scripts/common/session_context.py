@@ -459,7 +459,7 @@ def get_context_record_json(repo_root: Path | None = None) -> dict:
 
 
 def get_context_text_record(repo_root: Path | None = None) -> str:
-    """Get context as formatted text for record-session mode.
+    """Get context as formatted text for finish-work session summary mode.
 
     Focused output: MY ACTIVE TASKS first (with [!!!] emphasis),
     then GIT STATUS, RECENT COMMITS, CURRENT TASK.

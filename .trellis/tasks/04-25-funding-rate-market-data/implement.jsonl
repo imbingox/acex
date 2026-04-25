@@ -1,0 +1,5 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "Funding rate stream extends MarketAdapter contract"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "Funding rate touches adapter and manager layers"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Funding rate adds typed raw update contract"}

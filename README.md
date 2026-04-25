@@ -30,6 +30,18 @@ const book = client.market.getL1Book({
   symbol: "BTC/USDT:USDT",
 });
 console.log(`bid=${book?.bidPrice.toFixed()} ask=${book?.askPrice.toFixed()}`);
+console.log(`book freshness=${book?.status.freshness}`);
+
+await client.market.subscribeFundingRate({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+const funding = client.market.getFundingRate({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+});
+console.log(`funding=${funding?.fundingRate.toFixed()}`);
 
 for await (const event of client.market.events.l1BookUpdates({
   exchange: "binance",
@@ -84,7 +96,7 @@ await client.stop();
 
 | 能力 | 概述 | 详细文档 |
 |---|---|---|
-| **Market** | Market catalog、L1 Book 订阅、增量事件、订阅状态与自动重连 | [docs/api.md §5](./docs/api.md#5-marketmanager) |
+| **Market** | Market catalog、L1 Book / Funding Rate 订阅、增量事件、订阅状态与自动重连 | [docs/api.md §5](./docs/api.md#5-marketmanager) |
 | **Account** | 账户快照、余额、持仓、风险投影与事件流 | [docs/api.md §6](./docs/api.md#6-accountmanager) |
 | **Order** | open orders 投影、订单事件流，`createOrder` / `cancelOrder` / `cancelAllOrders` 第一版命令 | [docs/api.md §7](./docs/api.md#7-ordermanager) |
 | **健康与错误** | `getHealth()`、`events.health()`、`events.errors()` | [docs/api.md §8](./docs/api.md#8-健康与错误事件) |
@@ -95,7 +107,7 @@ await client.stop();
 
 - 运行时只支持 `binance`；`okx` / `bybit` / `gate` 仅类型定义
 - 私有链路仅 Binance PAPI UM（统一账户 / Portfolio Margin）
-- `subscribeFundingRate()` 接口已暴露，但当前是占位快照，不要用于生产决策
+- Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；不支持现货和交割合约
 - `createOrder()` 只支持 `limit` / `market`；条件单、改单、账户级全撤不支持
 - 双向持仓账户下单时必须显式传 `positionSide`
 - `CreateClientOptions` 中 `sandbox` / `logger` / `logLevel` 是预留位
@@ -129,7 +141,7 @@ bun run test:live:order:soak
 
 覆盖内容：
 
-- `market`：`loadMarkets()`、`subscribeL1Book()`、`getL1Book()` / `events.l1BookUpdates()`，可选断线重连
+- `market`：`loadMarkets()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getFundingRate()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
 - `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连
 

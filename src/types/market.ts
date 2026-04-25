@@ -42,6 +42,16 @@ export interface MarketDataStatus {
   reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 }
 
+export interface MarketDataStreamStatus {
+  activity: SubscriptionActivity;
+  ready: boolean;
+  freshness?: MarketFreshness;
+  lastReceivedAt?: number;
+  lastReadyAt?: number;
+  inactiveSince?: number;
+  reason?: MarketDataStatus["reason"];
+}
+
 export interface MarketKeyInput {
   exchange: Exchange;
   symbol: string;
@@ -67,6 +77,7 @@ export interface L1Book {
   receivedAt: number;
   updatedAt: number;
   version: number;
+  status: MarketDataStreamStatus;
 }
 
 export interface FundingRateSnapshot {
@@ -80,6 +91,7 @@ export interface FundingRateSnapshot {
   receivedAt: number;
   updatedAt: number;
   version: number;
+  status: MarketDataStreamStatus;
 }
 
 export interface MarketStatusChangedEvent {

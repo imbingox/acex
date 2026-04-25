@@ -205,3 +205,40 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Release 0.2.0 and reset beta flow
+
+**Date**: 2026-04-25
+**Task**: Release 0.2.0 and reset beta flow
+**Branch**: `main`
+
+### Summary
+
+Published @imbingox/acex 0.2.0, reset Changesets beta baseline to 0.2.0 for future 0.3.0-beta releases, documented release version rules, updated Trellis tooling, and adjusted release workflow to ignore docs-only pushes.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `08b1103` | (see git log) |
+| `67a9800` | (see git log) |
+| `9052788` | (see git log) |
+| `9e58a85` | (see git log) |
+| `f24d7b3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

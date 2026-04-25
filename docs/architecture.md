@@ -155,19 +155,26 @@ interface MarketRecord {
   symbol: string;
   market?: MarketDefinition;           // catalog 加载后写入
   l1Book?: L1Book;                     // 最新快照
-  fundingRate?: FundingRateSnapshot;   // 占位
+  fundingRate?: FundingRateSnapshot;   // 最新资金费率快照
   l1BookSubscribed: boolean;
   fundingRateSubscribed: boolean;
+  l1Freshness?: "fresh" | "stale";
+  l1Reason?: MarketDataStatus["reason"];
+  fundingRateFreshness?: "fresh" | "stale";
+  fundingRateReason?: MarketDataStatus["reason"];
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
+  fundingRateStream?: StreamHandle;
 }
 ```
 
-`MarketDataStatus` 的生命周期：
+每个快照自带一份 stream 级 `status`，例如 `L1Book.status` 只表示 L1 book stream，`FundingRateSnapshot.status` 只表示 funding rate stream。`MarketDataStatus` 是 `(exchange, symbol)` 级聚合状态，用于 `events.status()` / `getHealth()` 兼容视图：任意 active stream stale，聚合状态也会 stale。
+
+单条 stream 的状态生命周期：
 
 ```
 [未订阅]
-  │ subscribeL1Book()
+  │ subscribeL1Book() / subscribeFundingRate()
   ▼
 activity="active", ready=false, freshness=undefined
   │ 首条 message
@@ -186,20 +193,20 @@ activity="active", ready=true, freshness="fresh"
   │                          ▼
   │                       freshness="fresh"
   │
-  └── unsubscribeL1Book() ──► activity="inactive", 最后一份 l1Book 仍保留
+  └── unsubscribe*() ──► activity="inactive", 最后一份快照仍保留
 ```
 
 ### 3.2 freshness 的来源
 
 freshness 变化完全由 adapter 回调驱动，manager 不会自己算 timeout：
 
-- `callbacks.onFreshnessChange("fresh")` 来自每条 `onMessage`（book-ticker.ts:107）
-- `callbacks.onFreshnessChange("stale", "heartbeat_timeout")` 来自 ManagedWebSocket watchdog（book-ticker.ts:85）
-- `callbacks.onDisconnected()` 来自 WS close（book-ticker.ts:109）；manager 把它翻译成 `stale + ws_disconnected`（market-manager.ts:495）
+- `callbacks.onFreshnessChange("fresh")` 来自每条 `onMessage`
+- `callbacks.onFreshnessChange("stale", "heartbeat_timeout")` 来自 ManagedWebSocket watchdog
+- `callbacks.onDisconnected()` 来自 WS close；manager 把它翻译成 `stale + ws_disconnected`
 
 ### 3.3 自动重连
 
-调用方不需要手工处理重连。ManagedWebSocket 自带指数退避重连（见 §5），adapter 只在 onDisconnected 时通知 manager 状态变化，下一次成功 message 回到 `fresh`。manager 的 `record.l1Book` 不会被清空——重连期间旧快照仍可读（但 `freshness = stale`），符合 "退订后的旧数据不是实时值" 的语义。
+调用方不需要手工处理重连。ManagedWebSocket 自带指数退避重连（见 §5），adapter 只在 onDisconnected 时通知 manager 状态变化，下一次成功 message 回到 `fresh`。manager 的 `record.l1Book` / `record.fundingRate` 不会被清空——重连期间旧快照仍可读（但对应快照的 `status.freshness = stale`），符合 "退订后的旧数据不是实时值" 的语义。
 
 ## 4. 私有数据通路
 
@@ -409,7 +416,7 @@ Binance 三套市场体系（Spot / USDⓈ-M / COIN-M）分别对应不同的 RE
 | `usdm` | `https://fapi.binance.com/fapi/v1/exchangeInfo` | `wss://fstream.binance.com/ws` |
 | `coinm` | `https://dapi.binance.com/dapi/v1/exchangeInfo` | `wss://dstream.binance.com/ws` |
 
-每条 `BinanceMarketDefinition` 带 `family` 字段（adapter 内部使用，对外签名仅 `MarketDefinition`）。`createL1BookStream` 根据 `family` 选 WS base URL（`book-ticker.ts:48-57`），URL 是 `<base>/<id>@bookTicker`。
+每条 `BinanceMarketDefinition` 带 `family` 字段（adapter 内部使用，对外签名仅 `MarketDefinition`）。`createL1BookStream` 根据 `family` 选 WS base URL，URL 是 `<base>/<id>@bookTicker`。`createFundingRateStream` 仅支持 `usdm` / `coinm` 永续市场，URL 是 `<base>/<id>@markPrice@1s`，并把 Binance mark price stream 的 `r/p/i/T/E` 标准化为 `fundingRate/markPrice/indexPrice/nextFundingTime/exchangeTs`。
 
 ### 7.2 统一 symbol 构造
 

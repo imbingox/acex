@@ -28,7 +28,7 @@ SDK 的心智模型是一组三元语义：
 | `get*()` | 读取本地快照。不走网络、不阻塞 |
 | `events.*()` | 订阅增量事件流。只消费，不会隐式触发 `subscribe` |
 
-当前 MVP 阶段覆盖：Binance 现货与 USDⓈ-M / COIN-M 合约的 L1 Book，Binance PAPI UM 私有链路的账户与订单，第一版下单/撤单命令。详见 [§11 当前限制](#11-当前限制)。
+当前 MVP 阶段覆盖：Binance 现货与 USDⓈ-M / COIN-M 合约的 L1 Book、Binance 永续合约 Funding Rate，Binance PAPI UM 私有链路的账户与订单，第一版下单/撤单命令。详见 [§11 当前限制](#11-当前限制)。
 
 ## 2. 快速上手
 
@@ -322,7 +322,40 @@ await client.market.unsubscribeL1Book({
 
 ### 5.3 Funding Rate
 
-> **当前为占位实现**：`subscribeFundingRate()` / `getFundingRate()` 接口已暴露，但目前返回的是占位快照，没有接入真实的 mark-price / funding stream。请不要在生产决策里依赖此数据。
+Funding Rate 当前通过 Binance mark price websocket 实时更新，仅支持永续合约（`MarketDefinition.type === "swap"`）。订阅 spot 或交割合约会抛出 `MARKET_FUNDING_RATE_UNSUPPORTED`。
+
+```ts
+await client.market.subscribeFundingRate({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+const funding = client.market.getFundingRate({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+if (funding) {
+  console.log(funding.fundingRate.toFixed());
+  console.log(funding.markPrice?.toFixed());
+  console.log(funding.indexPrice?.toFixed());
+  console.log(funding.nextFundingTime);
+  console.log(funding.status.freshness);
+}
+```
+
+消费增量事件：
+
+```ts
+for await (const event of client.market.events.fundingRateUpdates({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+})) {
+  console.log(event.snapshot.fundingRate.toFixed());
+}
+```
+
+字段映射来自 Binance mark price stream：`r` → `fundingRate`，`p` → `markPrice`，`i` → `indexPrice`，`T` → `nextFundingTime`，`E` → `exchangeTs`。
 
 ### 5.4 订阅状态
 
@@ -339,6 +372,16 @@ if (status) {
   status.lastReceivedAt; // 最后收到数据的时间
   status.reason;         // "ws_disconnected" | "heartbeat_timeout" | "reconciling"
 }
+```
+
+`getMarketStatus()` 是 `(exchange, symbol)` 级聚合状态：同一个 market 下任意 active stream（例如 L1 Book 或 Funding Rate）变 stale，聚合状态也会 stale。更精确的下游判断应优先读取快照自带的 stream 级状态：
+
+```ts
+const book = client.market.getL1Book({ exchange, symbol });
+book?.status.freshness; // 只代表 L1 Book stream
+
+const funding = client.market.getFundingRate({ exchange, symbol });
+funding?.status.freshness; // 只代表 Funding Rate stream
 ```
 
 `freshness` 区分两种异常：
@@ -651,6 +694,7 @@ for await (const err of client.events.errors()) {
 import type {
   Exchange, ClientStatus, CreateClientOptions, AccountCredentials,
   MarketDefinition, L1Book, FundingRateSnapshot, MarketDataStatus,
+  MarketDataStreamStatus,
   BalanceSnapshot, PositionSnapshot, RiskSnapshot, AccountSnapshot,
   AccountDataStatus, CreateOrderInput, CancelOrderInput, CancelAllOrdersInput,
   OrderSnapshot, OrderDataStatus, OrderSide, OrderStatus, PositionSide,
@@ -768,6 +812,7 @@ interface L1Book {
   receivedAt: number;
   updatedAt: number;
   version: number;
+  status: MarketDataStreamStatus;
 }
 
 interface FundingRateSnapshot {
@@ -781,6 +826,17 @@ interface FundingRateSnapshot {
   receivedAt: number;
   updatedAt: number;
   version: number;
+  status: MarketDataStreamStatus;
+}
+
+interface MarketDataStreamStatus {
+  activity: SubscriptionActivity;
+  ready: boolean;
+  freshness?: MarketFreshness;
+  lastReceivedAt?: number;
+  lastReadyAt?: number;
+  inactiveSince?: number;
+  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 }
 
 interface MarketDataStatus {
@@ -1035,7 +1091,8 @@ try {
 | `MARKET_CATALOG_LOAD_FAILED` | `loadMarkets()` 拉取失败 |
 | `MARKET_NOT_FOUND` | 指定 symbol 不存在 |
 | `MARKET_INACTIVE` | 指定 symbol 在 catalog 中但不可交易 |
-| `MARKET_STREAM_TIMEOUT` | L1 Book 首条消息超时 |
+| `MARKET_FUNDING_RATE_UNSUPPORTED` | 指定 market 不支持资金费率订阅 |
+| `MARKET_STREAM_TIMEOUT` | market stream 首条消息超时 |
 | `ACCOUNT_ALREADY_EXISTS` | 重复注册同一个 `accountId` |
 | `ACCOUNT_NOT_FOUND` | `accountId` 未注册或已被移除 |
 | `ACCOUNT_BOOTSTRAP_FAILED` | `subscribeAccount()` 过程中账户快照拉取失败 |
@@ -1049,9 +1106,9 @@ try {
 ## 11. 当前限制
 
 - **交易所**：运行时只支持 `binance`。`okx` / `bybit` / `gate` 仅在 `SUPPORTED_EXCHANGES` 类型里声明，未接入
-- **市场数据**：真实落地仅 Binance L1 Book（Spot + USDⓈ-M + COIN-M）
+- **市场数据**：真实落地 Binance L1 Book（Spot + USDⓈ-M + COIN-M）和 Binance 永续 Funding Rate
 - **私有链路**：仅 Binance PAPI UM（Portfolio Margin，统一账户）
-- **Funding Rate**：接口已暴露，当前是占位快照，不要在生产决策里依赖
+- **Funding Rate**：仅永续合约支持，来自 mark price websocket；不支持现货和交割合约
 - **下单类型**：`createOrder()` 仅支持 `limit` / `market`；条件单、改单不支持
 - **撤单范围**：`cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
 - **双向持仓**：hedge mode 下 `createOrder()` 必须显式传 `positionSide`

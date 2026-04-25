@@ -22,6 +22,15 @@ export interface RawL1BookUpdate {
   receivedAt: number;
 }
 
+export interface RawFundingRateUpdate {
+  fundingRate: string;
+  nextFundingTime?: number;
+  markPrice?: string;
+  indexPrice?: string;
+  exchangeTs?: number;
+  receivedAt: number;
+}
+
 export interface L1BookStreamCallbacks {
   onUpdate(update: RawL1BookUpdate): void;
   onFreshnessChange(
@@ -40,6 +49,24 @@ export interface L1BookStreamOptions {
   now?: () => number;
 }
 
+export interface FundingRateStreamCallbacks {
+  onUpdate(update: RawFundingRateUpdate): void;
+  onFreshnessChange(
+    freshness: "fresh" | "stale",
+    reason?: "heartbeat_timeout",
+  ): void;
+  onDisconnected(): void;
+  onError(error: Error): void;
+}
+
+export interface FundingRateStreamOptions {
+  initialMessageTimeoutMs: number;
+  staleAfterMs: number;
+  reconnectDelayMs: number;
+  reconnectMaxDelayMs: number;
+  now?: () => number;
+}
+
 export interface MarketAdapter {
   readonly exchange: Exchange;
   loadMarkets(): Promise<MarketDefinition[]>;
@@ -47,6 +74,11 @@ export interface MarketAdapter {
     market: MarketDefinition,
     callbacks: L1BookStreamCallbacks,
     options: L1BookStreamOptions,
+  ): StreamHandle;
+  createFundingRateStream(
+    market: MarketDefinition,
+    callbacks: FundingRateStreamCallbacks,
+    options: FundingRateStreamOptions,
   ): StreamHandle;
 }
 

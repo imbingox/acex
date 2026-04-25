@@ -52,10 +52,10 @@ test("client stop keeps lifecycle and market health semantics observable", async
 
   const subscribePromise = client.market.subscribeL1Book({
     exchange: "binance",
-    symbol: "BTC/USDT",
+    symbol: "BTC/USDT:USDT",
   });
   const socket = await waitForSocket(
-    "wss://stream.binance.com:9443/ws/btcusdt@bookTicker",
+    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
   );
   socket.emitJson({
     b: "100001.10",
@@ -66,6 +66,25 @@ test("client stop keeps lifecycle and market health semantics observable", async
   });
 
   await subscribePromise;
+
+  const fundingSubscribePromise = client.market.subscribeFundingRate({
+    exchange: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingSocket = await waitForSocket(
+    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+  );
+  fundingSocket.emitJson({
+    e: "markPriceUpdate",
+    E: 1710000000004,
+    s: "BTCUSDT",
+    p: "100001.15",
+    i: "100000.00",
+    r: "0.00010000",
+    T: 1710028800000,
+  });
+  await fundingSubscribePromise;
+
   await client.stop({ graceful: true, timeoutMs: 5_000 });
 
   expect(client.getStatus()).toBe("stopped");
@@ -74,12 +93,91 @@ test("client stop keeps lifecycle and market health semantics observable", async
     markets: [
       {
         exchange: "binance",
-        symbol: "BTC/USDT",
+        symbol: "BTC/USDT:USDT",
         activity: "inactive",
         ready: true,
         freshness: "stale",
       },
     ],
+  });
+  expect(
+    client.market.getL1Book({
+      exchange: "binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    status: {
+      activity: "inactive",
+      ready: true,
+      freshness: "stale",
+    },
+  });
+  expect(
+    client.market.getFundingRate({
+      exchange: "binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    status: {
+      activity: "inactive",
+      ready: true,
+      freshness: "stale",
+    },
+  });
+
+  await client.start();
+
+  const restoredBookSocket = await waitForSocket(
+    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
+    1,
+  );
+  restoredBookSocket.emitJson({
+    b: "100002.10",
+    B: "0.2500",
+    a: "100002.20",
+    A: "0.3500",
+    T: 1710000000005,
+  });
+  const restoredFundingSocket = await waitForSocket(
+    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    1,
+  );
+  restoredFundingSocket.emitJson({
+    e: "markPriceUpdate",
+    E: 1710000000006,
+    s: "BTCUSDT",
+    p: "100002.15",
+    i: "100001.00",
+    r: "0.00020000",
+    T: 1710028800000,
+  });
+  await Bun.sleep(0);
+
+  expect(
+    client.market.getL1Book({
+      exchange: "binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    bidPrice: new BigNumber("100002.10"),
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "fresh",
+    },
+  });
+  expect(
+    client.market.getFundingRate({
+      exchange: "binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    fundingRate: new BigNumber("0.00020000"),
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "fresh",
+    },
   });
 });
 

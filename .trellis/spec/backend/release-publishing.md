@@ -113,6 +113,25 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
 - `changeset pre exit` 后 `.changeset/pre.json` 会被删除，所以 `version-packages` 必须兼容该文件不存在。
 - stable 发布成功后，如需继续 beta 节奏，workflow 应默认重新执行 `changeset pre enter beta` 并把新的 `.changeset/pre.json` 推回 `main`。
 
+#### 3.7 业务改动必须带 changeset
+
+- 任何会影响 npm 用户的 PR 都必须包含一个新的 `.changeset/*.md`，不能只改代码不写 changeset。
+- changeset 文件名使用 kebab-case，放在 `.changeset/` 根目录，例如 `.changeset/fresh-funding-rate.md`。
+- changeset summary 必须写用户可理解的行为变化，不写内部实现流水账。
+- 当前仓库处于 beta prerelease mode；feature PR merge 后会先生成 beta release PR，release PR merge 后才 publish beta 包。
+- 不影响用户的纯内部维护可不写 changeset，例如 Trellis journal、任务归档、测试 fixture 重排、无行为变化的注释整理。
+
+Changeset bump 选择矩阵：
+
+| 改动类型 | bump | 示例 |
+|---|---|---|
+| 新增 public API、新能力、新可观察字段 | `minor` | 新增真实资金费率数据流、给 public snapshot 增加 `status` 字段 |
+| 向后兼容的行为修复 | `patch` | 修复 stop 后 snapshot status 与聚合 status 不一致 |
+| 文档、测试、Trellis 任务归档、journal | 无需 changeset | 只更新 `docs/*` 或 `.trellis/workspace/*` |
+| 破坏性 public contract 变更 | `major` | 删除/重命名 public API、改变返回值语义导致现有调用方必须改代码 |
+
+当同一个 PR 同时包含多类用户可见变更时，选择最高级别 bump：`major > minor > patch`。
+
 ### 4. Validation & Error Matrix
 
 | 场景 | 约定 |
@@ -126,10 +145,23 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
 | `bun run lint` / `type-check` / `test` 任一失败 | workflow 直接失败，不允许发布 |
 | 当前 beta 版本已经发布过，又有无 changeset 提交落到 `main` | workflow 应跳过重复 publish，不能直接因为 version already exists 失败 |
 | 想发布稳定版到默认稳定 tag | 不能只改 npm tag；必须先处理 prerelease mode 和版本策略 |
+| PR 新增 public API / public type 字段但没有 `.changeset/*.md` | 视为 release contract 缺失，合并前必须补 changeset |
+| PR 同时包含 feature 和 bug fix | changeset bump 选最高级别，例如 `minor` 覆盖 feature + fix |
+| PR 只有文档、测试或 Trellis 归档 | 可不写 changeset |
 
 ### 5. Good / Base / Bad Cases
 
 #### Good
+
+```md
+---
+"@imbingox/acex": minor
+---
+
+Add Binance funding rate market data stream with per-stream market data status.
+```
+
+适用：新增用户可见能力或 public 类型字段。
 
 ```yaml
 on:
@@ -156,8 +188,33 @@ on:
 - workflow 里先用 Bun 安装依赖、跑质量命令，再由 `changeset publish` 调用 npm，可以接受。
 - beta release PR 仍由 Changesets action 自动创建，publish 步骤放在 action 之后自定义执行，可以接受。
 - stable 正式发布走手动 `workflow_dispatch`，但 beta 自动发布仍由 `push main` 驱动，可以接受。
+- PR 里同时有 feature、bug fix、docs 和 tests，只写一个覆盖用户可见变化的 changeset，可以接受。
 
 #### Bad
+
+```text
+src/types/market.ts 新增 public 字段
+src/managers/market-manager.ts 新增用户可见行为
+# 但没有新增 .changeset/*.md
+```
+
+问题：
+
+- merge 后 Changesets action 不会生成对应 release PR
+- beta publish 可能不会包含这次用户可见变更的版本说明
+
+```md
+---
+"@imbingox/acex": patch
+---
+
+Refactor market manager internals.
+```
+
+问题：
+
+- 如果实际新增 public API / public 字段，`patch` 级别过低
+- summary 没有描述用户可见能力
 
 ```yaml
 - name: Publish stable
@@ -185,6 +242,9 @@ bun run test
 
 - workflow YAML 语法正确，路径固定在 `.github/workflows/`
 - 仓库现有质量命令在本地可执行
+- 用户可见代码变更必须有 `.changeset/*.md`
+- changeset bump 级别必须与 public contract 变化匹配
+- changeset summary 必须描述用户可见行为变化
 - workflow 中引用的 script 名称与 `package.json` 保持一致
 - `.changeset/config.json`、`.changeset/pre.json`、workflow 的 prerelease/stable 策略一致
 - `package.json.repository.url` 与仓库远端一致

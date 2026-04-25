@@ -137,3 +137,71 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 添加资金费率 market 数据
+
+**Date**: 2026-04-25
+**Task**: 添加资金费率 market 数据
+**Branch**: `feat/funding`
+
+### Summary
+
+接入 Binance funding rate mark price websocket，新增 per-stream status、live smoke、文档和回归测试，并归档 Trellis 任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `62bea64` | (see git log) |
+| `dbf5462` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 5: 补充 release changeset 规范并创建 PR
+
+**Date**: 2026-04-25
+**Task**: 补充 release changeset 规范并创建 PR
+**Branch**: `feat/funding`
+
+### Summary
+
+为资金费率功能补充 minor changeset，更新 release spec 中按用户可见变更选择 changeset bump 的规则，并创建 GitHub PR #10。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5dcc3c1` | (see git log) |
+| `d9e15d6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

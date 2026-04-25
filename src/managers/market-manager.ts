@@ -1,8 +1,11 @@
 import BigNumber from "bignumber.js";
 import type {
+  FundingRateStreamCallbacks,
+  FundingRateStreamOptions,
   L1BookStreamCallbacks,
   L1BookStreamOptions,
   MarketAdapter,
+  RawFundingRateUpdate,
   RawL1BookUpdate,
   StreamHandle,
 } from "../adapters/types.ts";
@@ -21,6 +24,7 @@ import type {
   L1Book,
   L1BookUpdatedEvent,
   MarketDataStatus,
+  MarketDataStreamStatus,
   MarketDefinition,
   MarketEvent,
   MarketEventStreams,
@@ -29,6 +33,7 @@ import type {
   MarketStatusChangedEvent,
   SubscribeFundingRateInput,
   SubscribeL1BookInput,
+  SubscriptionActivity,
 } from "../types/index.ts";
 
 export interface MarketManagerOptions {
@@ -46,8 +51,13 @@ interface MarketRecord {
   fundingRate?: FundingRateSnapshot;
   l1BookSubscribed: boolean;
   fundingRateSubscribed: boolean;
+  l1Freshness?: "fresh" | "stale";
+  l1Reason?: MarketDataStatus["reason"];
+  fundingRateFreshness?: "fresh" | "stale";
+  fundingRateReason?: MarketDataStatus["reason"];
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
+  fundingRateStream?: StreamHandle;
 }
 
 const DEFAULT_INITIAL_L1_TIMEOUT_MS = 15_000;
@@ -61,6 +71,20 @@ function marketKey(input: MarketKeyInput): string {
 
 function cloneMarketStatus(status: MarketDataStatus): MarketDataStatus {
   return { ...status };
+}
+
+function cloneStreamStatus(
+  status: MarketDataStreamStatus,
+): MarketDataStreamStatus {
+  return { ...status };
+}
+
+function cloneL1Book(book: L1Book): L1Book {
+  return { ...book, status: cloneStreamStatus(book.status) };
+}
+
+function cloneFundingRate(snapshot: FundingRateSnapshot): FundingRateSnapshot {
+  return { ...snapshot, status: cloneStreamStatus(snapshot.status) };
 }
 
 function cloneMarketDefinition(definition: MarketDefinition): MarketDefinition {
@@ -138,15 +162,9 @@ export class MarketManagerImpl
 
     record.market = market;
     record.l1BookSubscribed = true;
-    record.status = {
-      ...record.status,
-      activity: "active",
-      ready: Boolean(record.l1Book),
-      freshness: record.l1Book ? "stale" : undefined,
-      reason: undefined,
-      inactiveSince: undefined,
-    };
-    this.publishStatus(record);
+    record.l1Freshness = record.l1Book ? "stale" : undefined;
+    record.l1Reason = undefined;
+    this.recomputeAndPublishStatus(record);
 
     await this.ensureL1BookStream(record, market);
   }
@@ -160,41 +178,28 @@ export class MarketManagerImpl
     record.l1BookStream?.close();
     record.l1BookStream = undefined;
     record.l1BookSubscribed = false;
-    this.updateActivity(record);
+    record.l1Freshness = undefined;
+    record.l1Reason = undefined;
+    this.syncL1BookStatus(record);
+    this.recomputeAndPublishStatus(record, this.context.now());
   }
 
   async subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void> {
     this.context.assertStarted();
-    const record = this.getOrCreateRecord(input);
-    const fundingRate =
-      record.fundingRate ??
-      this.createFundingRate(input.exchange, input.symbol, record.fundingRate);
+    const market = await this.resolveMarketDefinition(input);
+    this.assertFundingRateSupported(market);
+    const record = this.getOrCreateRecord({
+      exchange: input.exchange,
+      symbol: market.symbol,
+    });
 
-    if (!record.fundingRateSubscribed) {
-      record.fundingRateSubscribed = true;
-      record.fundingRate = fundingRate;
-    }
+    record.market = market;
+    record.fundingRateSubscribed = true;
+    record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
+    record.fundingRateReason = undefined;
+    this.recomputeAndPublishStatus(record);
 
-    record.status = {
-      ...record.status,
-      activity: "active",
-      ready: true,
-      freshness: "fresh",
-      lastReceivedAt: fundingRate.receivedAt,
-      lastReadyAt: fundingRate.updatedAt,
-      inactiveSince: undefined,
-    };
-
-    const event: FundingRateUpdatedEvent = {
-      type: "funding_rate.updated",
-      exchange: record.exchange,
-      symbol: record.symbol,
-      snapshot: fundingRate,
-      ts: this.context.now(),
-    };
-
-    this.publishMarketEvent(event);
-    this.publishStatus(record);
+    await this.ensureFundingRateStream(record, market);
   }
 
   async unsubscribeFundingRate(
@@ -205,8 +210,13 @@ export class MarketManagerImpl
       return;
     }
 
+    record.fundingRateStream?.close();
+    record.fundingRateStream = undefined;
     record.fundingRateSubscribed = false;
-    this.updateActivity(record);
+    record.fundingRateFreshness = undefined;
+    record.fundingRateReason = undefined;
+    this.syncFundingRateStatus(record);
+    this.recomputeAndPublishStatus(record, this.context.now());
   }
 
   getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined {
@@ -231,11 +241,13 @@ export class MarketManagerImpl
   }
 
   getL1Book(key: MarketKeyInput): L1Book | undefined {
-    return this.records.get(marketKey(key))?.l1Book;
+    const book = this.records.get(marketKey(key))?.l1Book;
+    return book ? cloneL1Book(book) : undefined;
   }
 
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined {
-    return this.records.get(marketKey(key))?.fundingRate;
+    const fundingRate = this.records.get(marketKey(key))?.fundingRate;
+    return fundingRate ? cloneFundingRate(fundingRate) : undefined;
   }
 
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined {
@@ -253,21 +265,17 @@ export class MarketManagerImpl
         continue;
       }
 
-      record.status = {
-        ...record.status,
-        activity: "active",
-        ready: Boolean(record.l1Book || record.fundingRate),
-        freshness: record.l1Book
-          ? "stale"
-          : record.status.ready
-            ? "fresh"
-            : undefined,
-        reason: undefined,
-        lastReadyAt: record.status.lastReadyAt ?? now,
-        lastReceivedAt: record.status.lastReceivedAt ?? now,
-        inactiveSince: undefined,
-      };
-      this.publishStatus(record);
+      if (record.l1BookSubscribed) {
+        record.l1Freshness = record.l1Book ? "stale" : undefined;
+        record.l1Reason = undefined;
+        this.syncL1BookStatus(record);
+      }
+      if (record.fundingRateSubscribed) {
+        record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
+        record.fundingRateReason = undefined;
+        this.syncFundingRateStatus(record);
+      }
+      this.recomputeAndPublishStatus(record, now);
     }
 
     void this.resumeStreams();
@@ -281,12 +289,18 @@ export class MarketManagerImpl
 
       record.l1BookStream?.close();
       record.l1BookStream = undefined;
+      record.fundingRateStream?.close();
+      record.fundingRateStream = undefined;
+      record.l1Freshness = record.l1Book ? "stale" : undefined;
+      record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
+      this.syncL1BookStatus(record, now, "inactive");
+      this.syncFundingRateStatus(record, now, "inactive");
 
       record.status = {
         ...record.status,
         activity: "inactive",
         inactiveSince: now,
-        freshness: record.l1Book ? "stale" : undefined,
+        freshness: record.l1Book || record.fundingRate ? "stale" : undefined,
       };
       this.publishStatus(record);
     }
@@ -390,6 +404,19 @@ export class MarketManagerImpl
     );
   }
 
+  private assertFundingRateSupported(market: MarketDefinition): void {
+    if (market.contract && market.type === "swap") {
+      return;
+    }
+
+    throw this.createError(
+      "MARKET_FUNDING_RATE_UNSUPPORTED",
+      `Funding rate is not supported for market: ${market.symbol}`,
+      { exchange: market.exchange, symbol: market.symbol },
+      "market",
+    );
+  }
+
   private getOrCreateRecord(input: {
     exchange: Exchange;
     symbol: string;
@@ -440,11 +467,39 @@ export class MarketManagerImpl
         exchange: market.exchange,
         symbol: market.symbol,
       });
+      this.updateConnectionState(record, "l1Book", "stale", "ws_disconnected");
+      throw timeoutError;
+    }
+  }
+
+  private async ensureFundingRateStream(
+    record: MarketRecord,
+    market: MarketDefinition,
+  ): Promise<void> {
+    if (record.fundingRateStream) {
+      await record.fundingRateStream.ready;
+      return;
+    }
+
+    record.fundingRateStream = this.createFundingRateStream(record, market);
+
+    try {
+      await record.fundingRateStream.ready;
+    } catch {
+      record.fundingRateStream = undefined;
+      const timeoutError = new AcexError(
+        "MARKET_STREAM_TIMEOUT",
+        `Timed out waiting for market data: ${market.symbol}`,
+      );
+      this.context.publishRuntimeError("runtime", timeoutError, {
+        exchange: market.exchange,
+        symbol: market.symbol,
+      });
       this.updateConnectionState(
         record,
+        "fundingRate",
         "stale",
         "ws_disconnected",
-        Boolean(record.l1Book),
       );
       throw timeoutError;
     }
@@ -462,42 +517,30 @@ export class MarketManagerImpl
           update,
           record.l1Book,
         );
-        record.status = {
-          ...record.status,
-          activity: "active",
-          ready: true,
-          freshness: "fresh",
-          reason: undefined,
-          lastReceivedAt: record.l1Book.receivedAt,
-          lastReadyAt: record.l1Book.updatedAt,
-          inactiveSince: undefined,
-        };
+        record.l1Freshness = "fresh";
+        record.l1Reason = undefined;
+        this.syncL1BookStatus(record);
 
         const event: L1BookUpdatedEvent = {
           type: "l1_book.updated",
           exchange: record.exchange,
           symbol: record.symbol,
-          snapshot: record.l1Book,
+          snapshot: cloneL1Book(record.l1Book),
           ts: this.context.now(),
         };
 
         this.publishMarketEvent(event);
-        this.publishStatus(record);
+        this.recomputeAndPublishStatus(record);
       },
       onFreshnessChange: (freshness, reason) => {
-        this.updateConnectionState(
-          record,
-          freshness,
-          reason,
-          Boolean(record.l1Book),
-        );
+        this.updateConnectionState(record, "l1Book", freshness, reason);
       },
       onDisconnected: () => {
         this.updateConnectionState(
           record,
+          "l1Book",
           "stale",
           "ws_disconnected",
-          Boolean(record.l1Book),
         );
       },
       onError: (error) => {
@@ -519,6 +562,63 @@ export class MarketManagerImpl
     return this.adapter.createL1BookStream(market, callbacks, options);
   }
 
+  private createFundingRateStream(
+    record: MarketRecord,
+    market: MarketDefinition,
+  ): StreamHandle {
+    const callbacks: FundingRateStreamCallbacks = {
+      onUpdate: (update: RawFundingRateUpdate) => {
+        record.fundingRate = this.createFundingRate(
+          record.exchange,
+          record.symbol,
+          update,
+          record.fundingRate,
+        );
+        record.fundingRateFreshness = "fresh";
+        record.fundingRateReason = undefined;
+        this.syncFundingRateStatus(record);
+
+        const event: FundingRateUpdatedEvent = {
+          type: "funding_rate.updated",
+          exchange: record.exchange,
+          symbol: record.symbol,
+          snapshot: cloneFundingRate(record.fundingRate),
+          ts: this.context.now(),
+        };
+
+        this.publishMarketEvent(event);
+        this.recomputeAndPublishStatus(record);
+      },
+      onFreshnessChange: (freshness, reason) => {
+        this.updateConnectionState(record, "fundingRate", freshness, reason);
+      },
+      onDisconnected: () => {
+        this.updateConnectionState(
+          record,
+          "fundingRate",
+          "stale",
+          "ws_disconnected",
+        );
+      },
+      onError: (error) => {
+        this.context.publishRuntimeError("runtime", error, {
+          exchange: record.exchange,
+          symbol: record.symbol,
+        });
+      },
+    };
+
+    const options: FundingRateStreamOptions = {
+      initialMessageTimeoutMs: this.initialL1TimeoutMs,
+      staleAfterMs: this.l1StaleAfterMs,
+      reconnectDelayMs: this.l1ReconnectDelayMs,
+      reconnectMaxDelayMs: this.l1ReconnectMaxDelayMs,
+      now: () => this.context.now(),
+    };
+
+    return this.adapter.createFundingRateStream(market, callbacks, options);
+  }
+
   private createL1Book(
     exchange: Exchange,
     symbol: string,
@@ -536,63 +636,189 @@ export class MarketManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       version: (previous?.version ?? 0) + 1,
+      status: previous?.status ?? {
+        activity: "active",
+        ready: true,
+        freshness: "fresh",
+        lastReceivedAt: input.receivedAt,
+        lastReadyAt: input.receivedAt,
+      },
     };
   }
 
   private createFundingRate(
     exchange: Exchange,
     symbol: string,
+    input: RawFundingRateUpdate,
     previous?: FundingRateSnapshot,
   ): FundingRateSnapshot {
-    const now = this.context.now();
-
     return {
       exchange,
       symbol,
-      fundingRate: previous?.fundingRate ?? new BigNumber(0),
-      nextFundingTime: previous?.nextFundingTime,
-      markPrice: previous?.markPrice,
-      indexPrice: previous?.indexPrice,
-      exchangeTs: now,
-      receivedAt: now,
-      updatedAt: now,
+      fundingRate: new BigNumber(input.fundingRate),
+      nextFundingTime: input.nextFundingTime,
+      markPrice: input.markPrice ? new BigNumber(input.markPrice) : undefined,
+      indexPrice: input.indexPrice
+        ? new BigNumber(input.indexPrice)
+        : undefined,
+      exchangeTs: input.exchangeTs,
+      receivedAt: input.receivedAt,
+      updatedAt: input.receivedAt,
       version: (previous?.version ?? 0) + 1,
+      status: previous?.status ?? {
+        activity: "active",
+        ready: true,
+        freshness: "fresh",
+        lastReceivedAt: input.receivedAt,
+        lastReadyAt: input.receivedAt,
+      },
     };
   }
 
   private updateConnectionState(
     record: MarketRecord,
+    stream: "l1Book" | "fundingRate",
     freshness: "fresh" | "stale",
     reason: MarketDataStatus["reason"],
-    ready: boolean,
   ): void {
-    record.status = {
-      ...record.status,
-      activity: "active",
-      ready,
-      freshness,
-      reason,
-      inactiveSince: undefined,
-    };
-    this.publishStatus(record);
+    if (stream === "l1Book") {
+      record.l1Freshness = freshness;
+      record.l1Reason = reason;
+      this.syncL1BookStatus(record);
+    } else {
+      record.fundingRateFreshness = freshness;
+      record.fundingRateReason = reason;
+      this.syncFundingRateStatus(record);
+    }
+
+    this.recomputeAndPublishStatus(record);
   }
 
-  private updateActivity(record: MarketRecord): void {
-    if (record.l1BookSubscribed || record.fundingRateSubscribed) {
-      record.status = {
-        ...record.status,
-        activity: "active",
-        inactiveSince: undefined,
-      };
-    } else {
-      record.status = {
-        ...record.status,
-        activity: "inactive",
-        inactiveSince: this.context.now(),
-      };
+  private recomputeAndPublishStatus(
+    record: MarketRecord,
+    now = this.context.now(),
+  ): void {
+    const l1Ready = record.l1BookSubscribed && Boolean(record.l1Book);
+    const fundingRateReady =
+      record.fundingRateSubscribed && Boolean(record.fundingRate);
+    const active = record.l1BookSubscribed || record.fundingRateSubscribed;
+    const staleReason = record.l1Reason ?? record.fundingRateReason;
+    const freshness = this.resolveFreshness(record);
+
+    record.status = {
+      ...record.status,
+      activity: active ? "active" : "inactive",
+      ready: l1Ready || fundingRateReady,
+      freshness,
+      reason: freshness === "stale" ? staleReason : undefined,
+      inactiveSince: active ? undefined : now,
+    };
+
+    if (record.status.ready) {
+      record.status.lastReceivedAt = this.resolveLastReceivedAt(record);
+      record.status.lastReadyAt = this.resolveLastReadyAt(record);
     }
 
     this.publishStatus(record);
+  }
+
+  private syncL1BookStatus(
+    record: MarketRecord,
+    now?: number,
+    activity?: SubscriptionActivity,
+  ): void {
+    if (!record.l1Book) {
+      return;
+    }
+
+    record.l1Book.status = this.createStreamStatus(
+      activity ?? (record.l1BookSubscribed ? "active" : "inactive"),
+      true,
+      record.l1Freshness,
+      record.l1Reason,
+      record.l1Book.receivedAt,
+      record.l1Book.updatedAt,
+      now,
+    );
+  }
+
+  private syncFundingRateStatus(
+    record: MarketRecord,
+    now?: number,
+    activity?: SubscriptionActivity,
+  ): void {
+    if (!record.fundingRate) {
+      return;
+    }
+
+    record.fundingRate.status = this.createStreamStatus(
+      activity ?? (record.fundingRateSubscribed ? "active" : "inactive"),
+      true,
+      record.fundingRateFreshness,
+      record.fundingRateReason,
+      record.fundingRate.receivedAt,
+      record.fundingRate.updatedAt,
+      now,
+    );
+  }
+
+  private createStreamStatus(
+    activity: SubscriptionActivity,
+    ready: boolean,
+    freshness: MarketDataStreamStatus["freshness"],
+    reason: MarketDataStreamStatus["reason"],
+    lastReceivedAt?: number,
+    lastReadyAt?: number,
+    now = this.context.now(),
+  ): MarketDataStreamStatus {
+    return {
+      activity,
+      ready,
+      freshness,
+      reason: freshness === "stale" ? reason : undefined,
+      lastReceivedAt,
+      lastReadyAt,
+      inactiveSince: activity === "active" ? undefined : now,
+    };
+  }
+
+  private resolveFreshness(
+    record: MarketRecord,
+  ): MarketDataStatus["freshness"] | undefined {
+    if (record.l1BookSubscribed && record.l1Freshness === "stale") {
+      return "stale";
+    }
+    if (
+      record.fundingRateSubscribed &&
+      record.fundingRateFreshness === "stale"
+    ) {
+      return "stale";
+    }
+    if (record.l1BookSubscribed && record.l1Freshness === "fresh") {
+      return "fresh";
+    }
+    if (
+      record.fundingRateSubscribed &&
+      record.fundingRateFreshness === "fresh"
+    ) {
+      return "fresh";
+    }
+
+    return undefined;
+  }
+
+  private resolveLastReceivedAt(record: MarketRecord): number | undefined {
+    return Math.max(
+      record.l1Book?.receivedAt ?? 0,
+      record.fundingRate?.receivedAt ?? 0,
+    );
+  }
+
+  private resolveLastReadyAt(record: MarketRecord): number | undefined {
+    return Math.max(
+      record.l1Book?.updatedAt ?? 0,
+      record.fundingRate?.updatedAt ?? 0,
+    );
   }
 
   private publishMarketEvent(event: MarketEvent): void {
@@ -615,33 +841,43 @@ export class MarketManagerImpl
 
   private async resumeStreams(): Promise<void> {
     for (const record of this.records.values()) {
-      if (!record.l1BookSubscribed || record.l1BookStream) {
-        continue;
-      }
-
       const market = record.market;
       if (!market) {
         continue;
       }
 
-      try {
-        record.status = {
-          ...record.status,
-          activity: "active",
-          freshness: record.l1Book ? "stale" : undefined,
-          reason: undefined,
-          inactiveSince: undefined,
-        };
-        this.publishStatus(record);
-        await this.ensureL1BookStream(record, market);
-      } catch {
-        // Errors are already published through the runtime error bus.
+      if (record.l1BookSubscribed && !record.l1BookStream) {
+        try {
+          record.l1Freshness = record.l1Book ? "stale" : undefined;
+          record.l1Reason = undefined;
+          this.recomputeAndPublishStatus(record);
+          await this.ensureL1BookStream(record, market);
+        } catch {
+          // Errors are already published through the runtime error bus.
+        }
+      }
+
+      if (record.fundingRateSubscribed && !record.fundingRateStream) {
+        try {
+          record.fundingRateFreshness = record.fundingRate
+            ? "stale"
+            : undefined;
+          record.fundingRateReason = undefined;
+          this.recomputeAndPublishStatus(record);
+          await this.ensureFundingRateStream(record, market);
+        } catch {
+          // Errors are already published through the runtime error bus.
+        }
       }
     }
   }
 
   private createError(
-    code: "MARKET_NOT_FOUND" | "MARKET_INACTIVE" | "EXCHANGE_NOT_SUPPORTED",
+    code:
+      | "MARKET_NOT_FOUND"
+      | "MARKET_INACTIVE"
+      | "MARKET_FUNDING_RATE_UNSUPPORTED"
+      | "EXCHANGE_NOT_SUPPORTED",
     message: string,
     metadata?: { exchange?: Exchange; symbol?: string },
     source: "market" | "client" = "market",

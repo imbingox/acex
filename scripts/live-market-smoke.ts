@@ -1,6 +1,7 @@
 import {
   type AcexInternalError,
   createClient,
+  type FundingRateUpdatedEvent,
   type L1BookUpdatedEvent,
 } from "../index.ts";
 
@@ -9,7 +10,7 @@ interface CliOptions {
   perpSymbol?: string;
   durationSec: number;
   disconnectAfterSec?: number;
-  disconnectTarget: "spot" | "perp";
+  disconnectTarget: "spot" | "perp" | "funding";
   reconnectWaitSec: number;
 }
 
@@ -45,10 +46,25 @@ interface SmokeResult {
   reconnect?: ReconnectSummary;
 }
 
+interface FundingSmokeResult {
+  symbol: string;
+  subscribeLatencyMs: number;
+  socketUrl: string;
+  initialFundingRate: Record<string, unknown>;
+  firstEvent: Record<string, unknown>;
+  updateCountAfterFirstEvent: number;
+  ignoredOutdatedEvents: number;
+  lastObservedVersion: number;
+  statusAfterSubscribe: Record<string, unknown>;
+  statusAfterUnsubscribe: Record<string, unknown>;
+  reconnect?: ReconnectSummary;
+}
+
 const DEFAULT_SPOT_SYMBOL = "BTC/USDT";
 const DEFAULT_PERP_SYMBOL = "BTC/USDT:USDT";
 const DEFAULT_DURATION_SEC = 10;
 const DEFAULT_RECONNECT_WAIT_SEC = 10;
+const FUNDING_SUBSCRIBE_ATTEMPTS = 3;
 const SOCKET_POLL_INTERVAL_MS = 25;
 const STATE_POLL_INTERVAL_MS = 50;
 const originalWebSocket = globalThis.WebSocket;
@@ -63,7 +79,7 @@ Options:
   --perp-symbol <symbol>         Perp symbol to test (default: ${DEFAULT_PERP_SYMBOL})
   --duration <seconds>           Total soak duration per symbol (default: ${DEFAULT_DURATION_SEC})
   --disconnect-after <seconds>   Force-close one websocket after N seconds and verify reconnect
-  --disconnect-target <spot|perp>
+  --disconnect-target <spot|perp|funding>
                                  Which symbol run should trigger the forced disconnect (default: perp)
   --reconnect-wait <seconds>     Max reconnect recovery wait (default: ${DEFAULT_RECONNECT_WAIT_SEC})
   --help                         Show this help
@@ -125,7 +141,7 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case "--disconnect-target": {
         const target = argv[++index];
-        if (target !== "spot" && target !== "perp") {
+        if (target !== "spot" && target !== "perp" && target !== "funding") {
           throw new Error(
             `Invalid value for --disconnect-target: ${target ?? ""}`,
           );
@@ -199,6 +215,9 @@ class TrackedWebSocket extends EventTarget {
 
   readonly url: string;
   readonly createdAt = Date.now();
+  messageCount = 0;
+  lastMessageAt?: number;
+  lastMessagePreview?: string;
 
   private readonly socket: WebSocket;
 
@@ -217,6 +236,9 @@ class TrackedWebSocket extends EventTarget {
     });
 
     this.socket.addEventListener("message", (event) => {
+      this.messageCount += 1;
+      this.lastMessageAt = Date.now();
+      this.lastMessagePreview = String(event.data).slice(0, 240);
       this.dispatchEvent(
         new MessageEvent("message", {
           data: event.data,
@@ -256,6 +278,17 @@ class TrackedWebSocket extends EventTarget {
   forceClose(reason = "script disconnect"): void {
     this.socket.close(1000, reason);
   }
+}
+
+function summarizeSocket(socket: TrackedWebSocket): Record<string, unknown> {
+  return {
+    url: socket.url,
+    readyState: socket.readyState,
+    createdAt: socket.createdAt,
+    messageCount: socket.messageCount,
+    lastMessageAt: socket.lastMessageAt,
+    lastMessagePreview: socket.lastMessagePreview,
+  };
 }
 
 function summarizeError(error: AcexInternalError): ErrorSummary {
@@ -299,6 +332,35 @@ async function collectEventsUntil(
   deadlineMs: number,
   startingVersion: number,
 ): Promise<{ count: number; ignoredCount: number; lastVersion: number }> {
+  return collectVersionedEventsUntil(
+    iterator,
+    deadlineMs,
+    startingVersion,
+    "L1 update stream closed unexpectedly",
+  );
+}
+
+async function collectFundingEventsUntil(
+  iterator: AsyncIterator<FundingRateUpdatedEvent>,
+  deadlineMs: number,
+  startingVersion: number,
+): Promise<{ count: number; ignoredCount: number; lastVersion: number }> {
+  return collectVersionedEventsUntil(
+    iterator,
+    deadlineMs,
+    startingVersion,
+    "Funding update stream closed unexpectedly",
+  );
+}
+
+async function collectVersionedEventsUntil<
+  TEvent extends { snapshot: { version: number } },
+>(
+  iterator: AsyncIterator<TEvent>,
+  deadlineMs: number,
+  startingVersion: number,
+  closedMessage: string,
+): Promise<{ count: number; ignoredCount: number; lastVersion: number }> {
   let count = 0;
   let ignoredCount = 0;
   let lastVersion = startingVersion;
@@ -315,7 +377,7 @@ async function collectEventsUntil(
     }
 
     if (result.done) {
-      throw new Error("L1 update stream closed unexpectedly");
+      throw new Error(closedMessage);
     }
 
     if (result.value.snapshot.version <= lastVersion) {
@@ -501,6 +563,222 @@ async function smokeSymbol(options: {
   }
 }
 
+async function smokeFundingRate(options: {
+  client: ReturnType<typeof createClient>;
+  symbol: string;
+  durationMs: number;
+  disconnectAfterMs?: number;
+  reconnectWaitMs: number;
+}): Promise<FundingSmokeResult> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= FUNDING_SUBSCRIBE_ATTEMPTS; attempt += 1) {
+    try {
+      return await smokeFundingRateAttempt({ ...options, attempt });
+    } catch (error) {
+      lastError = error;
+      if (attempt === FUNDING_SUBSCRIBE_ATTEMPTS) {
+        break;
+      }
+      await sleep(500 * attempt);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(String(lastError ?? "Unknown funding smoke failure"));
+}
+
+async function smokeFundingRateAttempt(options: {
+  client: ReturnType<typeof createClient>;
+  symbol: string;
+  durationMs: number;
+  disconnectAfterMs?: number;
+  reconnectWaitMs: number;
+  attempt: number;
+}): Promise<FundingSmokeResult> {
+  const key = {
+    exchange: "binance" as const,
+    symbol: options.symbol,
+  };
+  const iterator = options.client.market.events
+    .fundingRateUpdates(key)
+    [Symbol.asyncIterator]();
+  const socketIndex = TrackedWebSocket.instances.length;
+
+  try {
+    const subscribeStartedAt = Date.now();
+    const subscribePromise = options.client.market.subscribeFundingRate(key);
+    const socket = await waitForTrackedSocket(
+      socketIndex,
+      5_000,
+      `Timed out waiting for tracked funding websocket for ${options.symbol}`,
+    );
+    try {
+      await subscribePromise;
+    } catch (error) {
+      throw new Error(
+        `Funding subscription failed for ${options.symbol}: ${
+          error instanceof Error ? error.message : String(error)
+        }; attempt=${options.attempt}/${FUNDING_SUBSCRIBE_ATTEMPTS}; socket=${JSON.stringify(
+          summarizeSocket(socket),
+        )}`,
+        { cause: error },
+      );
+    }
+    const subscribeLatencyMs = Date.now() - subscribeStartedAt;
+
+    const initialFundingRate = options.client.market.getFundingRate(key);
+    const statusAfterSubscribe = options.client.market.getMarketStatus(key);
+    if (!initialFundingRate || !statusAfterSubscribe) {
+      throw new Error(`Missing initial funding snapshot for ${options.symbol}`);
+    }
+
+    const firstEvent = await nextEvent(
+      iterator,
+      5_000,
+      `Timed out waiting for first funding event for ${options.symbol}`,
+    );
+
+    let updateCountAfterFirstEvent = 0;
+    let ignoredOutdatedEvents = 0;
+    let lastObservedVersion = firstEvent.snapshot.version;
+    let reconnect: ReconnectSummary | undefined;
+    const startedAt = Date.now();
+    const disconnectAt =
+      options.disconnectAfterMs === undefined
+        ? undefined
+        : startedAt + options.disconnectAfterMs;
+    const deadline = startedAt + options.durationMs;
+
+    if (disconnectAt !== undefined) {
+      const preDisconnect = await collectFundingEventsUntil(
+        iterator,
+        Math.min(disconnectAt, deadline),
+        lastObservedVersion,
+      );
+      updateCountAfterFirstEvent += preDisconnect.count;
+      ignoredOutdatedEvents += preDisconnect.ignoredCount;
+      lastObservedVersion = preDisconnect.lastVersion;
+
+      const versionBeforeDisconnect =
+        options.client.market.getFundingRate(key)?.version ??
+        lastObservedVersion;
+      socket.forceClose();
+
+      const staleStatus = await waitForCondition(
+        () => {
+          const current = options.client.market.getFundingRate(key)?.status;
+          if (current?.reason === "ws_disconnected") {
+            return cloneStatus(current);
+          }
+          return undefined;
+        },
+        options.reconnectWaitMs,
+        `Timed out waiting for funding ws_disconnected for ${options.symbol}`,
+      );
+
+      const reconnectedSocket = await waitForTrackedSocket(
+        socketIndex + 1,
+        options.reconnectWaitMs,
+        `Timed out waiting for reconnected funding websocket for ${options.symbol}`,
+      );
+
+      const recoveredStatus = await waitForCondition(
+        () => {
+          const currentFundingRate = options.client.market.getFundingRate(key);
+          if (
+            currentFundingRate?.status.freshness === "fresh" &&
+            currentFundingRate.version > versionBeforeDisconnect
+          ) {
+            return cloneStatus(currentFundingRate.status);
+          }
+          return undefined;
+        },
+        options.reconnectWaitMs,
+        `Timed out waiting for funding reconnect recovery for ${options.symbol}`,
+      );
+
+      const recoveredVersion =
+        options.client.market.getFundingRate(key)?.version ??
+        versionBeforeDisconnect;
+
+      reconnect = {
+        forcedDisconnectAt: new Date().toISOString(),
+        versionBeforeDisconnect,
+        staleStatus,
+        reconnectedSocketUrl: reconnectedSocket.url,
+        recoveredStatus,
+        recoveredVersion,
+      };
+
+      if (deadline > Date.now()) {
+        const postReconnect = await collectFundingEventsUntil(
+          iterator,
+          deadline,
+          recoveredVersion,
+        );
+        updateCountAfterFirstEvent += postReconnect.count;
+        ignoredOutdatedEvents += postReconnect.ignoredCount;
+        lastObservedVersion = postReconnect.lastVersion;
+      } else {
+        lastObservedVersion = recoveredVersion;
+      }
+    } else {
+      const soak = await collectFundingEventsUntil(
+        iterator,
+        deadline,
+        lastObservedVersion,
+      );
+      updateCountAfterFirstEvent += soak.count;
+      ignoredOutdatedEvents += soak.ignoredCount;
+      lastObservedVersion = soak.lastVersion;
+    }
+
+    await options.client.market.unsubscribeFundingRate(key);
+    const statusAfterUnsubscribe =
+      options.client.market.getFundingRate(key)?.status;
+    if (!statusAfterUnsubscribe) {
+      throw new Error(
+        `Missing funding status after unsubscribe for ${options.symbol}`,
+      );
+    }
+
+    return {
+      symbol: options.symbol,
+      subscribeLatencyMs,
+      socketUrl: socket.url,
+      initialFundingRate: {
+        fundingRate: initialFundingRate.fundingRate.toFixed(),
+        markPrice: initialFundingRate.markPrice?.toFixed(),
+        indexPrice: initialFundingRate.indexPrice?.toFixed(),
+        nextFundingTime: initialFundingRate.nextFundingTime,
+        version: initialFundingRate.version,
+        exchangeTs: initialFundingRate.exchangeTs,
+        receivedAt: initialFundingRate.receivedAt,
+        status: cloneStatus(initialFundingRate.status),
+      },
+      firstEvent: {
+        fundingRate: firstEvent.snapshot.fundingRate.toFixed(),
+        markPrice: firstEvent.snapshot.markPrice?.toFixed(),
+        indexPrice: firstEvent.snapshot.indexPrice?.toFixed(),
+        nextFundingTime: firstEvent.snapshot.nextFundingTime,
+        version: firstEvent.snapshot.version,
+        ts: firstEvent.ts,
+      },
+      updateCountAfterFirstEvent,
+      ignoredOutdatedEvents,
+      lastObservedVersion,
+      statusAfterSubscribe: cloneStatus(statusAfterSubscribe),
+      statusAfterUnsubscribe: cloneStatus(statusAfterUnsubscribe),
+      reconnect,
+    };
+  } finally {
+    await options.client.market.unsubscribeFundingRate(key);
+    await iterator.return?.();
+  }
+}
+
 async function main(): Promise<void> {
   const cli = parseArgs(Bun.argv.slice(2));
   const client = createClient({
@@ -543,6 +821,7 @@ async function main(): Promise<void> {
       : undefined;
 
     const results: SmokeResult[] = [];
+    const fundingResults: FundingSmokeResult[] = [];
     const durationMs = cli.durationSec * 1_000;
     const reconnectWaitMs = cli.reconnectWaitSec * 1_000;
     const disconnectAfterMs =
@@ -564,6 +843,17 @@ async function main(): Promise<void> {
     }
 
     if (cli.perpSymbol) {
+      fundingResults.push(
+        await smokeFundingRate({
+          client,
+          symbol: cli.perpSymbol,
+          durationMs,
+          disconnectAfterMs:
+            cli.disconnectTarget === "funding" ? disconnectAfterMs : undefined,
+          reconnectWaitMs,
+        }),
+      );
+
       results.push(
         await smokeSymbol({
           client,
@@ -603,6 +893,7 @@ async function main(): Promise<void> {
           : null,
       },
       results,
+      fundingResults,
       errors,
       healthBeforeStop: client.getHealth(),
     };

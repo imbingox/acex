@@ -137,3 +137,37 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 添加资金费率 market 数据
+
+**Date**: 2026-04-25
+**Task**: 添加资金费率 market 数据
+**Branch**: `feat/funding`
+
+### Summary
+
+接入 Binance funding rate mark price websocket，新增 per-stream status、live smoke、文档和回归测试，并归档 Trellis 任务。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `62bea64` | (see git log) |
+| `dbf5462` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

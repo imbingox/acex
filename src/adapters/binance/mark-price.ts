@@ -43,13 +43,13 @@ interface BinanceMarkPriceMessage {
   T?: number;
 }
 
-const BINANCE_USDM_WS_BASE_URL = "wss://fstream.binance.com/ws";
+const BINANCE_USDM_MARKET_WS_BASE_URL = "wss://fstream.binance.com/market/ws";
 const BINANCE_COINM_WS_BASE_URL = "wss://dstream.binance.com/ws";
 
 function getWsBaseUrl(market: BinanceMarketDefinition): string {
   switch (market.family) {
     case "usdm":
-      return BINANCE_USDM_WS_BASE_URL;
+      return BINANCE_USDM_MARKET_WS_BASE_URL;
     case "coinm":
       return BINANCE_COINM_WS_BASE_URL;
     case "spot":
@@ -60,7 +60,7 @@ function getWsBaseUrl(market: BinanceMarketDefinition): string {
 }
 
 function buildMarkPriceUrl(market: BinanceMarketDefinition): string {
-  return `${getWsBaseUrl(market)}/${market.id.toLowerCase()}@markPrice@1s`;
+  return `${getWsBaseUrl(market)}/${market.id.toLowerCase()}@markPrice`;
 }
 
 function parseMarkPriceMessage(

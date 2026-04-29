@@ -207,15 +207,15 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 - None - task complete
 
 
-## Session 6: Release 0.2.0 and reset beta flow
+## Session 6: Funding 聚合接口与 Binance mark price 修复
 
-**Date**: 2026-04-25
-**Task**: Release 0.2.0 and reset beta flow
-**Branch**: `main`
+**Date**: 2026-04-29
+**Task**: Funding 聚合接口与 Binance mark price 修复
+**Branch**: `feat/funding`
 
 ### Summary
 
-Published @imbingox/acex 0.2.0, reset Changesets beta baseline to 0.2.0 for future 0.3.0-beta releases, documented release version rules, updated Trellis tooling, and adjusted release workflow to ignore docs-only pushes.
+新增 getMarkets/getL1Books/getFundingRates 严格 symbol 聚合接口，移除 findMarkets，修复 Binance USDⓈ-M funding mark price WS endpoint 并同步 README/docs/api 与测试。质量验证已通过 lint、type-check、market tests、全量 bun run test。
 
 ### Main Changes
 
@@ -225,11 +225,7 @@ Published @imbingox/acex 0.2.0, reset Changesets beta baseline to 0.2.0 for futu
 
 | Hash | Message |
 |------|---------|
-| `08b1103` | (see git log) |
-| `67a9800` | (see git log) |
-| `9052788` | (see git log) |
-| `9e58a85` | (see git log) |
-| `f24d7b3` | (see git log) |
+| `4ed0e0b` | (see git log) |
 
 ### Testing
 

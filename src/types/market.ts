@@ -142,9 +142,11 @@ export interface MarketManager {
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
 
   getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
-  findMarkets(symbol: string): MarketDefinition[];
+  getMarkets(symbol: string): MarketDefinition[];
   listMarkets(exchange?: Exchange): MarketDefinition[];
   getL1Book(key: MarketKeyInput): L1Book | undefined;
+  getL1Books(symbol: string): L1Book[];
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
+  getFundingRates(symbol: string): FundingRateSnapshot[];
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;
 }

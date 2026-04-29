@@ -30,7 +30,13 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     amountPrecision: 4,
   });
 
-  expect(client.market.getMarket("binance", "BTC/USDT:USDT")).toMatchObject({
+  const btcUsdtSwap = client.market.getMarket("binance", "BTC/USDT:USDT");
+  expect(btcUsdtSwap).toBeDefined();
+  if (!btcUsdtSwap) {
+    throw new Error("Expected BTC/USDT:USDT market");
+  }
+
+  expect(btcUsdtSwap).toMatchObject({
     type: "swap",
     settle: "USDT",
     linear: true,
@@ -38,6 +44,7 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     contractSize: new BigNumber("1"),
     minNotional: new BigNumber("5"),
   });
+  expect(client.market.getMarkets("BTC/USDT:USDT")).toEqual([btcUsdtSwap]);
 
   expect(client.market.getMarket("binance", "BTC/USD:BTC")).toMatchObject({
     type: "swap",
@@ -125,6 +132,11 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
     symbol: "BTC/USDT:USDT",
   });
 
+  expect(book).toBeDefined();
+  if (!book) {
+    throw new Error("Expected l1 book snapshot");
+  }
+
   expect(book).toMatchObject({
     symbol: "BTC/USDT:USDT",
     bidPrice: new BigNumber("102000.10"),
@@ -136,6 +148,8 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
       freshness: "fresh",
     },
   });
+  expect(client.market.getL1Books("BTC/USDT:USDT")).toEqual([book]);
+  expect(client.market.getL1Books("BTC/USDT")).toEqual([]);
   expect(status).toMatchObject({
     ready: true,
     activity: "active",
@@ -184,7 +198,7 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
   });
 
   const socket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
     0,
   );
   socket.emitJson({
@@ -208,6 +222,11 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
     symbol: "BTC/USDT:USDT",
   });
 
+  expect(fundingRate).toBeDefined();
+  if (!fundingRate) {
+    throw new Error("Expected funding rate snapshot");
+  }
+
   expect(fundingRate).toMatchObject({
     symbol: "BTC/USDT:USDT",
     fundingRate: new BigNumber("0.00010000"),
@@ -222,6 +241,8 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
       freshness: "fresh",
     },
   });
+  expect(client.market.getFundingRates("BTC/USDT:USDT")).toEqual([fundingRate]);
+  expect(client.market.getFundingRates("BTC/USDT")).toEqual([]);
   expect(status).toMatchObject({
     ready: true,
     activity: "active",
@@ -265,7 +286,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
     symbol: "BTC/USDT:USDT",
   });
   const firstSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
     0,
   );
 
@@ -305,7 +326,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
   });
 
   const secondSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
     1,
     100,
   );
@@ -376,7 +397,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
     symbol: "BTC/USDT:USDT",
   });
   const fundingSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
     0,
   );
   fundingSocket.emitJson({
@@ -502,7 +523,7 @@ test("market update events keep publish-time snapshot status", async () => {
     symbol: "BTC/USDT:USDT",
   });
   const fundingSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
     0,
   );
   fundingSocket.emitJson({

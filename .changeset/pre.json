@@ -4,5 +4,5 @@
   "initialVersions": {
     "@imbingox/acex": "0.2.0"
   },
-  "changesets": []
+  "changesets": ["funding-aggregators"]
 }

@@ -1,10 +1,10 @@
 {
   "name": "@imbingox/acex",
-  "version": "0.1.0-beta.3",
+  "version": "0.2.0",
   "description": "Multi-exchange trading SDK for market data, account, and order management",
   "repository": {
     "type": "git",
-    "url": "https://github.com/imbingox/acex"
+    "url": "git+https://github.com/imbingox/acex.git"
   },
   "module": "index.ts",
   "type": "module",

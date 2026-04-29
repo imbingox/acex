@@ -79,8 +79,8 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
   - `pull-requests: write`
   - `id-token: write`
 - `id-token: write` 用于 npm Trusted Publishing / provenance。
-- `package.json.repository.url` 必须和 GitHub 仓库 URL 精确匹配。
-- 当前仓库应写成 `https://github.com/imbingox/acex`，不要写成 `git+https://...git` 形式。
+- `package.json.repository.url` 必须指向当前 GitHub 仓库，避免 npm publish 时被自动修正。
+- 当前仓库应写成 `git+https://github.com/imbingox/acex.git`，与 npm package metadata 规范化结果一致。
 - npm 包 settings 中 Trusted Publisher 绑定的 workflow 文件名必须是 `release.yml`。
 
 #### 3.4 发布前质量门禁
@@ -112,6 +112,9 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
   - 再发布正式包到默认稳定 tag
 - `changeset pre exit` 后 `.changeset/pre.json` 会被删除，所以 `version-packages` 必须兼容该文件不存在。
 - stable 发布成功后，如需继续 beta 节奏，workflow 应默认重新执行 `changeset pre enter beta` 并把新的 `.changeset/pre.json` 推回 `main`。
+- stable 发布完成并重新进入 beta 后，`.changeset/pre.json.initialVersions` 必须等于刚发布的 stable 版本；例如 `0.2.0` 发布后应记录 `0.2.0`，下一轮 `minor` changeset 才会进入 `0.3.0-beta.x`。
+- 正常节奏下不要手改 `package.json.version` 来推进版本号：新增用户可见能力只写 `.changeset/*.md`，beta release PR 和 stable workflow 负责消费 changeset、生成版本、发布 npm、推送 tag、重新进入下一轮 beta。
+- 只有在 npm 上已存在目标 stable 版本、且历史 prerelease 基线已错位时，才允许一次性人工修正 stable 版本；修正后必须立即发布、推送 tag、重新执行 `changeset pre enter beta`，把后续版本号重新交还给 Changesets 状态机。
 
 #### 3.7 业务改动必须带 changeset
 
@@ -145,6 +148,9 @@ Changeset bump 选择矩阵：
 | `bun run lint` / `type-check` / `test` 任一失败 | workflow 直接失败，不允许发布 |
 | 当前 beta 版本已经发布过，又有无 changeset 提交落到 `main` | workflow 应跳过重复 publish，不能直接因为 version already exists 失败 |
 | 想发布稳定版到默认稳定 tag | 不能只改 npm tag；必须先处理 prerelease mode 和版本策略 |
+| stable 发布后没有重新进入 beta pre mode | 后续 `push main` 不应发 beta；必须补执行 `changeset pre enter beta` 并提交 `.changeset/pre.json` |
+| `.changeset/pre.json.initialVersions` 不是最近 stable 版本 | 下一轮 beta 基线会错位；必须先修正 pre mode 状态，再合并新功能 changeset |
+| npm 已存在 stable 目标版本但本地 pre exit 又生成同一版本 | 不得重复发布；需要选择下一个正确 stable 版本并把该例外记录到 release commit/changelog |
 | PR 新增 public API / public type 字段但没有 `.changeset/*.md` | 视为 release contract 缺失，合并前必须补 changeset |
 | PR 同时包含 feature 和 bug fix | changeset bump 选最高级别，例如 `minor` 覆盖 feature + fix |
 | PR 只有文档、测试或 Trellis 归档 | 可不写 changeset |
@@ -188,6 +194,8 @@ on:
 - workflow 里先用 Bun 安装依赖、跑质量命令，再由 `changeset publish` 调用 npm，可以接受。
 - beta release PR 仍由 Changesets action 自动创建，publish 步骤放在 action 之后自定义执行，可以接受。
 - stable 正式发布走手动 `workflow_dispatch`，但 beta 自动发布仍由 `push main` 驱动，可以接受。
+- stable workflow 发布后默认 `reenter_beta_mode=true`，并提交新的 `.changeset/pre.json`，可以接受。
+- `0.2.0` stable 发布后 `.changeset/pre.json.initialVersions` 为 `0.2.0`，后续 `minor` 进入 `0.3.0-beta.x`，可以接受。
 - PR 里同时有 feature、bug fix、docs 和 tests，只写一个覆盖用户可见变化的 changeset，可以接受。
 
 #### Bad
@@ -250,6 +258,8 @@ bun run test
 - `package.json.repository.url` 与仓库远端一致
 - beta/stable 发布后 git tag 会被 push 回远端
 - 当前仓库下 git tag 名称为 `v<version>`
+- stable 发布后如继续 beta，`.changeset/pre.json.initialVersions` 等于刚发布的 stable 版本
+- npm dist-tag 中 `latest` 指向最新 stable 版本，`beta` 指向最新 beta 版本
 
 ### 7. Wrong vs Correct
 

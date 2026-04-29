@@ -1,12 +1,13 @@
 """
 CLI Adapter for Multi-Platform Support.
 
-Abstracts differences between Claude Code, OpenCode, Cursor, Codex, Kilo, Kiro Code, Gemini CLI, Antigravity, Windsurf, Qoder, CodeBuddy, GitHub Copilot, and Factory Droid interfaces.
+Abstracts differences between Claude Code, OpenCode, Cursor, iFlow, Codex, Kilo, Kiro Code, Gemini CLI, Antigravity, Windsurf, Qoder, CodeBuddy, GitHub Copilot, and Factory Droid interfaces.
 
 Supported platforms:
 - claude: Claude Code (default)
 - opencode: OpenCode
 - cursor: Cursor IDE
+- iflow: iFlow CLI
 - codex: Codex CLI (skills-based)
 - kilo: Kilo CLI
 - kiro: Kiro Code (skills-based)
@@ -23,9 +24,9 @@ Usage:
 
     adapter = CLIAdapter("opencode")
     cmd = adapter.build_run_command(
-        agent="trellis-check",
+        agent="dispatch",
         session_id="abc123",
-        prompt="Review current changes against spec"
+        prompt="Start the pipeline"
     )
 """
 
@@ -33,12 +34,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 Platform = Literal[
     "claude",
     "opencode",
     "cursor",
+    "iflow",
     "codex",
     "kilo",
     "kiro",
@@ -52,29 +54,37 @@ Platform = Literal[
 ]
 
 
-IFLOW_REMOVED_MESSAGE = (
-    "iFlow support was removed in Trellis 0.5.x. "
-    "Run `trellis init --<platform>` to install a supported platform, "
-    "then remove the legacy `.iflow/` directory."
-)
-
-
 @dataclass
 class CLIAdapter:
     """Adapter for different AI coding CLI tools."""
 
     platform: Platform
 
+    # =========================================================================
+    # Agent Name Mapping
+    # =========================================================================
+
+    # OpenCode has built-in agents that cannot be overridden
+    # See: https://github.com/sst/opencode/issues/4271
+    # Note: Class-level constant, not a dataclass field
+    _AGENT_NAME_MAP: ClassVar[dict[Platform, dict[str, str]]] = {
+        "claude": {},  # No mapping needed
+        "opencode": {
+            "plan": "trellis-plan",  # 'plan' is built-in in OpenCode
+        },
+    }
+
     def get_agent_name(self, agent: str) -> str:
         """Get platform-specific agent name.
 
         Args:
-            agent: Original agent name (e.g., 'trellis-check')
+            agent: Original agent name (e.g., 'plan', 'dispatch')
 
         Returns:
-            Platform-specific agent name
+            Platform-specific agent name (e.g., 'trellis-plan' for OpenCode)
         """
-        return agent
+        mapping = self._AGENT_NAME_MAP.get(self.platform, {})
+        return mapping.get(agent, agent)
 
     # =========================================================================
     # Agent Path
@@ -85,14 +95,14 @@ class CLIAdapter:
         """Get platform-specific config directory name.
 
         Returns:
-            Directory name ('.claude', '.opencode', '.cursor', '.codex',
-            '.kilocode', '.kiro', '.gemini', '.agent', '.windsurf',
-            '.qoder', '.codebuddy', '.github/copilot', or '.factory')
+            Directory name ('.claude', '.opencode', '.cursor', '.iflow', '.codex', '.kilocode', '.kiro', '.gemini', '.agent', '.windsurf', '.qoder', or '.codebuddy')
         """
         if self.platform == "opencode":
             return ".opencode"
         elif self.platform == "cursor":
             return ".cursor"
+        elif self.platform == "iflow":
+            return ".iflow"
         elif self.platform == "codex":
             return ".codex"
         elif self.platform == "kilo":
@@ -123,7 +133,7 @@ class CLIAdapter:
             project_root: Project root directory
 
         Returns:
-            Path to config directory for the configured platform.
+            Path to config directory (.claude, .opencode, .cursor, .iflow, .codex, .kilocode, .kiro, .gemini, .agent, .windsurf, .qoder, or .codebuddy)
         """
         return project_root / self.config_dir_name
 
@@ -254,6 +264,8 @@ class CLIAdapter:
         """
         if self.platform == "opencode":
             return {"OPENCODE_NON_INTERACTIVE": "1"}
+        elif self.platform == "iflow":
+            return {"IFLOW_NON_INTERACTIVE": "1"}
         elif self.platform == "codex":
             return {"CODEX_NON_INTERACTIVE": "1"}
         elif self.platform == "kiro":
@@ -322,6 +334,9 @@ class CLIAdapter:
 
             cmd.append(prompt)
 
+        elif self.platform == "iflow":
+            cmd = ["iflow", "-y", "-p"]
+            cmd.append(f"${mapped_agent} {prompt}")
         elif self.platform == "codex":
             cmd = ["codex", "exec"]
             cmd.append(prompt)
@@ -377,13 +392,17 @@ class CLIAdapter:
         """Build CLI command for resuming a session.
 
         Args:
-            session_id: Session ID to resume
+            session_id: Session ID to resume (ignored for iFlow)
 
         Returns:
             List of command arguments
         """
         if self.platform == "opencode":
             return ["opencode", "run", "--session", session_id]
+        elif self.platform == "iflow":
+            # iFlow uses -c to continue most recent conversation
+            # session_id is ignored as iFlow doesn't support session IDs
+            return ["iflow", "-c"]
         elif self.platform == "codex":
             return ["codex", "resume", session_id]
         elif self.platform == "kiro":
@@ -452,6 +471,11 @@ class CLIAdapter:
         return self.platform == "cursor"
 
     @property
+    def is_iflow(self) -> bool:
+        """Check if platform is iFlow CLI."""
+        return self.platform == "iflow"
+
+    @property
     def cli_name(self) -> str:
         """Get CLI executable name.
 
@@ -461,8 +485,8 @@ class CLIAdapter:
             return "opencode"
         elif self.is_cursor:
             return "cursor"  # Note: Cursor is IDE-only, no CLI
-        elif self.platform == "codex":
-            return "codex"
+        elif self.platform == "iflow":
+            return "iflow"
         elif self.platform == "kiro":
             return "kiro"
         elif self.platform == "gemini":
@@ -486,19 +510,19 @@ class CLIAdapter:
     def supports_cli_agents(self) -> bool:
         """Check if platform supports running agents via CLI.
 
-        Claude Code, OpenCode, Codex, Kiro, Gemini, and Qoder support
-        non-interactive agent execution. Cursor and IDE-only platforms do not.
+        Claude Code, OpenCode, iFlow, and Codex support CLI agent execution.
+        Cursor is IDE-only and doesn't support CLI agents.
         """
-        return self.platform in ("claude", "opencode", "codex", "kiro", "gemini", "qoder")
+        return self.platform in ("claude", "opencode", "iflow", "codex")
 
     @property
     def requires_agent_definition_file(self) -> bool:
         """Check if platform requires an agent definition file (.md/.toml) to run.
 
-        Claude Code and OpenCode: require agent .md files (--agent flag).
+        Claude Code, OpenCode, iFlow: require agent .md files (--agent flag).
         Codex: auto-discovers agents from .codex/agents/*.toml, no --agent flag.
         """
-        return self.platform in ("claude", "opencode")
+        return self.platform in ("claude", "opencode", "iflow")
 
     # =========================================================================
     # Session ID Handling
@@ -510,6 +534,7 @@ class CLIAdapter:
 
         Claude Code: Yes (--session-id)
         OpenCode: No (auto-generated, extract from logs)
+        iFlow: No (no session ID support)
         """
         return self.platform == "claude"
 
@@ -542,9 +567,7 @@ def get_cli_adapter(platform: str = "claude") -> CLIAdapter:
     """Get CLI adapter for the specified platform.
 
     Args:
-        platform: Platform name ('claude', 'opencode', 'cursor', 'codex',
-            'kilo', 'kiro', 'gemini', 'antigravity', 'windsurf', 'qoder',
-            'codebuddy', 'copilot', or 'droid')
+        platform: Platform name ('claude', 'opencode', 'cursor', 'iflow', 'codex', 'kilo', 'kiro', 'gemini', 'antigravity', 'windsurf', 'qoder', or 'codebuddy')
 
     Returns:
         CLIAdapter instance
@@ -552,13 +575,11 @@ def get_cli_adapter(platform: str = "claude") -> CLIAdapter:
     Raises:
         ValueError: If platform is not supported
     """
-    if platform == "iflow":
-        raise ValueError(IFLOW_REMOVED_MESSAGE)
-
     if platform not in (
         "claude",
         "opencode",
         "cursor",
+        "iflow",
         "codex",
         "kilo",
         "kiro",
@@ -571,7 +592,7 @@ def get_cli_adapter(platform: str = "claude") -> CLIAdapter:
         "droid",
     ):
         raise ValueError(
-            f"Unsupported platform: {platform} (must be 'claude', 'opencode', 'cursor', 'codex', 'kilo', 'kiro', 'gemini', 'antigravity', 'windsurf', 'qoder', 'codebuddy', 'copilot', or 'droid')"
+            f"Unsupported platform: {platform} (must be 'claude', 'opencode', 'cursor', 'iflow', 'codex', 'kilo', 'kiro', 'gemini', 'antigravity', 'windsurf', 'qoder', 'codebuddy', 'copilot', or 'droid')"
         )
 
     return CLIAdapter(platform=platform)  # type: ignore
@@ -580,6 +601,7 @@ def get_cli_adapter(platform: str = "claude") -> CLIAdapter:
 _ALL_PLATFORM_CONFIG_DIRS = (
     ".claude",
     ".cursor",
+    ".iflow",
     ".opencode",
     ".codex",
     ".kilocode",
@@ -614,37 +636,33 @@ def detect_platform(project_root: Path) -> Platform:
     Detection order:
     1. TRELLIS_PLATFORM environment variable (if set)
     2. .opencode directory exists → opencode
-    3. .cursor directory exists (without .claude) → cursor
-    4. .gemini directory exists → gemini
+    3. .iflow directory exists → iflow
+    4. .cursor directory exists (without .claude) → cursor
     5. .codex exists and no other platform dirs → codex
     6. .kilocode directory exists → kilo
     7. .kiro/skills exists and no other platform dirs → kiro
-    8. .agent/workflows exists and no other platform dirs → antigravity
-    9. .windsurf/workflows exists and no other platform dirs → windsurf
-    10. .codebuddy directory exists → codebuddy
-    11. .qoder directory exists → qoder
-    12. .github/copilot directory exists → copilot
-    13. .factory directory exists → droid
-    14. Default → claude
+    8. .gemini directory exists → gemini
+    9. .agent/workflows exists and no other platform dirs → antigravity
+    10. .windsurf/workflows exists and no other platform dirs → windsurf
+    11. .codebuddy directory exists → codebuddy
+    12. .qoder directory exists → qoder
+    13. Default → claude
 
     Args:
         project_root: Project root directory
 
     Returns:
-        Detected platform ('claude', 'opencode', 'cursor', 'codex', 'kilo',
-        'kiro', 'gemini', 'antigravity', 'windsurf', 'qoder', 'codebuddy',
-        'copilot', 'droid', or default 'claude')
+        Detected platform ('claude', 'opencode', 'cursor', 'iflow', 'codex', 'kilo', 'kiro', 'gemini', 'antigravity', 'windsurf', 'qoder', 'codebuddy', or default 'claude')
     """
     import os
 
     # Check environment variable first
     env_platform = os.environ.get("TRELLIS_PLATFORM", "").lower()
-    if env_platform == "iflow":
-        raise ValueError(IFLOW_REMOVED_MESSAGE)
     if env_platform in (
         "claude",
         "opencode",
         "cursor",
+        "iflow",
         "codex",
         "kilo",
         "kiro",
@@ -662,9 +680,9 @@ def detect_platform(project_root: Path) -> Platform:
     if (project_root / ".opencode").is_dir():
         return "opencode"
 
-    # Fail explicitly on legacy iFlow checkouts to force a supported migration.
+    # Check for .iflow directory (iFlow-specific)
     if (project_root / ".iflow").is_dir():
-        raise ValueError(IFLOW_REMOVED_MESSAGE)
+        return "iflow"
 
     # Check for .cursor directory (Cursor-specific)
     # Only detect as cursor if .claude doesn't exist (to avoid confusion)

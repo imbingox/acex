@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - ".trellis/**"
+      - "docs/**"
+      - "*.md"
+      - "CLAUDE.md"
+      - "AGENTS.md"
   workflow_dispatch:
     inputs:
       reenter_beta_mode:

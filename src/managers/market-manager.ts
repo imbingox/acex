@@ -224,9 +224,10 @@ export class MarketManagerImpl
     return market ? cloneMarketDefinition(market) : undefined;
   }
 
-  findMarkets(symbol: string): MarketDefinition[] {
+  getMarkets(symbol: string): MarketDefinition[] {
     return [...this.definitions.values()]
       .filter((market) => market.symbol === symbol)
+      .sort((left, right) => left.exchange.localeCompare(right.exchange))
       .map((market) => cloneMarketDefinition(market));
   }
 
@@ -245,9 +246,31 @@ export class MarketManagerImpl
     return book ? cloneL1Book(book) : undefined;
   }
 
+  getL1Books(symbol: string): L1Book[] {
+    return [...this.records.values()]
+      .filter(
+        (record): record is MarketRecord & { l1Book: L1Book } =>
+          record.symbol === symbol && Boolean(record.l1Book),
+      )
+      .map((record) => cloneL1Book(record.l1Book))
+      .sort((left, right) => left.exchange.localeCompare(right.exchange));
+  }
+
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined {
     const fundingRate = this.records.get(marketKey(key))?.fundingRate;
     return fundingRate ? cloneFundingRate(fundingRate) : undefined;
+  }
+
+  getFundingRates(symbol: string): FundingRateSnapshot[] {
+    return [...this.records.values()]
+      .filter(
+        (
+          record,
+        ): record is MarketRecord & { fundingRate: FundingRateSnapshot } =>
+          record.symbol === symbol && Boolean(record.fundingRate),
+      )
+      .map((record) => cloneFundingRate(record.fundingRate))
+      .sort((left, right) => left.exchange.localeCompare(right.exchange));
   }
 
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined {

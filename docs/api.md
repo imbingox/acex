@@ -215,15 +215,17 @@ interface MarketManager {
   loadMarkets(): Promise<void>;
   listMarkets(exchange?: Exchange): MarketDefinition[];
   getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
-  findMarkets(symbol: string): MarketDefinition[];
+  getMarkets(symbol: string): MarketDefinition[];
 
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   getL1Book(key: MarketKeyInput): L1Book | undefined;
+  getL1Books(symbol: string): L1Book[];
 
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
+  getFundingRates(symbol: string): FundingRateSnapshot[];
 
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;
 }
@@ -238,8 +240,10 @@ const all = client.market.listMarkets();
 const binanceOnly = client.market.listMarkets("binance");
 
 const btcPerp = client.market.getMarket("binance", "BTC/USDT:USDT");
-const allBtcPerp = client.market.findMarkets("BTC/USDT:USDT");
+const allBtcPerp = client.market.getMarkets("BTC/USDT:USDT");
 ```
+
+`getMarkets(symbol)` 严格按完整统一 symbol 匹配。
 
 `MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 `BigNumber`。
 
@@ -799,6 +803,20 @@ interface MarketDefinition {
   minNotional?: BigNumber;
   expiry?: number;
   raw: Record<string, unknown>;
+}
+
+interface MarketKeyInput {
+  exchange: Exchange;
+  symbol: string;
+}
+
+interface SubscribeL1BookInput extends MarketKeyInput {}
+
+interface SubscribeFundingRateInput extends MarketKeyInput {}
+
+interface MarketEventFilter {
+  exchange?: Exchange;
+  symbol?: string;
 }
 
 interface L1Book {

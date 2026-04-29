@@ -29,7 +29,9 @@ const book = client.market.getL1Book({
   exchange: "binance",
   symbol: "BTC/USDT:USDT",
 });
+const books = client.market.getL1Books("BTC/USDT:USDT");
 console.log(`bid=${book?.bidPrice.toFixed()} ask=${book?.askPrice.toFixed()}`);
+console.log(`venues=${books.length}`);
 console.log(`book freshness=${book?.status.freshness}`);
 
 await client.market.subscribeFundingRate({
@@ -41,7 +43,9 @@ const funding = client.market.getFundingRate({
   exchange: "binance",
   symbol: "BTC/USDT:USDT",
 });
+const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
 console.log(`funding=${funding?.fundingRate.toFixed()}`);
+console.log(`funding venues=${fundingRates.length}`);
 
 for await (const event of client.market.events.l1BookUpdates({
   exchange: "binance",
@@ -141,7 +145,7 @@ bun run test:live:order:soak
 
 覆盖内容：
 
-- `market`：`loadMarkets()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getFundingRate()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
+- `market`：`loadMarkets()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
 - `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连
 

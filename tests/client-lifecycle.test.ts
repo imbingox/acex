@@ -72,7 +72,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
     symbol: "BTC/USDT:USDT",
   });
   const fundingSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
   );
   fundingSocket.emitJson({
     e: "markPriceUpdate",
@@ -139,7 +139,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
     T: 1710000000005,
   });
   const restoredFundingSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@markPrice@1s",
+    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
     1,
   );
   restoredFundingSocket.emitJson({

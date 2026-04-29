@@ -205,3 +205,36 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Funding 聚合接口与 Binance mark price 修复
+
+**Date**: 2026-04-29
+**Task**: Funding 聚合接口与 Binance mark price 修复
+**Branch**: `feat/funding`
+
+### Summary
+
+新增 getMarkets/getL1Books/getFundingRates 严格 symbol 聚合接口，移除 findMarkets，修复 Binance USDⓈ-M funding mark price WS endpoint 并同步 README/docs/api 与测试。质量验证已通过 lint、type-check、market tests、全量 bun run test。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4ed0e0b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

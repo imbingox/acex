@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-04-29
+- **Total Sessions**: 7
+- **Last Active**: 2026-04-30
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~240 | Active |
+| `journal-1.md` | ~273 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-04-30 | 补充 funding 聚合 changeset | `680e315` | `main` |
 | 6 | 2026-04-29 | Funding 聚合接口与 Binance mark price 修复 | `4ed0e0b` | `feat/funding` |
 | 5 | 2026-04-25 | 补充 release changeset 规范并创建 PR | `5dcc3c1`, `d9e15d6` | `feat/funding` |
 | 4 | 2026-04-25 | 添加资金费率 market 数据 | `62bea64`, `dbf5462` | `feat/funding` |

@@ -238,3 +238,36 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: 补充 funding 聚合 changeset
+
+**Date**: 2026-04-30
+**Task**: 补充 funding 聚合 changeset
+**Branch**: `main`
+
+### Summary
+
+为已合并的 symbol-level market data aggregators 与 Binance funding mark price websocket 更新补充 minor changeset，并创建/合并 PR #13，确保后续 Changesets beta release 流程可生成新版本。质量验证通过 lint、type-check、全量 bun run test。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `680e315` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

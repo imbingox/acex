@@ -231,14 +231,16 @@ bun run test
 断言重点：
 
 - 类型检查覆盖 `MarketAdapter` / `PrivateUserDataAdapter` 接口的完整实现（缺方法会直接 type error）
-- `tests/market.test.ts`、`tests/account.test.ts`、`tests/order.test.ts` 针对各 manager 的集成测试仍然过——这些测试通过 fixture adapter 间接验证接口 contract
-- `tests/managed-websocket.test.ts` 验证 ManagedWebSocket 行为未被新 adapter 破坏
-- live smoke（`bun run test:live:market:smoke` / `:account:smoke` / `:order:smoke`）至少跑一遍 subscribe → get → unsubscribe 完整路径，断言 adapter 能回到 `activity = inactive` 且无资源泄漏
+- `tests/integration/market.test.ts`、`tests/integration/account.test.ts`、`tests/integration/order.test.ts` 针对各 manager 的集成测试仍然过——这些测试通过 fake REST / fake WebSocket 间接验证 adapter contract。
+- `tests/unit/managed-websocket.test.ts` 验证 ManagedWebSocket 行为未被新 adapter 破坏。
+- live smoke（`bun run test:live:market:smoke` / `:account:smoke` / `:order:smoke`）至少跑一遍 subscribe → get → unsubscribe 完整路径，断言 adapter 能回到 `activity = inactive` 且无资源泄漏。
 
 对新交易所补充：
 
-- 至少一份 adapter 单元测试，覆盖 catalog 解析、symbol 构造、消息解析边界
-- live smoke 脚本新增对应 `test:live:<exchange>:*` 入口
+- 新交易所 fixture 放在 `tests/support/exchanges/<exchange>.ts`，复用 `tests/support/test-utils.ts`，不要复制 `FakeWebSocket` / `nextEvent()` 等通用 helper。
+- 至少一份 adapter 单元测试放在 `tests/unit/`，覆盖 catalog 解析、symbol 构造、消息解析边界。
+- 至少一份 fake-infra 集成测试放在 `tests/integration/`，覆盖 subscribe → event → getter → unsubscribe 的 public API contract。
+- live smoke 脚本新增对应 `test:live:<exchange>:*` 入口。
 
 ### 7. Wrong vs Correct
 

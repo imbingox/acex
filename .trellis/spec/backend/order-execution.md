@@ -179,7 +179,7 @@ bun run type-check
 
 断言重点：
 
-- `tests/order.test.ts`
+- `tests/integration/order.test.ts`
   - `createOrder()` 成功时返回规范化 snapshot
   - `cancelOrder()` / `cancelAllOrders()` 成功时返回规范化 snapshot
   - `cancelOrder()` 缺少双标识时本地校验失败

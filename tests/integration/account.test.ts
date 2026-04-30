@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
-import { AcexError, BigNumber, createClient } from "../index.ts";
+import { AcexError, BigNumber, createClient } from "../../index.ts";
 import {
-  FakeWebSocket,
   installBinancePrivateAccountInfra,
-  nextEvent,
   PAPI_ACCOUNT_WS_URL,
   PAPI_LISTEN_KEY,
+} from "../support/exchanges/binance.ts";
+import {
+  FakeWebSocket,
+  nextEvent,
   waitForSocket,
-} from "./support/client-test-utils.ts";
+} from "../support/test-utils.ts";
 
 test("account subscribe bootstraps Binance PAPI UM account data and applies updates", async () => {
   const requests = installBinancePrivateAccountInfra();
@@ -302,4 +304,82 @@ test("removeAccount auto-cleans active private subscriptions and caches", async 
         request.url.searchParams.get("listenKey") === PAPI_LISTEN_KEY,
     ),
   ).toBe(true);
+});
+
+test("account public getters expose collections and unsubscribe publishes stopped status", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+  const statusIterator = client.account.events
+    .status({
+      accountId: "main-binance",
+      exchange: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    exchange: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    type: "account.status_changed",
+    accountId: "main-binance",
+    status: {
+      activity: "active",
+      runtimeStatus: "bootstrap_pending",
+      ready: false,
+    },
+  });
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      activity: "active",
+      runtimeStatus: "healthy",
+      ready: true,
+    },
+  });
+
+  expect(client.account.getBalances("main-binance")).toHaveLength(2);
+  expect(client.account.getBalances("missing-binance")).toEqual([]);
+  expect(client.account.getPositions("main-binance")).toHaveLength(1);
+  expect(
+    client.account.getPositions("main-binance", "BTC/USDT:USDT"),
+  ).toHaveLength(1);
+  expect(client.account.getPositions("main-binance", "ETH/USDT:USDT")).toEqual(
+    [],
+  );
+
+  await client.account.unsubscribeAccount({
+    accountId: "main-binance",
+  });
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      activity: "inactive",
+      runtimeStatus: "stopped",
+      ready: true,
+      reason: undefined,
+    },
+  });
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    activity: "inactive",
+    runtimeStatus: "stopped",
+    ready: true,
+  });
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+
+  await statusIterator.return?.();
 });

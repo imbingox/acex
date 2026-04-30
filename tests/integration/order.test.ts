@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
-import { AcexError, BigNumber, createClient } from "../index.ts";
+import { AcexError, BigNumber, createClient } from "../../index.ts";
+import {
+  installBinancePrivateAccountInfra,
+  PAPI_ACCOUNT_WS_URL,
+} from "../support/exchanges/binance.ts";
 import {
   FakeWebSocket,
-  installBinancePrivateAccountInfra,
   nextEvent,
-  PAPI_ACCOUNT_WS_URL,
   waitForSocket,
-} from "./support/client-test-utils.ts";
+} from "../support/test-utils.ts";
 
 test("order subscribe bootstraps open orders, applies websocket updates, and reuses the account private socket", async () => {
   installBinancePrivateAccountInfra();
@@ -475,4 +477,73 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
   expect(error.error).not.toBeInstanceOf(AcexError);
 
   await errors.return?.();
+});
+
+test("order public status stream and unsubscribe expose stopped semantics", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+  const statusIterator = client.order.events
+    .status({
+      accountId: "main-binance",
+      exchange: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    exchange: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    type: "order.status_changed",
+    accountId: "main-binance",
+    status: {
+      activity: "active",
+      runtimeStatus: "bootstrap_pending",
+      ready: false,
+    },
+  });
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      activity: "active",
+      runtimeStatus: "healthy",
+      ready: true,
+    },
+  });
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(1);
+
+  await client.order.unsubscribeOrders({
+    accountId: "main-binance",
+  });
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      activity: "inactive",
+      runtimeStatus: "stopped",
+      ready: true,
+      reason: undefined,
+    },
+  });
+  expect(client.order.getOrderStatus("main-binance")).toMatchObject({
+    activity: "inactive",
+    runtimeStatus: "stopped",
+    ready: true,
+  });
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+
+  await statusIterator.return?.();
 });

@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
-import { AcexError, BigNumber, createClient } from "../index.ts";
+import { AcexError, BigNumber, createClient } from "../../index.ts";
 import {
-  expectPending,
   installBinanceMarketInfra,
   installBinancePrivateAccountInfra,
-  nextEvent,
   PAPI_ACCOUNT_WS_URL,
+} from "../support/exchanges/binance.ts";
+import {
+  expectPending,
+  nextEvent,
   waitForSocket,
-} from "./support/client-test-utils.ts";
+} from "../support/test-utils.ts";
 
 test("root entry exposes lifecycle snapshot and structured error stream", async () => {
   const client = createClient();

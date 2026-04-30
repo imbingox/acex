@@ -48,7 +48,8 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 - `src/managers/*` 各自持有领域状态，实现 `ManagerLifecycle` + `HealthReporter<T>` 接口。
 - `src/client/runtime.ts` 只做编排，实现 `AcexClient` + `ClientContext` 接口。
 - `src/client/context.ts` 定义内部契约接口（`ClientContext`、`ManagerLifecycle`、`AccountAwareManager`、`HealthReporter<T>`）。
-- 项目级检查命令统一使用 `bun run lint`、`bun run type-check`、`bun run test`。
+- 项目级默认检查命令统一使用 `bun run lint`、`bun run type-check`、`bun run test`；`bun run test` 只包含 `tests/unit/` + `tests/integration/`，不包含 soak/live。
+- 测试结构固定为 `tests/unit/`、`tests/integration/`、`tests/soak/`、`tests/support/`；交易所专用 fixture 放在 `tests/support/exchanges/<exchange>.ts`。
 
 ---
 

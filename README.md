@@ -125,6 +125,26 @@ bun run type-check
 bun run test
 ```
 
+### 测试分层
+
+默认 `bun run test` 只运行快速、确定性的本地测试，不访问真实交易所：
+
+| 命令 | 覆盖范围 | 是否进入默认 CI |
+|------|----------|----------------|
+| `bun run test:unit` | `tests/unit/`，底层工具和无全局副作用的单元测试 | 是 |
+| `bun run test:integration` | `tests/integration/`，fake REST + fake WebSocket 的 SDK 跨层集成测试 | 是 |
+| `bun run test` | `test:unit` + `test:integration` | 是 |
+| `bun run test:soak` | `tests/soak/`，60 秒级稳定性/连续更新测试 | 否 |
+| `bun run test:all` | 默认快速测试 + soak 测试 | 否 |
+
+测试 support 结构：
+
+- `tests/support/test-utils.ts`：通用 fake WebSocket、事件等待、Response helper 和全局清理。
+- `tests/support/exchanges/binance.ts`：Binance 专用 REST/WS fixtures 与 installer。
+- 新增交易所时，优先新增 `tests/support/exchanges/<exchange>.ts`，复用通用 helper，避免把交易所 payload 写进通用测试工具。
+
+GitHub Actions 的 `CI` workflow 会在 PR 和 `main` push 时运行 lint、type-check、unit、integration；release workflow 继续复用 `bun run test`，不会执行 soak/live。
+
 ### 真实环境 smoke / soak 脚本
 
 不进默认 `bun run test`，单独执行：

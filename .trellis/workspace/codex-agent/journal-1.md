@@ -271,3 +271,37 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Restructure test suites and CI
+
+**Date**: 2026-04-30
+**Task**: Restructure test suites and CI
+**Branch**: `feat/test`
+
+### Summary
+
+拆分 unit/integration/soak 测试套件，新增 PR CI，补齐 public API 缺口测试，抽离通用测试工具与 Binance fixture，并更新 README、架构文档和 backend spec 测试规范。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0357dcc` | (see git log) |
+| `97146d1` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

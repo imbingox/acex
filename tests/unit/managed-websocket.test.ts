@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createManagedWebSocket } from "../src/internal/managed-websocket.ts";
+import { createManagedWebSocket } from "../../src/internal/managed-websocket.ts";
 
 class FakeWebSocket extends EventTarget {
   static readonly CONNECTING = 0;

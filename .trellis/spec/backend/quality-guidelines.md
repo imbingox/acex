@@ -17,7 +17,11 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "type-check": "tsc --noEmit",
-    "test": "bun test --max-concurrency=1"
+    "test": "bun test --max-concurrency=1 tests/unit tests/integration",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test --max-concurrency=1 tests/integration",
+    "test:soak": "bun test --max-concurrency=1 tests/soak",
+    "test:all": "bun run test && bun run test:soak"
   }
 }
 ```
@@ -38,12 +42,37 @@ package.json
 - `bun run type-check`
   - 用于统一跑 TypeScript 类型检查
 - `bun run test`
-  - 用于统一跑 Bun 测试
-  - 当前脚本固定为 `bun test --max-concurrency=1`。
-  - `--max-concurrency` 控制的是并发测试的同时执行上限；默认路径虽然没有显式开启 `test.concurrent()` / `bun test --concurrent`，但当前测试基建依赖全局 `fetch` / `WebSocket` mock、共享 `FakeWebSocket` 状态，以及 `stopAllClientsForTests()` 全局清理。
-  - 实测在启用并发测试时会出现超时、全局 mock 污染和 client 被其他测试提前停止的问题；除非先完成测试隔离，否则不要去掉这个参数，也不要绕过 `bun run test` 直接改用其他入口。
+  - 用于统一跑默认 Bun 测试，只包含 `tests/unit/` 和 `tests/integration/`。
+  - 当前脚本固定为 `bun test --max-concurrency=1 tests/unit tests/integration`。
+  - `--max-concurrency` 控制的是并发测试的同时执行上限；默认集成测试依赖全局 `fetch` / `WebSocket` mock、共享 `FakeWebSocket` 状态，以及 `stopAllClientsForTests()` 全局清理。
+  - 实测在启用并发测试时会出现超时、全局 mock 污染和 client 被其他测试提前停止的问题；除非先完成测试隔离，否则不要去掉集成测试入口的 `--max-concurrency=1`，也不要绕过 `bun run test` 直接改用其他默认入口。
+- `bun run test:unit`
+  - 只跑 `tests/unit/`，用于无真实网络、无交易所 fixture 的底层测试。
+- `bun run test:integration`
+  - 只跑 `tests/integration/`，用于 fake REST + fake WebSocket 的 SDK 跨层测试。
+  - 必须保留 `--max-concurrency=1`，原因同默认 `bun run test`。
+- `bun run test:soak`
+  - 只跑 `tests/soak/`，用于 60 秒级连续更新、重连或长稳态验证。
+  - 不进入默认 `bun run test` / PR CI / release workflow。
+- `bun run test:all`
+  - 本地完整验证入口，等价于默认快速测试 + soak。
 
-#### 3.2 lint 工具约定
+#### 3.2 测试目录约定
+
+- `tests/unit/`：底层工具、纯逻辑、无全局 mock 污染的单元测试。
+- `tests/integration/`：SDK public API / manager / adapter 通过 fake infra 串起来的跨层测试；这是默认 CI 的主覆盖面。
+- `tests/soak/`：长时间稳定性测试，例如 60 秒连续 L1 book 更新；只能通过 `test:soak` 或 `test:all` 显式执行。
+- `tests/support/test-utils.ts`：通用 fake WebSocket、事件等待、response helper 和全局清理。
+- `tests/support/exchanges/<exchange>.ts`：交易所专用 REST/WS fixtures 与 installer。新增交易所时不要把 payload 和 URL 写进通用 helper。
+
+#### 3.3 CI 约定
+
+- `.github/workflows/ci.yml` 是 PR / push main 的快速质量门禁。
+- CI 必须运行 `bun run lint`、`bun run type-check`、`bun run test:unit`、`bun run test:integration`。
+- CI 不运行 `test:soak` 或任何 `test:live:*`，避免 60 秒级等待、真实网络和凭证依赖阻塞 PR。
+- `.github/workflows/release.yml` 继续运行 `bun run test`，即默认快速测试，不包含 soak/live。
+
+#### 3.4 lint 工具约定
 
 - 当前仓库统一使用 `Biome`。
 - `lint:fix` 只用于本地修复，不替代 `lint`。
@@ -51,7 +80,7 @@ package.json
   - 禁止 `console.*`
   - 禁止非空断言 `!`
 
-#### 3.3 finish-work 的通过条件
+#### 3.5 finish-work 的通过条件
 
 - `finish-work` 中的 “Code Quality” 默认对应：
   - `bun run lint`
@@ -78,7 +107,11 @@ package.json
   "scripts": {
     "lint": "biome check .",
     "type-check": "tsc --noEmit",
-    "test": "bun test --max-concurrency=1"
+    "test": "bun test --max-concurrency=1 tests/unit tests/integration",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test --max-concurrency=1 tests/integration",
+    "test:soak": "bun test --max-concurrency=1 tests/soak",
+    "test:all": "bun run test && bun run test:soak"
   }
 }
 ```
@@ -121,7 +154,8 @@ bun run test
 
 断言重点：
 
-- 三个命令都能从干净环境直接执行
+- 三个默认命令都能从干净环境直接执行
+- `test:unit` / `test:integration` 可分别执行，且 `test:soak` 不被默认 `bun run test` 隐式执行
 - lint 会在存在 `console.*` 或非空断言时失败
 - 类型检查和测试命令不会依赖个人 shell alias
 
@@ -150,7 +184,11 @@ bun run test
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "type-check": "tsc --noEmit",
-    "test": "bun test --max-concurrency=1"
+    "test": "bun test --max-concurrency=1 tests/unit tests/integration",
+    "test:unit": "bun test tests/unit",
+    "test:integration": "bun test --max-concurrency=1 tests/integration",
+    "test:soak": "bun test --max-concurrency=1 tests/soak",
+    "test:all": "bun run test && bun run test:soak"
   }
 }
 ```
@@ -160,3 +198,4 @@ bun run test
 - 项目质量入口固定
 - `finish-work` 可以直接执行
 - 后续 CI 也能复用同一组命令
+- 默认测试入口保持快速确定性，长稳态和真实网络测试必须显式执行

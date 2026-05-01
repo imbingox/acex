@@ -103,6 +103,14 @@ await client.market.subscribeL1Book({ exchange, symbol });
 
 `subscribe*()` 会等首条可用快照到达后才 resolve。超时则抛出 `MARKET_STREAM_TIMEOUT`。默认超时 15s，可通过 `CreateClientOptions.market.l1InitialMessageTimeoutMs` 调整。
 
+### 3.2.1 subscribe / unsubscribe 行为
+
+- 同一个 `(exchange, symbol)` 反复调用 `subscribe*()` 是幂等的：已存在的流不会重复创建，只会继续等待原有流进入 ready
+- `unsubscribe*()` 可以和 `subscribe*()` 动态交替调用；退订后该 stream 停止维护，但 `get*()` 仍可读到最后一份快照
+- `unsubscribe*()` 对未订阅目标是安全的 no-op
+- 退订后再次 `subscribe*()` 会重新恢复该 stream 的维护与更新
+- `subscribeL1Book()` 和 `subscribeFundingRate()` 彼此独立；退订其中一个不会影响另一个
+
 ### 3.3 event vs snapshot
 
 `event.snapshot` 是事件发生那一刻的快照。由于事件是异步消费的，你在 `for await` 处理时，SDK 内部状态可能已经更新到下一版。因此：
@@ -324,6 +332,8 @@ await client.market.unsubscribeL1Book({
 
 退订后最后一份快照仍可读，但 `getMarketStatus().activity` 变为 `"inactive"`。
 
+L1 Book 支持动态重复 `subscribe` / `unsubscribe`；对同一个 market 重复 `subscribeL1Book()` 不会重复开流，退订后再次订阅会恢复维护。
+
 ### 5.3 Funding Rate
 
 Funding Rate 当前通过 Binance mark price websocket 实时更新，仅支持永续合约（`MarketDefinition.type === "swap"`）。订阅 spot 或交割合约会抛出 `MARKET_FUNDING_RATE_UNSUPPORTED`。
@@ -360,6 +370,8 @@ for await (const event of client.market.events.fundingRateUpdates({
 ```
 
 字段映射来自 Binance mark price stream：`r` → `fundingRate`，`p` → `markPrice`，`i` → `indexPrice`，`T` → `nextFundingTime`，`E` → `exchangeTs`。
+
+Funding Rate 也支持动态重复 `subscribe` / `unsubscribe`；对同一个 market 重复 `subscribeFundingRate()` 不会重复开流，退订后再次订阅会恢复维护。
 
 ### 5.4 订阅状态
 

@@ -418,6 +418,19 @@ Binance 三套市场体系（Spot / USDⓈ-M / COIN-M）分别对应不同的 RE
 
 每条 `BinanceMarketDefinition` 带 `family` 字段（adapter 内部使用，对外签名仅 `MarketDefinition`）。`createL1BookStream` 根据 `family` 选 WS base URL，URL 是 `<base>/<id>@bookTicker`。`createFundingRateStream` 仅支持 `usdm` / `coinm` 永续市场，URL 是 `<base>/<id>@markPrice@1s`，并把 Binance mark price stream 的 `r/p/i/T/E` 标准化为 `fundingRate/markPrice/indexPrice/nextFundingTime/exchangeTs`。
 
+### 7.1.1 现状与 combined 优化取舍
+
+当前实现对每个 market stream 采用独立 raw websocket：`l1book` 和 `funding rate` 分别建连，不做 combined stream 聚合，也不在一条连接上复用多个 symbol。这样做的好处是实现简单、状态隔离清晰，`subscribe/unsubscribe` 语义也直接；在当前“订阅 symbol 不多”的前提下，连接数和握手开销通常可接受。
+
+后续如果订阅规模明显上涨，再考虑引入 Binance combined stream 或订阅池：
+
+- 把同一 exchange / family 下的多个 stream 合并到少量 websocket
+- 在单连接内维护订阅表，支持动态 `SUBSCRIBE` / `UNSUBSCRIBE`
+- 断线后重放订阅并恢复 ready / freshness 状态
+- 兼容 Binance 单连接 stream 数量与连接频率限制
+
+目前这条优化路径属于“有空间，但不是优先项”。
+
 ### 7.2 统一 symbol 构造
 
 - 现货：`BASE/QUOTE`

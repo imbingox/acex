@@ -154,6 +154,7 @@ export interface CreateOrderRequest {
   type: CreateOrderType;
   amount: string;
   price?: string;
+  postOnly?: boolean;
   clientOrderId?: string;
   reduceOnly?: boolean;
   positionSide?: PositionSide;

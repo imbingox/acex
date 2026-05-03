@@ -297,6 +297,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       type: input.type,
       amount: input.amount,
       price: input.type === "limit" ? input.price : undefined,
+      postOnly: input.type === "limit" ? input.postOnly : undefined,
       clientOrderId: input.clientOrderId,
       reduceOnly: input.reduceOnly,
       positionSide: input.positionSide,

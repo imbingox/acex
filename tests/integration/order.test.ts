@@ -248,6 +248,42 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
   expect(request?.url.searchParams.get("signature")).not.toBeNull();
 });
 
+test("createOrder sends post-only limit orders with Binance GTX timeInForce", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    exchange: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000000000,
+    },
+  });
+
+  await client.start();
+
+  await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+    postOnly: true,
+  });
+
+  const request = requests.find(
+    (entry) =>
+      entry.method === "POST" && entry.url.pathname === "/papi/v1/um/order",
+  );
+  expect(request).toBeDefined();
+  expect(request?.url.searchParams.get("timeInForce")).toBe("GTX");
+});
+
 test("cancelOrder accepts clientOrderId and updates the cached snapshot", async () => {
   const requests = installBinancePrivateAccountInfra();
   const client = createClient({

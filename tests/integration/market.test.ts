@@ -61,6 +61,55 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
   });
 });
 
+test("normalizeOrderInput floors price and amount to market steps", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  await client.market.loadMarkets();
+
+  expect(
+    client.market.normalizeOrderInput({
+      exchange: "binance",
+      symbol: "BTC/USDT:USDT",
+      price: "101000.123456789",
+      amount: "0.010987654321",
+    }),
+  ).toEqual({
+    price: "101000.1",
+    amount: "0.01",
+    rawPrice: "101000.123456789",
+    rawAmount: "0.010987654321",
+    adjusted: true,
+    accepted: true,
+    priceStep: "0.1",
+    amountStep: "0.001",
+    minAmount: "0.001",
+    minNotional: "5",
+  });
+});
+
+test("normalizeOrderInput reports min-notional rejection after normalization", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  await client.market.loadMarkets();
+
+  expect(
+    client.market.normalizeOrderInput({
+      exchange: "binance",
+      symbol: "BTC/USDT:USDT",
+      price: "1000.09",
+      amount: "0.0049",
+    }),
+  ).toMatchObject({
+    price: "1000",
+    amount: "0.004",
+    adjusted: true,
+    accepted: false,
+    rejectReason: "notional_below_min",
+  });
+});
+
 test("market catalog load failure emits an adapter error and wrapped AcexError", async () => {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,

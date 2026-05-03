@@ -103,6 +103,14 @@ await client.market.subscribeL1Book({ exchange, symbol });
 
 `subscribe*()` 会等首条可用快照到达后才 resolve。超时则抛出 `MARKET_STREAM_TIMEOUT`。默认超时 15s，可通过 `CreateClientOptions.market.l1InitialMessageTimeoutMs` 调整。
 
+### 3.2.1 subscribe / unsubscribe 行为
+
+- 同一个 `(exchange, symbol)` 反复调用 `subscribe*()` 是幂等的：已存在的流不会重复创建，只会继续等待原有流进入 ready
+- `unsubscribe*()` 可以和 `subscribe*()` 动态交替调用；退订后该 stream 停止维护，但 `get*()` 仍可读到最后一份快照
+- `unsubscribe*()` 对未订阅目标是安全的 no-op
+- 退订后再次 `subscribe*()` 会重新恢复该 stream 的维护与更新
+- `subscribeL1Book()` 和 `subscribeFundingRate()` 彼此独立；退订其中一个不会影响另一个
+
 ### 3.3 event vs snapshot
 
 `event.snapshot` 是事件发生那一刻的快照。由于事件是异步消费的，你在 `for await` 处理时，SDK 内部状态可能已经更新到下一版。因此：
@@ -216,6 +224,7 @@ interface MarketManager {
   listMarkets(exchange?: Exchange): MarketDefinition[];
   getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
+  normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
 
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
@@ -246,6 +255,60 @@ const allBtcPerp = client.market.getMarkets("BTC/USDT:USDT");
 `getMarkets(symbol)` 严格按完整统一 symbol 匹配。
 
 `MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 `BigNumber`。
+
+归一化下单价格和数量：
+
+```ts
+await client.market.loadMarkets();
+
+const normalized = client.market.normalizeOrderInput({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+  price: "101000.123456789",
+  amount: "0.010987654321",
+});
+
+if (normalized.accepted) {
+  await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: normalized.price,
+    amount: normalized.amount,
+  });
+}
+```
+
+`normalizeOrderInput()` 会按该 market 的 `priceStep` / `amountStep` 向下取整，返回 decimal string，避免浮点科学计数法；并基于归一化后的值检查 `minAmount` / `minNotional`。
+
+如果归一化后的结果不满足最小下单条件，接口不会抛错，而是返回 `accepted: false` 和 `rejectReason`，调用方应避免继续下单：
+
+```ts
+const normalized = client.market.normalizeOrderInput({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+  price: "1000.09",
+  amount: "0.0049",
+});
+
+// 示例返回：
+// {
+//   price: "1000",
+//   amount: "0.004",
+//   rawPrice: "1000.09",
+//   rawAmount: "0.0049",
+//   adjusted: true,
+//   accepted: false,
+//   rejectReason: "notional_below_min",
+//   priceStep: "0.1",
+//   amountStep: "0.001",
+//   minAmount: "0.001",
+//   minNotional: "5"
+// }
+```
+
+`rejectReason` 当前可能是：`price_not_positive`、`amount_not_positive`、`amount_below_min`、`notional_below_min`。
 
 **统一 symbol 约定：**
 
@@ -324,6 +387,8 @@ await client.market.unsubscribeL1Book({
 
 退订后最后一份快照仍可读，但 `getMarketStatus().activity` 变为 `"inactive"`。
 
+L1 Book 支持动态重复 `subscribe` / `unsubscribe`；对同一个 market 重复 `subscribeL1Book()` 不会重复开流，退订后再次订阅会恢复维护。
+
 ### 5.3 Funding Rate
 
 Funding Rate 当前通过 Binance mark price websocket 实时更新，仅支持永续合约（`MarketDefinition.type === "swap"`）。订阅 spot 或交割合约会抛出 `MARKET_FUNDING_RATE_UNSUPPORTED`。
@@ -360,6 +425,8 @@ for await (const event of client.market.events.fundingRateUpdates({
 ```
 
 字段映射来自 Binance mark price stream：`r` → `fundingRate`，`p` → `markPrice`，`i` → `indexPrice`，`T` → `nextFundingTime`，`E` → `exchangeTs`。
+
+Funding Rate 也支持动态重复 `subscribe` / `unsubscribe`；对同一个 market 重复 `subscribeFundingRate()` 不会重复开流，退订后再次订阅会恢复维护。
 
 ### 5.4 订阅状态
 
@@ -543,6 +610,7 @@ const limit = await client.order.createOrder({
   amount: "0.001",
   clientOrderId: "my-order-1", // 可选
   reduceOnly: false,           // 可选
+  postOnly: true,              // 可选：仅限 limit，Binance 映射为 GTX
 });
 
 const market = await client.order.createOrder({
@@ -569,6 +637,8 @@ const hedge = await client.order.createOrder({
 ```
 
 单向持仓模式可以省略 `positionSide`，返回的 snapshot 通常归一成 `"net"`。
+
+`postOnly` 仅对 `limit` 单有效；当前 Binance PAPI UM adapter 会把普通 limit 单映射为 `timeInForce=GTC`，把 `postOnly: true` 映射为 `timeInForce=GTX`。
 
 失败时抛 `ORDER_CREATE_FAILED`；输入本身不合法（比如 limit 单缺 price）抛 `ORDER_INPUT_INVALID`。
 
@@ -810,6 +880,33 @@ interface MarketKeyInput {
   symbol: string;
 }
 
+type DecimalInput = string | number | BigNumber;
+
+type NormalizeOrderInputRejectReason =
+  | "price_not_positive"
+  | "amount_not_positive"
+  | "amount_below_min"
+  | "notional_below_min";
+
+interface NormalizeOrderInputInput extends MarketKeyInput {
+  price: DecimalInput;
+  amount: DecimalInput;
+}
+
+interface NormalizedOrderInput {
+  price: string;
+  amount: string;
+  rawPrice: string;
+  rawAmount: string;
+  adjusted: boolean;
+  accepted: boolean;
+  rejectReason?: NormalizeOrderInputRejectReason;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
+}
+
 interface SubscribeL1BookInput extends MarketKeyInput {}
 
 interface SubscribeFundingRateInput extends MarketKeyInput {}
@@ -952,6 +1049,7 @@ type CreateOrderInput =
       type: "limit";
       price: string;   // decimal string
       amount: string;  // decimal string
+      postOnly?: boolean;
       clientOrderId?: string;
       reduceOnly?: boolean;
       positionSide?: PositionSide;

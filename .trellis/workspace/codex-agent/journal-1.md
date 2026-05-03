@@ -305,3 +305,36 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: 文档补充 market 订阅行为
+
+**Date**: 2026-05-01
+**Task**: 文档补充 market 订阅行为
+**Branch**: `feat/market`
+
+### Summary
+
+补充了 Binance market 的订阅/退订行为说明，记录了当前 raw websocket 方案与 future combined 优化取舍，并完成质量检查。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2516e8a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

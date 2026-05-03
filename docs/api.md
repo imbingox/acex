@@ -224,6 +224,7 @@ interface MarketManager {
   listMarkets(exchange?: Exchange): MarketDefinition[];
   getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
+  normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
 
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
@@ -254,6 +255,60 @@ const allBtcPerp = client.market.getMarkets("BTC/USDT:USDT");
 `getMarkets(symbol)` 严格按完整统一 symbol 匹配。
 
 `MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 `BigNumber`。
+
+归一化下单价格和数量：
+
+```ts
+await client.market.loadMarkets();
+
+const normalized = client.market.normalizeOrderInput({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+  price: "101000.123456789",
+  amount: "0.010987654321",
+});
+
+if (normalized.accepted) {
+  await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: normalized.price,
+    amount: normalized.amount,
+  });
+}
+```
+
+`normalizeOrderInput()` 会按该 market 的 `priceStep` / `amountStep` 向下取整，返回 decimal string，避免浮点科学计数法；并基于归一化后的值检查 `minAmount` / `minNotional`。
+
+如果归一化后的结果不满足最小下单条件，接口不会抛错，而是返回 `accepted: false` 和 `rejectReason`，调用方应避免继续下单：
+
+```ts
+const normalized = client.market.normalizeOrderInput({
+  exchange: "binance",
+  symbol: "BTC/USDT:USDT",
+  price: "1000.09",
+  amount: "0.0049",
+});
+
+// 示例返回：
+// {
+//   price: "1000",
+//   amount: "0.004",
+//   rawPrice: "1000.09",
+//   rawAmount: "0.0049",
+//   adjusted: true,
+//   accepted: false,
+//   rejectReason: "notional_below_min",
+//   priceStep: "0.1",
+//   amountStep: "0.001",
+//   minAmount: "0.001",
+//   minNotional: "5"
+// }
+```
+
+`rejectReason` 当前可能是：`price_not_positive`、`amount_not_positive`、`amount_below_min`、`notional_below_min`。
 
 **统一 symbol 约定：**
 
@@ -555,6 +610,7 @@ const limit = await client.order.createOrder({
   amount: "0.001",
   clientOrderId: "my-order-1", // 可选
   reduceOnly: false,           // 可选
+  postOnly: true,              // 可选：仅限 limit，Binance 映射为 GTX
 });
 
 const market = await client.order.createOrder({
@@ -581,6 +637,8 @@ const hedge = await client.order.createOrder({
 ```
 
 单向持仓模式可以省略 `positionSide`，返回的 snapshot 通常归一成 `"net"`。
+
+`postOnly` 仅对 `limit` 单有效；当前 Binance PAPI UM adapter 会把普通 limit 单映射为 `timeInForce=GTC`，把 `postOnly: true` 映射为 `timeInForce=GTX`。
 
 失败时抛 `ORDER_CREATE_FAILED`；输入本身不合法（比如 limit 单缺 price）抛 `ORDER_INPUT_INVALID`。
 
@@ -822,6 +880,33 @@ interface MarketKeyInput {
   symbol: string;
 }
 
+type DecimalInput = string | number | BigNumber;
+
+type NormalizeOrderInputRejectReason =
+  | "price_not_positive"
+  | "amount_not_positive"
+  | "amount_below_min"
+  | "notional_below_min";
+
+interface NormalizeOrderInputInput extends MarketKeyInput {
+  price: DecimalInput;
+  amount: DecimalInput;
+}
+
+interface NormalizedOrderInput {
+  price: string;
+  amount: string;
+  rawPrice: string;
+  rawAmount: string;
+  adjusted: boolean;
+  accepted: boolean;
+  rejectReason?: NormalizeOrderInputRejectReason;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
+}
+
 interface SubscribeL1BookInput extends MarketKeyInput {}
 
 interface SubscribeFundingRateInput extends MarketKeyInput {}
@@ -964,6 +1049,7 @@ type CreateOrderInput =
       type: "limit";
       price: string;   // decimal string
       amount: string;  // decimal string
+      postOnly?: boolean;
       clientOrderId?: string;
       reduceOnly?: boolean;
       positionSide?: PositionSide;

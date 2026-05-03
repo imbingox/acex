@@ -31,6 +31,8 @@ import type {
   MarketKeyInput,
   MarketManager,
   MarketStatusChangedEvent,
+  NormalizedOrderInput,
+  NormalizeOrderInputInput,
   SubscribeFundingRateInput,
   SubscribeL1BookInput,
   SubscriptionActivity,
@@ -89,6 +91,17 @@ function cloneFundingRate(snapshot: FundingRateSnapshot): FundingRateSnapshot {
 
 function cloneMarketDefinition(definition: MarketDefinition): MarketDefinition {
   return { ...definition, raw: { ...definition.raw } };
+}
+
+function floorToStep(value: BigNumber, step: BigNumber): BigNumber {
+  if (step.isLessThanOrEqualTo(0)) {
+    return value;
+  }
+  return value.dividedToIntegerBy(step).multipliedBy(step);
+}
+
+function normalizeDecimalInput(value: BigNumber): string {
+  return value.isFinite() ? value.toFixed() : value.toString();
 }
 
 export class MarketManagerImpl
@@ -239,6 +252,64 @@ export class MarketManagerImpl
     return filtered
       .sort((left, right) => left.symbol.localeCompare(right.symbol))
       .map((market) => cloneMarketDefinition(market));
+  }
+
+  normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput {
+    const market = this.resolveLoadedMarket(input);
+    const rawPrice = new BigNumber(input.price);
+    const rawAmount = new BigNumber(input.amount);
+    const price = floorToStep(rawPrice, market.priceStep);
+    const amount = floorToStep(rawAmount, market.amountStep);
+
+    const normalized: NormalizedOrderInput = {
+      price: normalizeDecimalInput(price),
+      amount: normalizeDecimalInput(amount),
+      rawPrice: normalizeDecimalInput(rawPrice),
+      rawAmount: normalizeDecimalInput(rawAmount),
+      adjusted: !price.isEqualTo(rawPrice) || !amount.isEqualTo(rawAmount),
+      accepted: true,
+      priceStep: market.priceStep.toFixed(),
+      amountStep: market.amountStep.toFixed(),
+      minAmount: market.minAmount?.toFixed(),
+      minNotional: market.minNotional?.toFixed(),
+    };
+
+    if (!price.isFinite() || price.isLessThanOrEqualTo(0)) {
+      return {
+        ...normalized,
+        accepted: false,
+        rejectReason: "price_not_positive",
+      };
+    }
+
+    if (!amount.isFinite() || amount.isLessThanOrEqualTo(0)) {
+      return {
+        ...normalized,
+        accepted: false,
+        rejectReason: "amount_not_positive",
+      };
+    }
+
+    if (market.minAmount && amount.isLessThan(market.minAmount)) {
+      return {
+        ...normalized,
+        accepted: false,
+        rejectReason: "amount_below_min",
+      };
+    }
+
+    if (market.minNotional) {
+      const notional = amount.multipliedBy(price);
+      if (notional.isLessThan(market.minNotional)) {
+        return {
+          ...normalized,
+          accepted: false,
+          rejectReason: "notional_below_min",
+        };
+      }
+    }
+
+    return normalized;
   }
 
   getL1Book(key: MarketKeyInput): L1Book | undefined {
@@ -406,6 +477,20 @@ export class MarketManagerImpl
       throw this.createError(
         "MARKET_INACTIVE",
         `Inactive market symbol: ${input.symbol}`,
+        { exchange: input.exchange, symbol: input.symbol },
+        "market",
+      );
+    }
+
+    return market;
+  }
+
+  private resolveLoadedMarket(input: MarketKeyInput): MarketDefinition {
+    const market = this.definitions.get(marketKey(input));
+    if (!market) {
+      throw this.createError(
+        "MARKET_NOT_FOUND",
+        `Unknown market symbol: ${input.symbol}`,
         { exchange: input.exchange, symbol: input.symbol },
         "market",
       );

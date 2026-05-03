@@ -551,7 +551,12 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         type: encodeOrderType(request.type),
         quantity: request.amount,
         price: request.price,
-        timeInForce: request.type === "limit" ? "GTC" : undefined,
+        timeInForce:
+          request.type === "limit"
+            ? request.postOnly === true
+              ? "GTX"
+              : "GTC"
+            : undefined,
         newClientOrderId: request.clientOrderId,
         reduceOnly:
           request.reduceOnly === undefined

@@ -66,6 +66,7 @@ interface CreateOrderInputBase {
 export interface CreateLimitOrderInput extends CreateOrderInputBase {
   type: "limit";
   price: string;
+  postOnly?: boolean;
 }
 
 export interface CreateMarketOrderInput extends CreateOrderInputBase {

@@ -57,6 +57,33 @@ export interface MarketKeyInput {
   symbol: string;
 }
 
+export type DecimalInput = string | number | BigNumber;
+
+export type NormalizeOrderInputRejectReason =
+  | "price_not_positive"
+  | "amount_not_positive"
+  | "amount_below_min"
+  | "notional_below_min";
+
+export interface NormalizeOrderInputInput extends MarketKeyInput {
+  price: DecimalInput;
+  amount: DecimalInput;
+}
+
+export interface NormalizedOrderInput {
+  price: string;
+  amount: string;
+  rawPrice: string;
+  rawAmount: string;
+  adjusted: boolean;
+  accepted: boolean;
+  rejectReason?: NormalizeOrderInputRejectReason;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
+}
+
 export interface SubscribeL1BookInput extends MarketKeyInput {}
 
 export interface SubscribeFundingRateInput extends MarketKeyInput {}
@@ -144,6 +171,7 @@ export interface MarketManager {
   getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
   listMarkets(exchange?: Exchange): MarketDefinition[];
+  normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getL1Books(symbol: string): L1Book[];
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;

@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.3.0-beta.1
+
+### Minor Changes
+
+- 9dad2f0: Add post-only limit order support and market order input normalization. Binance PAPI UM limit orders now map `postOnly: true` to `timeInForce=GTX`, and callers can normalize price and amount strings with `market.normalizeOrderInput()` before placing orders.
+
 ## 0.3.0-beta.0
 
 ### Minor Changes

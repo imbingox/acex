@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
-- **Last Active**: 2026-05-01
+- **Total Sessions**: 10
+- **Last Active**: 2026-05-03
 <!-- @@@/auto:current-status -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-05-03 | Post-only orders and input normalization | `9dad2f0` | `feat/market` |
 | 9 | 2026-05-01 | 文档补充 market 订阅行为 | `2516e8a` | `feat/market` |
 | 8 | 2026-04-30 | Restructure test suites and CI | `0357dcc`, `97146d1` | `feat/test` |
 | 7 | 2026-04-30 | 补充 funding 聚合 changeset | `680e315` | `main` |

@@ -338,3 +338,36 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 10: Post-only orders and input normalization
+
+**Date**: 2026-05-03
+**Task**: Post-only orders and input normalization
+**Branch**: `feat/market`
+
+### Summary
+
+为下单链路新增 postOnly limit 支持，Binance PAPI UM 映射为 GTX；新增 market.normalizeOrderInput() 以按交易所 priceStep/amountStep 归一化下单价格和数量，并返回最小下单条件拒绝原因；补充 changeset、API 文档、集成测试并创建 PR #16。验证通过 lint、type-check、全量 bun run test。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9dad2f0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

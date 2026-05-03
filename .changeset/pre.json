@@ -4,5 +4,5 @@
   "initialVersions": {
     "@imbingox/acex": "0.2.0"
   },
-  "changesets": ["funding-aggregators"]
+  "changesets": ["funding-aggregators", "order-postonly-normalization"]
 }

@@ -3,7 +3,7 @@ import type {
   StreamHandle,
 } from "../adapters/types.ts";
 import { AcexError } from "../errors.ts";
-import type { AccountRuntimeOptions, Exchange } from "../types/index.ts";
+import type { AccountRuntimeOptions, Venue } from "../types/index.ts";
 import type {
   ClientContext,
   PrivateAccountDataConsumer,
@@ -13,7 +13,7 @@ import type {
 
 interface PrivateSubscriptionRecord {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   accountSubscribed: boolean;
   ordersSubscribed: boolean;
   accountReady: boolean;
@@ -30,24 +30,27 @@ const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
 
 export class PrivateSubscriptionCoordinator {
   private readonly context: ClientContext;
-  private readonly adapter: PrivateUserDataAdapter;
+  private readonly adapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly accountConsumer: PrivateAccountDataConsumer;
   private readonly orderConsumer: PrivateOrderDataConsumer;
   private readonly streamOpenTimeoutMs: number;
   private readonly streamReconnectDelayMs: number;
   private readonly streamReconnectMaxDelayMs: number;
   private readonly listenKeyKeepAliveMs: number;
+  private readonly juplendPollIntervalMs?: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
   constructor(
     context: ClientContext,
-    adapter: PrivateUserDataAdapter,
+    adapters: PrivateUserDataAdapter[],
     accountConsumer: PrivateAccountDataConsumer,
     orderConsumer: PrivateOrderDataConsumer,
     options: AccountRuntimeOptions = {},
   ) {
     this.context = context;
-    this.adapter = adapter;
+    this.adapters = new Map(
+      adapters.map((adapter) => [adapter.venue, adapter]),
+    );
     this.accountConsumer = accountConsumer;
     this.orderConsumer = orderConsumer;
     this.streamOpenTimeoutMs =
@@ -59,6 +62,7 @@ export class PrivateSubscriptionCoordinator {
       DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS;
     this.listenKeyKeepAliveMs =
       options.listenKeyKeepAliveMs ?? DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
+    this.juplendPollIntervalMs = options.juplend?.pollIntervalMs;
   }
 
   async subscribeAccountFeed(accountId: string): Promise<void> {
@@ -67,12 +71,17 @@ export class PrivateSubscriptionCoordinator {
     const needsPending = !record.stream && !record.startPromise;
     record.accountSubscribed = true;
     if (needsPending) {
-      this.accountConsumer.onPrivateAccountPending(accountId, record.exchange);
+      this.accountConsumer.onPrivateAccountPending(accountId, record.venue);
     }
 
     try {
-      await this.ensureStream(record, account);
-      await this.bootstrapAccount(record, account);
+      if (record.venue === "juplend") {
+        await this.bootstrapAccount(record, account);
+        await this.ensureStream(record, account);
+      } else {
+        await this.ensureStream(record, account);
+        await this.bootstrapAccount(record, account);
+      }
     } catch (error) {
       record.accountSubscribed = false;
       this.closeIfUnused(record);
@@ -96,7 +105,7 @@ export class PrivateSubscriptionCoordinator {
     const needsPending = !record.stream && !record.startPromise;
     record.ordersSubscribed = true;
     if (needsPending) {
-      this.orderConsumer.onPrivateOrderPending(accountId, record.exchange);
+      this.orderConsumer.onPrivateOrderPending(accountId, record.venue);
     }
 
     try {
@@ -128,13 +137,13 @@ export class PrivateSubscriptionCoordinator {
       if (record.accountSubscribed) {
         this.accountConsumer.onPrivateAccountPending(
           record.accountId,
-          record.exchange,
+          record.venue,
         );
       }
       if (record.ordersSubscribed) {
         this.orderConsumer.onPrivateOrderPending(
           record.accountId,
-          record.exchange,
+          record.venue,
         );
       }
 
@@ -165,10 +174,10 @@ export class PrivateSubscriptionCoordinator {
     }
 
     if (record.accountSubscribed) {
-      this.accountConsumer.onPrivateAccountPending(accountId, record.exchange);
+      this.accountConsumer.onPrivateAccountPending(accountId, record.venue);
     }
     if (record.ordersSubscribed) {
-      this.orderConsumer.onPrivateOrderPending(accountId, record.exchange);
+      this.orderConsumer.onPrivateOrderPending(accountId, record.venue);
     }
 
     void this.resumeRecord(record);
@@ -179,9 +188,14 @@ export class PrivateSubscriptionCoordinator {
     this.closeStream(record);
 
     try {
-      await this.ensureStream(record, account);
-      if (record.accountSubscribed) {
+      if (record.venue === "juplend" && record.accountSubscribed) {
         await this.bootstrapAccount(record, account);
+        await this.ensureStream(record, account);
+      } else {
+        await this.ensureStream(record, account);
+        if (record.accountSubscribed) {
+          await this.bootstrapAccount(record, account);
+        }
       }
       if (record.ordersSubscribed) {
         await this.bootstrapOrders(record, account);
@@ -193,14 +207,26 @@ export class PrivateSubscriptionCoordinator {
 
   private getAccount(accountId: string): RegisteredAccountRecord {
     const account = this.context.getRegisteredAccount(accountId);
-    if (account.exchange !== this.adapter.exchange) {
+    if (!this.adapters.has(account.venue)) {
       throw new AcexError(
-        "EXCHANGE_NOT_SUPPORTED",
-        `Exchange is not supported yet: ${account.exchange}`,
+        "VENUE_NOT_SUPPORTED",
+        `Venue is not supported yet: ${account.venue}`,
       );
     }
 
     return account;
+  }
+
+  private getAdapter(venue: Venue): PrivateUserDataAdapter {
+    const adapter = this.adapters.get(venue);
+    if (!adapter) {
+      throw new AcexError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue is not supported yet: ${venue}`,
+      );
+    }
+
+    return adapter;
   }
 
   private getOrCreateRecord(
@@ -213,7 +239,7 @@ export class PrivateSubscriptionCoordinator {
 
     const record: PrivateSubscriptionRecord = {
       accountId: account.accountId,
-      exchange: account.exchange,
+      venue: account.venue,
       accountSubscribed: false,
       ordersSubscribed: false,
       accountReady: false,
@@ -275,9 +301,22 @@ export class PrivateSubscriptionCoordinator {
       );
     }
 
-    const stream = this.adapter.createPrivateStream(
+    const adapter = this.getAdapter(record.venue);
+    const stream = adapter.createPrivateStream(
       credentials,
       {
+        onAccountSnapshot: (snapshot) => {
+          if (!record.accountSubscribed) {
+            return;
+          }
+
+          record.accountReady = true;
+          this.accountConsumer.onPrivateAccountBootstrap(
+            record.accountId,
+            record.venue,
+            snapshot,
+          );
+        },
         onAccountUpdate: (update) => {
           if (!record.accountSubscribed) {
             return;
@@ -286,7 +325,7 @@ export class PrivateSubscriptionCoordinator {
           record.accountReady = true;
           this.accountConsumer.onPrivateAccountUpdate(
             record.accountId,
-            record.exchange,
+            record.venue,
             update,
           );
         },
@@ -298,7 +337,7 @@ export class PrivateSubscriptionCoordinator {
           record.orderReady = true;
           this.orderConsumer.onPrivateOrderUpdate(
             record.accountId,
-            record.exchange,
+            record.venue,
             update,
           );
         },
@@ -306,7 +345,7 @@ export class PrivateSubscriptionCoordinator {
           if (record.accountSubscribed) {
             this.accountConsumer.onPrivateAccountStreamState(
               record.accountId,
-              record.exchange,
+              record.venue,
               {
                 runtimeStatus: "reconnecting",
                 ready: record.accountReady,
@@ -317,7 +356,7 @@ export class PrivateSubscriptionCoordinator {
           if (record.ordersSubscribed) {
             this.orderConsumer.onPrivateOrderStreamState(
               record.accountId,
-              record.exchange,
+              record.venue,
               {
                 runtimeStatus: "reconnecting",
                 ready: record.orderReady,
@@ -338,8 +377,19 @@ export class PrivateSubscriptionCoordinator {
         onError: (error) => {
           this.context.publishRuntimeError("adapter", error, {
             accountId: record.accountId,
-            exchange: record.exchange,
+            venue: record.venue,
           });
+          if (record.accountSubscribed) {
+            this.accountConsumer.onPrivateAccountStreamState(
+              record.accountId,
+              record.venue,
+              {
+                runtimeStatus: "degraded",
+                ready: record.accountReady,
+                reason: "http_failed",
+              },
+            );
+          }
         },
       },
       {
@@ -347,6 +397,7 @@ export class PrivateSubscriptionCoordinator {
         reconnectDelayMs: this.streamReconnectDelayMs,
         reconnectMaxDelayMs: this.streamReconnectMaxDelayMs,
         listenKeyKeepAliveMs: this.listenKeyKeepAliveMs,
+        juplendPollIntervalMs: this.juplendPollIntervalMs,
         now: () => this.context.now(),
       },
       account.options,
@@ -361,16 +412,16 @@ export class PrivateSubscriptionCoordinator {
       const runtimeError =
         error instanceof Error
           ? error
-          : new Error("Failed to open Binance private stream");
+          : new Error(`Failed to open ${record.venue} private stream`);
       this.context.publishRuntimeError("adapter", runtimeError, {
         accountId: record.accountId,
-        exchange: record.exchange,
+        venue: record.venue,
       });
 
       if (record.accountSubscribed) {
         this.accountConsumer.onPrivateAccountStreamState(
           record.accountId,
-          record.exchange,
+          record.venue,
           {
             runtimeStatus: "degraded",
             ready: record.accountReady,
@@ -381,7 +432,7 @@ export class PrivateSubscriptionCoordinator {
       if (record.ordersSubscribed) {
         this.orderConsumer.onPrivateOrderStreamState(
           record.accountId,
-          record.exchange,
+          record.venue,
           {
             runtimeStatus: "degraded",
             ready: record.orderReady,
@@ -402,16 +453,13 @@ export class PrivateSubscriptionCoordinator {
     if (record.accountSubscribed) {
       this.accountConsumer.onPrivateAccountPending(
         record.accountId,
-        record.exchange,
+        record.venue,
       );
       await this.bootstrapAccount(record, account);
     }
 
     if (record.ordersSubscribed) {
-      this.orderConsumer.onPrivateOrderPending(
-        record.accountId,
-        record.exchange,
-      );
+      this.orderConsumer.onPrivateOrderPending(record.accountId, record.venue);
       await this.bootstrapOrders(record, account);
     }
   }
@@ -421,9 +469,9 @@ export class PrivateSubscriptionCoordinator {
     account: RegisteredAccountRecord,
   ): Promise<void> {
     try {
-      const bootstrap = await this.adapter.bootstrapAccount(
+      const bootstrap = await this.getAdapter(record.venue).bootstrapAccount(
         account.credentials ?? {},
-        account.options,
+        { ...account.options, accountId: account.accountId },
       );
       if (!record.accountSubscribed) {
         return;
@@ -432,7 +480,7 @@ export class PrivateSubscriptionCoordinator {
       record.accountReady = true;
       this.accountConsumer.onPrivateAccountBootstrap(
         record.accountId,
-        record.exchange,
+        record.venue,
         bootstrap,
       );
     } catch (error) {
@@ -441,24 +489,28 @@ export class PrivateSubscriptionCoordinator {
         "adapter",
         error instanceof Error
           ? error
-          : new Error("Failed to bootstrap Binance private account state"),
+          : new Error(
+              `Failed to bootstrap ${record.venue} private account state`,
+            ),
         {
           accountId: record.accountId,
-          exchange: record.exchange,
+          venue: record.venue,
         },
       );
       this.accountConsumer.onPrivateAccountStreamState(
         record.accountId,
-        record.exchange,
+        record.venue,
         {
           runtimeStatus: "degraded",
           ready: false,
-          reason: "auth_failed",
+          reason: record.venue === "juplend" ? "http_failed" : "auth_failed",
         },
       );
+      const reason =
+        error instanceof Error && error.message ? ` (${error.message})` : "";
       throw new AcexError(
         "ACCOUNT_BOOTSTRAP_FAILED",
-        `Failed to bootstrap account data: ${record.accountId}`,
+        `Failed to bootstrap account data: ${record.accountId}${reason}`,
       );
     }
   }
@@ -468,7 +520,7 @@ export class PrivateSubscriptionCoordinator {
     account: RegisteredAccountRecord,
   ): Promise<void> {
     try {
-      const snapshots = await this.adapter.bootstrapOpenOrders(
+      const snapshots = await this.getAdapter(record.venue).bootstrapOpenOrders(
         account.credentials ?? {},
         account.options,
       );
@@ -479,7 +531,7 @@ export class PrivateSubscriptionCoordinator {
       record.orderReady = true;
       this.orderConsumer.onPrivateOrderBootstrap(
         record.accountId,
-        record.exchange,
+        record.venue,
         snapshots,
       );
     } catch (error) {
@@ -488,15 +540,17 @@ export class PrivateSubscriptionCoordinator {
         "adapter",
         error instanceof Error
           ? error
-          : new Error("Failed to bootstrap Binance private order state"),
+          : new Error(
+              `Failed to bootstrap ${record.venue} private order state`,
+            ),
         {
           accountId: record.accountId,
-          exchange: record.exchange,
+          venue: record.venue,
         },
       );
       this.orderConsumer.onPrivateOrderStreamState(
         record.accountId,
-        record.exchange,
+        record.venue,
         {
           runtimeStatus: "degraded",
           ready: false,

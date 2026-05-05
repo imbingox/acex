@@ -18,10 +18,10 @@ import type {
   AcexInternalError,
   ClientStatus,
   CreateClientOptions,
-  Exchange,
   RegisterAccountInput,
   RegisterAccountResult,
   StopOptions,
+  Venue,
 } from "./shared.ts";
 
 export interface ClientHealthSnapshot {
@@ -46,7 +46,7 @@ export type HealthEvent =
 
 export interface HealthEventFilter {
   scope?: "client" | "market" | "account" | "order";
-  exchange?: Exchange;
+  venue?: Venue;
   accountId?: string;
   symbol?: string;
 }

@@ -2,7 +2,7 @@
 
 `acex` 是一个面向交易场景的 **状态型** 多交易所 SDK。调用方持有一个 `AcexClient`，通过统一的 `market` / `account` / `order` manager 读取最新快照、消费增量事件、执行下单撤单命令；SDK 内部负责本地缓存、ready barrier、websocket 生命周期和自动重连，调用方不需要自己处理。
 
-当前 MVP 只落地 Binance（Spot + USDⓈ-M + COIN-M 行情，PAPI UM 私有链路）。
+当前 MVP 落地 Binance（Spot + USDⓈ-M + COIN-M 行情，PAPI UM 私有链路）以及 Juplend（Jupiter Lend 只读借贷账户视图）。
 
 ## 安装
 
@@ -21,12 +21,12 @@ const client = createClient();
 await client.start();
 
 await client.market.subscribeL1Book({
-  exchange: "binance",
+  venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
 
 const book = client.market.getL1Book({
-  exchange: "binance",
+  venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
 const books = client.market.getL1Books("BTC/USDT:USDT");
@@ -35,12 +35,12 @@ console.log(`venues=${books.length}`);
 console.log(`book freshness=${book?.status.freshness}`);
 
 await client.market.subscribeFundingRate({
-  exchange: "binance",
+  venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
 
 const funding = client.market.getFundingRate({
-  exchange: "binance",
+  venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
 const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
@@ -48,7 +48,7 @@ console.log(`funding=${funding?.fundingRate.toFixed()}`);
 console.log(`funding venues=${fundingRates.length}`);
 
 for await (const event of client.market.events.l1BookUpdates({
-  exchange: "binance",
+  venue: "binance",
   symbol: "BTC/USDT:USDT",
 })) {
   console.log(event.snapshot.bidPrice.toFixed());
@@ -58,41 +58,61 @@ for await (const event of client.market.events.l1BookUpdates({
 await client.stop();
 ```
 
-### 账户与订单
+### 同一个 client 同时使用 Binance + Juplend
+
+`createClient({ account: { juplend: { pollIntervalMs } } })` 只是配置 Juplend 账户的 polling 间隔，不代表这个 client 只能注册 Juplend。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。
 
 ```ts
-const client = createClient();
+const client = createClient({
+  account: {
+    juplend: {
+      pollIntervalMs: 30_000,
+    },
+  },
+});
 await client.start();
 
 await client.registerAccount({
   accountId: "main-binance",
-  exchange: "binance",
+  venue: "binance",
   credentials: {
     apiKey: process.env.BINANCE_PAPI_API_KEY,
     secret: process.env.BINANCE_PAPI_SECRET,
   },
 });
 
+await client.registerAccount({
+  accountId: "jup-loop-a",
+  venue: "juplend",
+  credentials: {
+    apiKey: process.env.JUPITER_API_KEY!,
+  },
+  options: {
+    walletAddress: "<solana-wallet-address>",
+    positionId: "<optional-nft-position-id>",
+  },
+});
+
+await client.account.subscribeAccount({ accountId: "jup-loop-a" });
 await client.account.subscribeAccount({ accountId: "main-binance" });
 await client.order.subscribeOrders({ accountId: "main-binance" });
 
-const created = await client.order.createOrder({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  side: "buy",
-  type: "limit",
-  price: "71830.6",
-  amount: "0.001",
-});
+const binanceRisk = client.account.getRiskSnapshot("main-binance");
+const juplendRisk = client.account.getRiskSnapshot("jup-loop-a");
+const juplendBalances = client.account.getBalances("jup-loop-a");
 
-await client.order.cancelOrder({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  orderId: created.orderId,
+for (const balance of juplendBalances) {
+  console.log(balance.asset, balance.lending?.netAsset.toFixed());
+}
+console.log({
+  binanceRiskRatio: binanceRisk?.riskRatio?.toFixed(),
+  juplendRiskRatio: juplendRisk?.riskRatio?.toFixed(),
 });
 
 await client.stop();
 ```
+
+Juplend 使用 Jupiter Portfolio API 读取 Solana 钱包的借贷仓位，不需要私钥，也不支持 supply / borrow / repay / withdraw 等写操作。`accountId` 是你自定义的 SDK 账户名；Solana 钱包地址放在 `options.walletAddress`。如果只想观察某个 Juplend NFT position，可传 `options.positionId`。
 
 价格、数量等输出字段统一是 `BigNumber`；`createOrder()` 的 `price` / `amount` 输入仍接受 decimal string。详见手册 [§3 核心概念](./docs/api.md#3-核心概念)。
 
@@ -109,8 +129,9 @@ await client.stop();
 
 ## 当前限制
 
-- 运行时只支持 `binance`；`okx` / `bybit` / `gate` 仅类型定义
-- 私有链路仅 Binance PAPI UM（统一账户 / Portfolio Margin）
+- 运行时 market/order 能力只支持 `binance`；`okx` / `bybit` / `gate` 仅类型定义
+- 账户视图支持 Binance PAPI UM 与 Juplend 只读借贷账户
+- Juplend 只读，不支持订单和链上写操作；token 数量来自 USD / oracle price 反算
 - Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；不支持现货和交割合约
 - `createOrder()` 只支持 `limit` / `market`；条件单、改单、账户级全撤不支持
 - 双向持仓账户下单时必须显式传 `positionSide`
@@ -141,7 +162,7 @@ bun run test
 
 - `tests/support/test-utils.ts`：通用 fake WebSocket、事件等待、Response helper 和全局清理。
 - `tests/support/exchanges/binance.ts`：Binance 专用 REST/WS fixtures 与 installer。
-- 新增交易所时，优先新增 `tests/support/exchanges/<exchange>.ts`，复用通用 helper，避免把交易所 payload 写进通用测试工具。
+- 新增交易所时，优先新增 `tests/support/exchanges/<venue>.ts`，复用通用 helper，避免把交易所 payload 写进通用测试工具。
 
 GitHub Actions 的 `CI` workflow 会在 PR 和 `main` push 时运行 lint、type-check、unit、integration；release workflow 继续复用 `bun run test`，不会执行 soak/live。
 
@@ -154,6 +175,7 @@ bun run test:live:market:smoke
 bun run test:live:market:soak
 bun run test:live:account:smoke
 bun run test:live:account:soak
+bun run test:live:juplend:smoke
 bun run test:live:order:smoke
 bun run test:live:order:soak
 ```
@@ -167,7 +189,15 @@ bun run test:live:order:soak
 
 - `market`：`loadMarkets()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
 - `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
+- `juplend`：Jupiter Portfolio API / vault 元数据连通性、lending balance facet、账户级 `riskRatio`、可选 `--position-id` 过滤单个 NFT position
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连
+
+Juplend live smoke 示例：
+
+```bash
+JUPITER_API_KEY=... JUPLEND_WALLET_ADDRESS=<wallet> bun run test:live:juplend -- --show-amounts
+JUPITER_API_KEY=... bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --show-amounts
+```
 
 ### 发布流程
 

@@ -15,7 +15,7 @@ import {
 } from "./market-catalog.ts";
 
 export class BinanceMarketAdapter implements MarketAdapter {
-  readonly exchange = "binance" as const;
+  readonly venue = "binance" as const;
 
   private readonly definitions = new Map<string, BinanceMarketDefinition>();
 

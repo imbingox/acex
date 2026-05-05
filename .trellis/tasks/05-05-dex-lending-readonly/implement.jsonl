@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "5 层架构约束 — 全局 rename 不得跨层引入新依赖"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "类型定义位置、显式返回类型、避免宽化 — rename 期间保证类型边界"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "adapter 契约 — Binance PAPI riskRatio 转换逻辑位于 private-adapter 内部"}
+{"file": ".trellis/tasks/05-05-dex-lending-readonly/prd.md", "reason": "本任务 PRD — ADR-2 / ADR-5 定义 rename 范围与风控公式"}

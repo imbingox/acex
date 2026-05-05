@@ -18,7 +18,6 @@ import { AcexError } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
 import type {
-  Exchange,
   FundingRateSnapshot,
   FundingRateUpdatedEvent,
   L1Book,
@@ -36,6 +35,7 @@ import type {
   SubscribeFundingRateInput,
   SubscribeL1BookInput,
   SubscriptionActivity,
+  Venue,
 } from "../types/index.ts";
 
 export interface MarketManagerOptions {
@@ -46,7 +46,7 @@ export interface MarketManagerOptions {
 }
 
 interface MarketRecord {
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   market?: MarketDefinition;
   l1Book?: L1Book;
@@ -68,7 +68,7 @@ const DEFAULT_L1_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_L1_RECONNECT_MAX_DELAY_MS = 10_000;
 
 function marketKey(input: MarketKeyInput): string {
-  return `${input.exchange}:${input.symbol}`;
+  return `${input.venue}:${input.symbol}`;
 }
 
 function cloneMarketStatus(status: MarketDataStatus): MarketDataStatus {
@@ -169,7 +169,7 @@ export class MarketManagerImpl
     this.context.assertStarted();
     const market = await this.resolveMarketDefinition(input);
     const record = this.getOrCreateRecord({
-      exchange: input.exchange,
+      venue: input.venue,
       symbol: market.symbol,
     });
 
@@ -202,7 +202,7 @@ export class MarketManagerImpl
     const market = await this.resolveMarketDefinition(input);
     this.assertFundingRateSupported(market);
     const record = this.getOrCreateRecord({
-      exchange: input.exchange,
+      venue: input.venue,
       symbol: market.symbol,
     });
 
@@ -232,22 +232,22 @@ export class MarketManagerImpl
     this.recomputeAndPublishStatus(record, this.context.now());
   }
 
-  getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined {
-    const market = this.definitions.get(marketKey({ exchange, symbol }));
+  getMarket(venue: Venue, symbol: string): MarketDefinition | undefined {
+    const market = this.definitions.get(marketKey({ venue, symbol }));
     return market ? cloneMarketDefinition(market) : undefined;
   }
 
   getMarkets(symbol: string): MarketDefinition[] {
     return [...this.definitions.values()]
       .filter((market) => market.symbol === symbol)
-      .sort((left, right) => left.exchange.localeCompare(right.exchange))
+      .sort((left, right) => left.venue.localeCompare(right.venue))
       .map((market) => cloneMarketDefinition(market));
   }
 
-  listMarkets(exchange?: Exchange): MarketDefinition[] {
+  listMarkets(venue?: Venue): MarketDefinition[] {
     const values = [...this.definitions.values()];
-    const filtered = exchange
-      ? values.filter((market) => market.exchange === exchange)
+    const filtered = venue
+      ? values.filter((market) => market.venue === venue)
       : values;
     return filtered
       .sort((left, right) => left.symbol.localeCompare(right.symbol))
@@ -324,7 +324,7 @@ export class MarketManagerImpl
           record.symbol === symbol && Boolean(record.l1Book),
       )
       .map((record) => cloneL1Book(record.l1Book))
-      .sort((left, right) => left.exchange.localeCompare(right.exchange));
+      .sort((left, right) => left.venue.localeCompare(right.venue));
   }
 
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined {
@@ -341,7 +341,7 @@ export class MarketManagerImpl
           record.symbol === symbol && Boolean(record.fundingRate),
       )
       .map((record) => cloneFundingRate(record.fundingRate))
-      .sort((left, right) => left.exchange.localeCompare(right.exchange));
+      .sort((left, right) => left.venue.localeCompare(right.venue));
   }
 
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined {
@@ -406,8 +406,8 @@ export class MarketManagerImpl
     return [...this.records.values()]
       .map((record) => cloneMarketStatus(record.status))
       .sort((left, right) =>
-        `${left.exchange}:${left.symbol}`.localeCompare(
-          `${right.exchange}:${right.symbol}`,
+        `${left.venue}:${left.symbol}`.localeCompare(
+          `${right.venue}:${right.symbol}`,
         ),
       );
   }
@@ -450,17 +450,17 @@ export class MarketManagerImpl
         error instanceof Error
           ? error
           : new Error("Unknown catalog load failure"),
-        { exchange: this.adapter.exchange },
+        { venue: this.adapter.venue },
       );
       throw wrapped;
     }
   }
 
   private async resolveMarketDefinition(input: {
-    exchange: Exchange;
+    venue: Venue;
     symbol: string;
   }): Promise<MarketDefinition> {
-    this.assertSupportedExchange(input.exchange);
+    this.assertSupportedVenue(input.venue);
     await this.loadMarketCatalog();
 
     const market = this.definitions.get(marketKey(input));
@@ -468,7 +468,7 @@ export class MarketManagerImpl
       throw this.createError(
         "MARKET_NOT_FOUND",
         `Unknown market symbol: ${input.symbol}`,
-        { exchange: input.exchange, symbol: input.symbol },
+        { venue: input.venue, symbol: input.symbol },
         "market",
       );
     }
@@ -477,7 +477,7 @@ export class MarketManagerImpl
       throw this.createError(
         "MARKET_INACTIVE",
         `Inactive market symbol: ${input.symbol}`,
-        { exchange: input.exchange, symbol: input.symbol },
+        { venue: input.venue, symbol: input.symbol },
         "market",
       );
     }
@@ -491,7 +491,7 @@ export class MarketManagerImpl
       throw this.createError(
         "MARKET_NOT_FOUND",
         `Unknown market symbol: ${input.symbol}`,
-        { exchange: input.exchange, symbol: input.symbol },
+        { venue: input.venue, symbol: input.symbol },
         "market",
       );
     }
@@ -499,15 +499,15 @@ export class MarketManagerImpl
     return market;
   }
 
-  private assertSupportedExchange(exchange: Exchange): void {
-    if (exchange === this.adapter.exchange) {
+  private assertSupportedVenue(venue: Venue): void {
+    if (venue === this.adapter.venue) {
       return;
     }
 
     throw this.createError(
-      "EXCHANGE_NOT_SUPPORTED",
-      `Exchange is not supported yet: ${exchange}`,
-      { exchange },
+      "VENUE_NOT_SUPPORTED",
+      `Venue is not supported yet: ${venue}`,
+      { venue },
       "client",
     );
   }
@@ -520,13 +520,13 @@ export class MarketManagerImpl
     throw this.createError(
       "MARKET_FUNDING_RATE_UNSUPPORTED",
       `Funding rate is not supported for market: ${market.symbol}`,
-      { exchange: market.exchange, symbol: market.symbol },
+      { venue: market.venue, symbol: market.symbol },
       "market",
     );
   }
 
   private getOrCreateRecord(input: {
-    exchange: Exchange;
+    venue: Venue;
     symbol: string;
   }): MarketRecord {
     const key = marketKey(input);
@@ -536,12 +536,12 @@ export class MarketManagerImpl
     }
 
     const record: MarketRecord = {
-      exchange: input.exchange,
+      venue: input.venue,
       symbol: input.symbol,
       l1BookSubscribed: false,
       fundingRateSubscribed: false,
       status: {
-        exchange: input.exchange,
+        venue: input.venue,
         symbol: input.symbol,
         activity: "inactive",
         ready: false,
@@ -572,7 +572,7 @@ export class MarketManagerImpl
         `Timed out waiting for market data: ${market.symbol}`,
       );
       this.context.publishRuntimeError("runtime", timeoutError, {
-        exchange: market.exchange,
+        venue: market.venue,
         symbol: market.symbol,
       });
       this.updateConnectionState(record, "l1Book", "stale", "ws_disconnected");
@@ -600,7 +600,7 @@ export class MarketManagerImpl
         `Timed out waiting for market data: ${market.symbol}`,
       );
       this.context.publishRuntimeError("runtime", timeoutError, {
-        exchange: market.exchange,
+        venue: market.venue,
         symbol: market.symbol,
       });
       this.updateConnectionState(
@@ -620,7 +620,7 @@ export class MarketManagerImpl
     const callbacks: L1BookStreamCallbacks = {
       onUpdate: (update: RawL1BookUpdate) => {
         record.l1Book = this.createL1Book(
-          record.exchange,
+          record.venue,
           record.symbol,
           update,
           record.l1Book,
@@ -631,7 +631,7 @@ export class MarketManagerImpl
 
         const event: L1BookUpdatedEvent = {
           type: "l1_book.updated",
-          exchange: record.exchange,
+          venue: record.venue,
           symbol: record.symbol,
           snapshot: cloneL1Book(record.l1Book),
           ts: this.context.now(),
@@ -653,7 +653,7 @@ export class MarketManagerImpl
       },
       onError: (error) => {
         this.context.publishRuntimeError("runtime", error, {
-          exchange: record.exchange,
+          venue: record.venue,
           symbol: record.symbol,
         });
       },
@@ -677,7 +677,7 @@ export class MarketManagerImpl
     const callbacks: FundingRateStreamCallbacks = {
       onUpdate: (update: RawFundingRateUpdate) => {
         record.fundingRate = this.createFundingRate(
-          record.exchange,
+          record.venue,
           record.symbol,
           update,
           record.fundingRate,
@@ -688,7 +688,7 @@ export class MarketManagerImpl
 
         const event: FundingRateUpdatedEvent = {
           type: "funding_rate.updated",
-          exchange: record.exchange,
+          venue: record.venue,
           symbol: record.symbol,
           snapshot: cloneFundingRate(record.fundingRate),
           ts: this.context.now(),
@@ -710,7 +710,7 @@ export class MarketManagerImpl
       },
       onError: (error) => {
         this.context.publishRuntimeError("runtime", error, {
-          exchange: record.exchange,
+          venue: record.venue,
           symbol: record.symbol,
         });
       },
@@ -728,13 +728,13 @@ export class MarketManagerImpl
   }
 
   private createL1Book(
-    exchange: Exchange,
+    venue: Venue,
     symbol: string,
     input: RawL1BookUpdate,
     previous?: L1Book,
   ): L1Book {
     return {
-      exchange,
+      venue,
       symbol,
       bidPrice: new BigNumber(input.bidPrice),
       bidSize: new BigNumber(input.bidSize),
@@ -755,13 +755,13 @@ export class MarketManagerImpl
   }
 
   private createFundingRate(
-    exchange: Exchange,
+    venue: Venue,
     symbol: string,
     input: RawFundingRateUpdate,
     previous?: FundingRateSnapshot,
   ): FundingRateSnapshot {
     return {
-      exchange,
+      venue,
       symbol,
       fundingRate: new BigNumber(input.fundingRate),
       nextFundingTime: input.nextFundingTime,
@@ -936,7 +936,7 @@ export class MarketManagerImpl
   private publishStatus(record: MarketRecord): void {
     const event: MarketStatusChangedEvent = {
       type: "market.status_changed",
-      exchange: record.exchange,
+      venue: record.venue,
       symbol: record.symbol,
       status: cloneMarketStatus(record.status),
       ts: this.context.now(),
@@ -985,9 +985,9 @@ export class MarketManagerImpl
       | "MARKET_NOT_FOUND"
       | "MARKET_INACTIVE"
       | "MARKET_FUNDING_RATE_UNSUPPORTED"
-      | "EXCHANGE_NOT_SUPPORTED",
+      | "VENUE_NOT_SUPPORTED",
     message: string,
-    metadata?: { exchange?: Exchange; symbol?: string },
+    metadata?: { venue?: Venue; symbol?: string },
     source: "market" | "client" = "market",
   ): AcexError {
     const error = new AcexError(code, message);

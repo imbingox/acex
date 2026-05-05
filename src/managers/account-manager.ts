@@ -25,17 +25,17 @@ import type {
   AccountSnapshotReplacedEvent,
   AccountStatusChangedEvent,
   BalanceSnapshot,
-  Exchange,
   PositionKeyInput,
   PositionSnapshot,
   RiskSnapshot,
   SubscribeAccountInput,
   UnsubscribeAccountInput,
+  Venue,
 } from "../types/index.ts";
 
 interface AccountRecord {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   subscribed: boolean;
   snapshot?: AccountSnapshot;
   status: AccountDataStatus;
@@ -79,7 +79,7 @@ export class AccountManagerImpl
       status: (filter) =>
         this.accountStatusBus.stream((event) =>
           matchesAccountFilter(
-            { accountId: event.accountId, exchange: event.exchange },
+            { accountId: event.accountId, venue: event.venue },
             filter,
           ),
         ),
@@ -88,7 +88,7 @@ export class AccountManagerImpl
           matchesAccountFilter(
             {
               accountId: event.accountId,
-              exchange: event.exchange,
+              venue: event.venue,
               symbol: "symbol" in event ? event.symbol : undefined,
             },
             filter,
@@ -104,7 +104,7 @@ export class AccountManagerImpl
     const account = this.context.getRegisteredAccount(input.accountId);
     this.context.ensurePrivateCredentials(input.accountId);
 
-    const record = this.getOrCreateRecord(input.accountId, account.exchange);
+    const record = this.getOrCreateRecord(input.accountId, account.venue);
     record.subscribed = true;
 
     try {
@@ -210,25 +210,25 @@ export class AccountManagerImpl
     this.records.delete(accountId);
   }
 
-  onCredentialsUpdated(accountId: string, exchange: Exchange): void {
+  onCredentialsUpdated(accountId: string, venue: Venue): void {
     const record = this.records.get(accountId);
     if (!record?.subscribed) {
       return;
     }
 
-    this.onPrivateAccountPending(accountId, exchange);
+    this.onPrivateAccountPending(accountId, venue);
   }
 
   // --- PrivateAccountDataConsumer ---
 
-  onPrivateAccountPending(accountId: string, exchange: Exchange): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+  onPrivateAccountPending(accountId: string, venue: Venue): void {
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
 
     record.status = {
-      ...this.createStatus(accountId, exchange, "active"),
+      ...this.createStatus(accountId, venue, "active"),
       ready: Boolean(record.snapshot),
       runtimeStatus: "bootstrap_pending",
       reason: undefined,
@@ -241,19 +241,15 @@ export class AccountManagerImpl
 
   onPrivateAccountBootstrap(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     bootstrap: RawAccountBootstrap,
   ): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
 
-    record.snapshot = this.createBootstrapSnapshot(
-      accountId,
-      exchange,
-      bootstrap,
-    );
+    record.snapshot = this.createBootstrapSnapshot(accountId, venue, bootstrap);
     record.status = {
       ...record.status,
       activity: "active",
@@ -268,7 +264,7 @@ export class AccountManagerImpl
     const event: AccountSnapshotReplacedEvent = {
       type: "account.snapshot_replaced",
       accountId,
-      exchange,
+      venue,
       snapshot: record.snapshot,
       ts: this.context.now(),
     };
@@ -279,16 +275,16 @@ export class AccountManagerImpl
 
   onPrivateAccountUpdate(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     update: RawAccountUpdate,
   ): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
 
     const previous =
-      record.snapshot ?? this.createEmptySnapshot(accountId, exchange);
+      record.snapshot ?? this.createEmptySnapshot(accountId, venue);
     const balances = { ...previous.balances };
     const positions = new Map(
       previous.positions.map((position) => [
@@ -301,7 +297,7 @@ export class AccountManagerImpl
     for (const balance of update.balances ?? []) {
       const nextBalance = this.createBalance(
         accountId,
-        exchange,
+        venue,
         balance,
         balances[balance.asset],
       );
@@ -309,7 +305,7 @@ export class AccountManagerImpl
       this.accountBus.publish({
         type: "balance.updated",
         accountId,
-        exchange,
+        venue,
         asset: balance.asset,
         snapshot: nextBalance,
         ts: this.context.now(),
@@ -320,7 +316,7 @@ export class AccountManagerImpl
       const key = positionKey(position.symbol, position.side);
       const nextPosition = this.createPosition(
         accountId,
-        exchange,
+        venue,
         position,
         positions.get(key),
       );
@@ -334,7 +330,7 @@ export class AccountManagerImpl
       this.accountBus.publish({
         type: "position.updated",
         accountId,
-        exchange,
+        venue,
         symbol: position.symbol,
         snapshot: nextPosition,
         ts: this.context.now(),
@@ -342,11 +338,11 @@ export class AccountManagerImpl
     }
 
     if (update.risk) {
-      risk = this.createRisk(accountId, exchange, update.risk, previous.risk);
+      risk = this.createRisk(accountId, venue, update.risk, previous.risk);
       this.accountBus.publish({
         type: "risk.updated",
         accountId,
-        exchange,
+        venue,
         snapshot: risk,
         ts: this.context.now(),
       });
@@ -354,7 +350,7 @@ export class AccountManagerImpl
 
     record.snapshot = {
       accountId,
-      exchange,
+      venue,
       balances,
       positions: [...positions.values()],
       risk,
@@ -377,10 +373,10 @@ export class AccountManagerImpl
 
   onPrivateAccountStreamState(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     state: PrivateSubscriptionState,
   ): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
@@ -404,18 +400,15 @@ export class AccountManagerImpl
     return [...this.records.values()]
       .map((record) => cloneAccountStatus(record.status))
       .sort((left, right) =>
-        `${left.exchange}:${left.accountId}`.localeCompare(
-          `${right.exchange}:${right.accountId}`,
+        `${left.venue}:${left.accountId}`.localeCompare(
+          `${right.venue}:${right.accountId}`,
         ),
       );
   }
 
   // --- Internal helpers ---
 
-  private getOrCreateRecord(
-    accountId: string,
-    exchange: Exchange,
-  ): AccountRecord {
+  private getOrCreateRecord(accountId: string, venue: Venue): AccountRecord {
     const existing = this.records.get(accountId);
     if (existing) {
       return existing;
@@ -423,9 +416,9 @@ export class AccountManagerImpl
 
     const record: AccountRecord = {
       accountId,
-      exchange,
+      venue,
       subscribed: false,
-      status: this.createStatus(accountId, exchange, "inactive"),
+      status: this.createStatus(accountId, venue, "inactive"),
     };
 
     this.records.set(accountId, record);
@@ -434,12 +427,12 @@ export class AccountManagerImpl
 
   private createStatus(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     activity: "active" | "inactive",
   ): AccountDataStatus {
     return {
       accountId,
-      exchange,
+      venue,
       activity,
       ready: false,
       runtimeStatus: activity === "active" ? "bootstrap_pending" : "stopped",
@@ -448,25 +441,25 @@ export class AccountManagerImpl
 
   private createBootstrapSnapshot(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     bootstrap: RawAccountBootstrap,
   ): AccountSnapshot {
     const balances = Object.fromEntries(
       bootstrap.balances.map((balance) => [
         balance.asset,
-        this.createBalance(accountId, exchange, balance),
+        this.createBalance(accountId, venue, balance),
       ]),
     );
     const positions = bootstrap.positions
-      .map((position) => this.createPosition(accountId, exchange, position))
+      .map((position) => this.createPosition(accountId, venue, position))
       .filter((position) => !position.size.isZero());
     const risk = bootstrap.risk
-      ? this.createRisk(accountId, exchange, bootstrap.risk)
+      ? this.createRisk(accountId, venue, bootstrap.risk)
       : undefined;
 
     return {
       accountId,
-      exchange,
+      venue,
       balances,
       positions,
       risk,
@@ -478,12 +471,12 @@ export class AccountManagerImpl
 
   private createEmptySnapshot(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
   ): AccountSnapshot {
     const now = this.context.now();
     return {
       accountId,
-      exchange,
+      venue,
       balances: {},
       positions: [],
       receivedAt: now,
@@ -493,7 +486,7 @@ export class AccountManagerImpl
 
   private createBalance(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     input: RawBalanceUpdate,
     previous?: BalanceSnapshot,
   ): BalanceSnapshot {
@@ -511,7 +504,7 @@ export class AccountManagerImpl
 
     return {
       accountId,
-      exchange,
+      venue,
       asset: input.asset,
       free,
       used,
@@ -520,18 +513,34 @@ export class AccountManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       seq: (previous?.seq ?? 0) + 1,
+      lending: input.lending
+        ? {
+            supplied: new BigNumber(input.lending.supplied),
+            borrowed: new BigNumber(input.lending.borrowed),
+            interest: new BigNumber(input.lending.interest),
+            netAsset: new BigNumber(input.lending.netAsset),
+            supplyAPY:
+              input.lending.supplyAPY === undefined
+                ? undefined
+                : new BigNumber(input.lending.supplyAPY),
+            borrowAPY:
+              input.lending.borrowAPY === undefined
+                ? undefined
+                : new BigNumber(input.lending.borrowAPY),
+          }
+        : previous?.lending,
     };
   }
 
   private createPosition(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     input: RawPositionUpdate,
     previous?: PositionSnapshot,
   ): PositionSnapshot {
     return {
       accountId,
-      exchange,
+      venue,
       symbol: input.symbol,
       side: input.side,
       size: new BigNumber(input.size),
@@ -564,21 +573,21 @@ export class AccountManagerImpl
 
   private createRisk(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     input: RawRiskUpdate,
     previous?: RiskSnapshot,
   ): RiskSnapshot {
     return {
       accountId,
-      exchange,
+      venue,
       equity:
         input.equity === undefined
           ? previous?.equity
           : new BigNumber(input.equity),
-      marginRatio:
-        input.marginRatio === undefined
-          ? previous?.marginRatio
-          : new BigNumber(input.marginRatio),
+      riskRatio:
+        input.riskRatio === undefined
+          ? previous?.riskRatio
+          : new BigNumber(input.riskRatio),
       initialMargin:
         input.initialMargin === undefined
           ? previous?.initialMargin
@@ -591,6 +600,34 @@ export class AccountManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       seq: (previous?.seq ?? 0) + 1,
+      lending: input.lending
+        ? {
+            marginLevel:
+              input.lending.marginLevel === undefined
+                ? undefined
+                : new BigNumber(input.lending.marginLevel),
+            healthFactor:
+              input.lending.healthFactor === undefined
+                ? undefined
+                : new BigNumber(input.lending.healthFactor),
+            ltv:
+              input.lending.ltv === undefined
+                ? undefined
+                : new BigNumber(input.lending.ltv),
+            liquidationThreshold:
+              input.lending.liquidationThreshold === undefined
+                ? undefined
+                : new BigNumber(input.lending.liquidationThreshold),
+            totalCollateralUSD:
+              input.lending.totalCollateralUSD === undefined
+                ? undefined
+                : new BigNumber(input.lending.totalCollateralUSD),
+            totalDebtUSD:
+              input.lending.totalDebtUSD === undefined
+                ? undefined
+                : new BigNumber(input.lending.totalDebtUSD),
+          }
+        : previous?.lending,
     };
   }
 
@@ -598,7 +635,7 @@ export class AccountManagerImpl
     const event: AccountStatusChangedEvent = {
       type: "account.status_changed",
       accountId: record.accountId,
-      exchange: record.exchange,
+      venue: record.venue,
       status: cloneAccountStatus(record.status),
       ts: this.context.now(),
     };

@@ -36,6 +36,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 | [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
 | [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |
 | [Type Safety](./type-safety.md) | 类型定义位置、显式返回类型、避免宽化和循环引用 | Active |
+| [Venue Lending](./venue-lending.md) | DEX 借贷只读账户视图、lending facet、riskRatio 与 polling adapter 语义 | Active |
 
 ---
 

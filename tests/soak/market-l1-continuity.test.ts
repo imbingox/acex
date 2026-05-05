@@ -86,14 +86,14 @@ test("caller can observe l1 book keep changing for one minute", async () => {
   });
   const iterator = client.market.events
     .l1BookUpdates({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
 
   await client.start();
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const socket = await waitForSocket(
@@ -132,11 +132,11 @@ test("caller can observe l1 book keep changing for one minute", async () => {
 
     const emittedTicks = await feed.done;
     const finalBook = client.market.getL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     });
     const finalStatus = client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     });
 

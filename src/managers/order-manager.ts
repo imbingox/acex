@@ -15,7 +15,6 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
-  Exchange,
   GetOrderInput,
   OrderDataStatus,
   OrderEvent,
@@ -26,11 +25,12 @@ import type {
   OrderStatusChangedEvent,
   SubscribeOrdersInput,
   UnsubscribeOrdersInput,
+  Venue,
 } from "../types/index.ts";
 
 interface OrderRecord {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   subscribed: boolean;
   snapshots: Map<string, OrderSnapshot>;
   status: OrderDataStatus;
@@ -78,7 +78,7 @@ export class OrderManagerImpl
       status: (filter) =>
         this.orderStatusBus.stream((event) =>
           matchesOrderFilter(
-            { accountId: event.accountId, exchange: event.exchange },
+            { accountId: event.accountId, venue: event.venue },
             filter,
           ),
         ),
@@ -87,7 +87,7 @@ export class OrderManagerImpl
           matchesOrderFilter(
             {
               accountId: event.accountId,
-              exchange: event.exchange,
+              venue: event.venue,
               symbol: "symbol" in event ? event.symbol : undefined,
             },
             filter,
@@ -103,7 +103,7 @@ export class OrderManagerImpl
     const account = this.context.getRegisteredAccount(input.accountId);
     this.context.ensurePrivateCredentials(input.accountId);
 
-    const record = this.getOrCreateRecord(input.accountId, account.exchange);
+    const record = this.getOrCreateRecord(input.accountId, account.venue);
     record.subscribed = true;
 
     try {
@@ -136,11 +136,11 @@ export class OrderManagerImpl
     this.context.assertStarted();
     const account = this.context.getRegisteredAccount(input.accountId);
     this.context.ensurePrivateCredentials(input.accountId);
-    this.validateCreateOrderInput(input, account.exchange);
+    this.validateCreateOrderInput(input, account.venue);
 
     try {
       const update = await this.context.createOrder(input);
-      return this.applyCommandUpdate(input.accountId, account.exchange, update);
+      return this.applyCommandUpdate(input.accountId, account.venue, update);
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CREATE_FAILED",
@@ -148,7 +148,7 @@ export class OrderManagerImpl
         error,
         {
           accountId: input.accountId,
-          exchange: account.exchange,
+          venue: account.venue,
           symbol: input.symbol,
         },
       );
@@ -159,11 +159,11 @@ export class OrderManagerImpl
     this.context.assertStarted();
     const account = this.context.getRegisteredAccount(input.accountId);
     this.context.ensurePrivateCredentials(input.accountId);
-    this.validateCancelOrderInput(input, account.exchange);
+    this.validateCancelOrderInput(input, account.venue);
 
     try {
       const update = await this.context.cancelOrder(input);
-      return this.applyCommandUpdate(input.accountId, account.exchange, update);
+      return this.applyCommandUpdate(input.accountId, account.venue, update);
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CANCEL_FAILED",
@@ -171,7 +171,7 @@ export class OrderManagerImpl
         error,
         {
           accountId: input.accountId,
-          exchange: account.exchange,
+          venue: account.venue,
           symbol: input.symbol,
         },
       );
@@ -185,11 +185,7 @@ export class OrderManagerImpl
 
     try {
       const updates = await this.context.cancelAllOrders(input);
-      return this.applyCommandUpdates(
-        input.accountId,
-        account.exchange,
-        updates,
-      );
+      return this.applyCommandUpdates(input.accountId, account.venue, updates);
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CANCEL_ALL_FAILED",
@@ -197,7 +193,7 @@ export class OrderManagerImpl
         error,
         {
           accountId: input.accountId,
-          exchange: account.exchange,
+          venue: account.venue,
           symbol: input.symbol,
         },
       );
@@ -293,25 +289,25 @@ export class OrderManagerImpl
     this.records.delete(accountId);
   }
 
-  onCredentialsUpdated(accountId: string, exchange: Exchange): void {
+  onCredentialsUpdated(accountId: string, venue: Venue): void {
     const record = this.records.get(accountId);
     if (!record?.subscribed) {
       return;
     }
 
-    this.onPrivateOrderPending(accountId, exchange);
+    this.onPrivateOrderPending(accountId, venue);
   }
 
   // --- PrivateOrderDataConsumer ---
 
-  onPrivateOrderPending(accountId: string, exchange: Exchange): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+  onPrivateOrderPending(accountId: string, venue: Venue): void {
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
 
     record.status = {
-      ...this.createStatus(accountId, exchange, "active"),
+      ...this.createStatus(accountId, venue, "active"),
       ready: record.snapshots.size > 0,
       runtimeStatus: "bootstrap_pending",
       reason: undefined,
@@ -324,10 +320,10 @@ export class OrderManagerImpl
 
   onPrivateOrderBootstrap(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     snapshots: RawOrderUpdate[],
   ): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
@@ -336,7 +332,7 @@ export class OrderManagerImpl
     for (const update of snapshots) {
       const snapshot = this.createSnapshot(
         accountId,
-        exchange,
+        venue,
         update,
         this.getExistingSnapshot(record, update),
       );
@@ -363,7 +359,7 @@ export class OrderManagerImpl
     const event: OrderSnapshotReplacedEvent = {
       type: "order.snapshot_replaced",
       accountId,
-      exchange,
+      venue,
       snapshot: orderedSnapshots,
       ts: this.context.now(),
     };
@@ -374,16 +370,16 @@ export class OrderManagerImpl
 
   onPrivateOrderUpdate(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     update: RawOrderUpdate,
   ): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
 
     const previous = this.getExistingSnapshot(record, update);
-    const snapshot = this.createSnapshot(accountId, exchange, update, previous);
+    const snapshot = this.createSnapshot(accountId, venue, update, previous);
     this.setSnapshot(record.snapshots, snapshot);
 
     const eventType =
@@ -398,7 +394,7 @@ export class OrderManagerImpl
     this.orderBus.publish({
       type: eventType,
       accountId,
-      exchange,
+      venue,
       symbol: snapshot.symbol,
       snapshot,
       ts: this.context.now(),
@@ -419,10 +415,10 @@ export class OrderManagerImpl
 
   onPrivateOrderStreamState(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     state: PrivateSubscriptionState,
   ): void {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
@@ -446,18 +442,15 @@ export class OrderManagerImpl
     return [...this.records.values()]
       .map((record) => cloneOrderStatus(record.status))
       .sort((left, right) =>
-        `${left.exchange}:${left.accountId}`.localeCompare(
-          `${right.exchange}:${right.accountId}`,
+        `${left.venue}:${left.accountId}`.localeCompare(
+          `${right.venue}:${right.accountId}`,
         ),
       );
   }
 
   // --- Internal helpers ---
 
-  private getOrCreateRecord(
-    accountId: string,
-    exchange: Exchange,
-  ): OrderRecord {
+  private getOrCreateRecord(accountId: string, venue: Venue): OrderRecord {
     const existing = this.records.get(accountId);
     if (existing) {
       return existing;
@@ -465,10 +458,10 @@ export class OrderManagerImpl
 
     const record: OrderRecord = {
       accountId,
-      exchange,
+      venue,
       subscribed: false,
       snapshots: new Map(),
-      status: this.createStatus(accountId, exchange, "inactive"),
+      status: this.createStatus(accountId, venue, "inactive"),
     };
 
     this.records.set(accountId, record);
@@ -477,12 +470,12 @@ export class OrderManagerImpl
 
   private createStatus(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     activity: "active" | "inactive",
   ): OrderDataStatus {
     return {
       accountId,
-      exchange,
+      venue,
       activity,
       ready: false,
       runtimeStatus: activity === "active" ? "bootstrap_pending" : "stopped",
@@ -525,7 +518,7 @@ export class OrderManagerImpl
 
   private createSnapshot(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     input: RawOrderUpdate,
     previous?: OrderSnapshot,
   ): OrderSnapshot {
@@ -538,7 +531,7 @@ export class OrderManagerImpl
 
     return {
       accountId,
-      exchange,
+      venue,
       orderId: input.orderId,
       clientOrderId: input.clientOrderId,
       symbol: input.symbol,
@@ -573,7 +566,7 @@ export class OrderManagerImpl
     const event: OrderStatusChangedEvent = {
       type: "order.status_changed",
       accountId: record.accountId,
-      exchange: record.exchange,
+      venue: record.venue,
       status: cloneOrderStatus(record.status),
       ts: this.context.now(),
     };
@@ -584,7 +577,7 @@ export class OrderManagerImpl
 
   private validateCreateOrderInput(
     input: CreateOrderInput,
-    exchange: Exchange,
+    venue: Venue,
   ): void {
     if (input.type === "limit" && !input.price) {
       throw this.createError(
@@ -592,7 +585,7 @@ export class OrderManagerImpl
         `Limit orders require price: ${input.accountId}`,
         {
           accountId: input.accountId,
-          exchange,
+          venue,
           symbol: input.symbol,
         },
       );
@@ -601,7 +594,7 @@ export class OrderManagerImpl
 
   private validateCancelOrderInput(
     input: CancelOrderInput,
-    exchange: Exchange,
+    venue: Venue,
   ): void {
     if (input.orderId || input.clientOrderId) {
       return;
@@ -612,7 +605,7 @@ export class OrderManagerImpl
       `cancelOrder requires orderId or clientOrderId: ${input.accountId}`,
       {
         accountId: input.accountId,
-        exchange,
+        venue,
         symbol: input.symbol,
       },
     );
@@ -620,23 +613,23 @@ export class OrderManagerImpl
 
   private applyCommandUpdate(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     update: RawOrderUpdate,
   ): OrderSnapshot {
-    const record = this.getOrCreateRecord(accountId, exchange);
+    const record = this.getOrCreateRecord(accountId, venue);
     const previous = this.getExistingSnapshot(record, update);
-    const snapshot = this.createSnapshot(accountId, exchange, update, previous);
+    const snapshot = this.createSnapshot(accountId, venue, update, previous);
     this.setSnapshot(record.snapshots, snapshot);
     return snapshot;
   }
 
   private applyCommandUpdates(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     updates: RawOrderUpdate[],
   ): OrderSnapshot[] {
     return updates.map((update) =>
-      this.applyCommandUpdate(accountId, exchange, update),
+      this.applyCommandUpdate(accountId, venue, update),
     );
   }
 
@@ -649,7 +642,7 @@ export class OrderManagerImpl
     message: string,
     metadata: {
       accountId: string;
-      exchange: Exchange;
+      venue: Venue;
       symbol?: string;
     },
   ): AcexError {
@@ -667,7 +660,7 @@ export class OrderManagerImpl
     error: unknown,
     metadata: {
       accountId: string;
-      exchange: Exchange;
+      venue: Venue;
       symbol: string;
     },
   ): AcexError {

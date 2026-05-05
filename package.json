@@ -30,6 +30,8 @@
     "test:live:account": "bun run scripts/live-account-smoke.ts",
     "test:live:account:smoke": "bun run scripts/live-account-smoke.ts --duration 10",
     "test:live:account:soak": "bun run scripts/live-account-smoke.ts --duration 60 --disconnect-after 5",
+    "test:live:juplend": "bun run scripts/live-juplend-account-smoke.ts",
+    "test:live:juplend:smoke": "bun run scripts/live-juplend-account-smoke.ts --duration 35 --show-amounts",
     "test:live:market": "bun run scripts/live-market-smoke.ts",
     "test:live:market:smoke": "bun run scripts/live-market-smoke.ts --duration 10",
     "test:live:market:soak": "bun run scripts/live-market-smoke.ts --duration 60 --disconnect-after 5 --disconnect-target perp",

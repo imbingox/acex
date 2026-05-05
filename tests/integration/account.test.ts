@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { AcexError, BigNumber, createClient } from "../../index.ts";
+import {
+  AcexError,
+  BigNumber,
+  createClient,
+  type RegisterAccountInput,
+} from "../../index.ts";
 import {
   installBinancePrivateAccountInfra,
   PAPI_ACCOUNT_WS_URL,
@@ -10,6 +15,23 @@ import {
   nextEvent,
   waitForSocket,
 } from "../support/test-utils.ts";
+
+async function waitForCondition<T>(
+  check: () => T | undefined,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = check();
+    if (value !== undefined) {
+      return value;
+    }
+    await Bun.sleep(5);
+  }
+
+  throw new Error(message);
+}
 
 test("account subscribe bootstraps Binance PAPI UM account data and applies updates", async () => {
   const requests = installBinancePrivateAccountInfra();
@@ -23,13 +45,13 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   const iterator = client.account.events
     .updates({
       accountId: "main-binance",
-      exchange: "binance",
+      venue: "binance",
     })
     [Symbol.asyncIterator]();
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -51,7 +73,7 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   expect(snapshotEvent).toMatchObject({
     type: "account.snapshot_replaced",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
   });
 
   const snapshot = client.account.getAccountSnapshot("main-binance");
@@ -80,7 +102,7 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   });
   expect(risk).toMatchObject({
     equity: new BigNumber("1400.75"),
-    marginRatio: new BigNumber("31.0"),
+    riskRatio: new BigNumber(1).dividedBy("31.0"),
     initialMargin: new BigNumber("120.10"),
     maintenanceMargin: new BigNumber("45.20"),
   });
@@ -191,7 +213,7 @@ test("private subscriptions validate credentials at subscribe time", async () =>
   await client.start();
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
   });
 
   await expect(
@@ -229,7 +251,7 @@ test("account bootstrap failure does not create a placeholder snapshot", async (
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -256,7 +278,7 @@ test("account bootstrap failure does not create a placeholder snapshot", async (
   expect(error).toMatchObject({
     source: "adapter",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
   });
 
   await errors.return?.();
@@ -274,7 +296,7 @@ test("removeAccount auto-cleans active private subscriptions and caches", async 
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -316,13 +338,13 @@ test("account public getters expose collections and unsubscribe publishes stoppe
   const statusIterator = client.account.events
     .status({
       accountId: "main-binance",
-      exchange: "binance",
+      venue: "binance",
     })
     [Symbol.asyncIterator]();
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -382,4 +404,269 @@ test("account public getters expose collections and unsubscribe publishes stoppe
   expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
 
   await statusIterator.return?.();
+});
+
+test("account subscribe bootstraps Juplend lending balances and account risk", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  const requests = installJuplendInfra();
+  const client = createClient({
+    account: {
+      juplend: {
+        pollIntervalMs: 60_000,
+      },
+    },
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: JUPLEND_ACCOUNT_ID,
+      venue: "juplend",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    credentials: {
+      apiKey: "jup-key",
+    },
+    options: {
+      walletAddress: JUPLEND_WALLET,
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
+
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "account.snapshot_replaced",
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+  });
+
+  expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "SOL")).toMatchObject({
+    venue: "juplend",
+    asset: "SOL",
+    total: new BigNumber("15"),
+    lending: {
+      supplied: new BigNumber("15"),
+      borrowed: new BigNumber("0"),
+      netAsset: new BigNumber("15"),
+      supplyAPY: new BigNumber("0.05"),
+    },
+  });
+  expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "USDC")).toMatchObject({
+    asset: "USDC",
+    total: new BigNumber("-300"),
+    lending: {
+      supplied: new BigNumber("0"),
+      borrowed: new BigNumber("300"),
+      netAsset: new BigNumber("-300"),
+      borrowAPY: new BigNumber("0.08"),
+    },
+  });
+  const juplendRisk = client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID);
+  expect(juplendRisk).toMatchObject({
+    riskRatio: new BigNumber("300").dividedBy("1275"),
+    equity: new BigNumber("1200"),
+    lending: {
+      ltv: new BigNumber("0.2"),
+      liquidationThreshold: new BigNumber("0.85"),
+      totalCollateralUSD: new BigNumber("1500"),
+      totalDebtUSD: new BigNumber("300"),
+    },
+  });
+  expect(juplendRisk?.lending?.healthFactor?.toFixed()).toBe(
+    new BigNumber(1).dividedBy(juplendRisk?.riskRatio ?? 0).toFixed(),
+  );
+  expect(client.account.getAccountStatus(JUPLEND_ACCOUNT_ID)).toMatchObject({
+    activity: "active",
+    ready: true,
+    runtimeStatus: "healthy",
+  });
+  expect(
+    requests.filter((request) => request.url.hostname === "api.jup.ag"),
+  ).toHaveLength(1);
+  expect(
+    requests.filter((request) => request.url.hostname === "lite-api.jup.ag"),
+  ).toHaveLength(1);
+  expect(requests[0]?.apiKey).toBe("jup-key");
+
+  await iterator.return?.();
+});
+
+test("Juplend account subscribe validates api key", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  installJuplendInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    options: {
+      walletAddress: JUPLEND_WALLET,
+    },
+  } as RegisterAccountInput);
+  await client.start();
+
+  await expect(
+    client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID }),
+  ).rejects.toBeInstanceOf(AcexError);
+});
+
+test("Juplend account subscribe can filter one lending position", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  installJuplendInfra();
+  const client = createClient();
+  const accountId = `${JUPLEND_ACCOUNT_ID}-position-101`;
+
+  await client.registerAccount({
+    accountId,
+    venue: "juplend",
+    credentials: { apiKey: "jup-key" },
+    options: {
+      walletAddress: JUPLEND_WALLET,
+      positionId: "101",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId });
+
+  expect(client.account.getBalance(accountId, "SOL")).toMatchObject({
+    total: new BigNumber("10"),
+    lending: {
+      supplied: new BigNumber("10"),
+      borrowed: new BigNumber("0"),
+    },
+  });
+  expect(client.account.getBalance(accountId, "USDC")).toMatchObject({
+    total: new BigNumber("-250"),
+    lending: {
+      supplied: new BigNumber("0"),
+      borrowed: new BigNumber("250"),
+    },
+  });
+  expect(client.account.getRiskSnapshot(accountId)).toMatchObject({
+    riskRatio: new BigNumber("250").dividedBy("850"),
+    equity: new BigNumber("750"),
+    lending: {
+      ltv: new BigNumber("0.25"),
+      liquidationThreshold: new BigNumber("0.85"),
+      totalCollateralUSD: new BigNumber("1000"),
+      totalDebtUSD: new BigNumber("250"),
+    },
+  });
+});
+
+test("Juplend account subscribe maps HTTP failures to degraded status", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  installJuplendInfra({ failPortfolio: true });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    credentials: { apiKey: "jup-key" },
+    options: {
+      walletAddress: JUPLEND_WALLET,
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID }),
+  ).rejects.toBeInstanceOf(AcexError);
+  expect(client.account.getAccountStatus(JUPLEND_ACCOUNT_ID)).toMatchObject({
+    runtimeStatus: "degraded",
+    ready: false,
+    reason: "http_failed",
+  });
+});
+
+test("Juplend account subscribe requires walletAddress option", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID } = await import(
+    "../support/exchanges/juplend.ts"
+  );
+  installJuplendInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    credentials: { apiKey: "jup-key" },
+  } as RegisterAccountInput);
+  await client.start();
+
+  await expect(
+    client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID }),
+  ).rejects.toBeInstanceOf(AcexError);
+  expect(client.account.getAccountStatus(JUPLEND_ACCOUNT_ID)).toMatchObject({
+    runtimeStatus: "degraded",
+    ready: false,
+    reason: "http_failed",
+  });
+});
+
+test("Juplend polling replaces snapshots when positions disappear", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  const requests = installJuplendInfra();
+  const client = createClient({
+    account: {
+      juplend: {
+        pollIntervalMs: 5,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    credentials: { apiKey: "jup-key" },
+    options: { walletAddress: JUPLEND_WALLET },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
+
+  expect(client.account.getBalances(JUPLEND_ACCOUNT_ID)).toHaveLength(2);
+  expect(client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID)).toBeDefined();
+
+  requests.state.portfolio = { elements: [] };
+
+  await waitForCondition(
+    () =>
+      client.account.getBalances(JUPLEND_ACCOUNT_ID).length === 0 &&
+      client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID) === undefined
+        ? true
+        : undefined,
+    500,
+    "Juplend polling did not clear stale snapshot",
+  );
+});
+
+test("Juplend polling does not overlap slow portfolio requests", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  const requests = installJuplendInfra({ portfolioDelayMs: 30 });
+  const client = createClient({
+    account: {
+      juplend: {
+        pollIntervalMs: 5,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    credentials: { apiKey: "jup-key" },
+    options: { walletAddress: JUPLEND_WALLET },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
+  await Bun.sleep(90);
+
+  expect(requests.state.maxActivePortfolioRequests).toBe(1);
 });

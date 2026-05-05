@@ -1,21 +1,21 @@
 import type {
   AccountEventFilter,
-  Exchange,
   HealthEvent,
   HealthEventFilter,
   MarketEventFilter,
   OrderEventFilter,
+  Venue,
 } from "../types/index.ts";
 
 export function matchesMarketFilter(
-  event: { exchange: Exchange; symbol: string },
+  event: { venue: Venue; symbol: string },
   filter?: MarketEventFilter,
 ): boolean {
   if (!filter) {
     return true;
   }
 
-  if (filter.exchange && event.exchange !== filter.exchange) {
+  if (filter.venue && event.venue !== filter.venue) {
     return false;
   }
 
@@ -27,7 +27,7 @@ export function matchesMarketFilter(
 }
 
 export function matchesAccountFilter(
-  event: { accountId: string; exchange: Exchange; symbol?: string },
+  event: { accountId: string; venue: Venue; symbol?: string },
   filter?: AccountEventFilter,
 ): boolean {
   if (!filter) {
@@ -38,7 +38,7 @@ export function matchesAccountFilter(
     return false;
   }
 
-  if (filter.exchange && event.exchange !== filter.exchange) {
+  if (filter.venue && event.venue !== filter.venue) {
     return false;
   }
 
@@ -50,7 +50,7 @@ export function matchesAccountFilter(
 }
 
 export function matchesOrderFilter(
-  event: { accountId: string; exchange: Exchange; symbol?: string },
+  event: { accountId: string; venue: Venue; symbol?: string },
   filter?: OrderEventFilter,
 ): boolean {
   if (!filter) {
@@ -61,7 +61,7 @@ export function matchesOrderFilter(
     return false;
   }
 
-  if (filter.exchange && event.exchange !== filter.exchange) {
+  if (filter.venue && event.venue !== filter.venue) {
     return false;
   }
 
@@ -95,8 +95,8 @@ export function matchesHealthFilter(
     }
   }
 
-  if (filter.exchange) {
-    if (!("exchange" in event) || event.exchange !== filter.exchange) {
+  if (filter.venue) {
+    if (!("venue" in event) || event.venue !== filter.venue) {
       return false;
     }
   }

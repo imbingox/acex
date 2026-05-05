@@ -371,3 +371,36 @@ Debugged the post-merge Release workflow, fixed the Changesets prerelease file f
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: Juplend lending account view
+
+**Date**: 2026-05-05
+**Task**: Juplend lending account view
+**Branch**: `feat/new_account`
+
+### Summary
+
+Implemented venue-based account registration and Juplend read-only lending account support with lending facets, unified riskRatio, positionId filtering, serialized polling, live smoke coverage, docs/spec updates, and passing lint/type-check/tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c411b69` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

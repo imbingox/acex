@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.3.0-beta.2
+
+### Minor Changes
+
+- c411b69: Add venue-based account registration and Juplend read-only lending account support. `Exchange` is renamed to `Venue`, account risk now uses unified `riskRatio`, and `RegisterAccountInput` is venue-specific so Juplend requires `credentials.apiKey` plus `options.walletAddress` with optional `positionId` filtering. Juplend account polling exposes lending balance/risk facets, replaces full snapshots to clear closed positions, and includes live smoke coverage.
+
 ## 0.3.0-beta.1
 
 ### Minor Changes

@@ -4,5 +4,9 @@
   "initialVersions": {
     "@imbingox/acex": "0.2.0"
   },
-  "changesets": ["funding-aggregators", "order-postonly-normalization"]
+  "changesets": [
+    "funding-aggregators",
+    "juplend-venue-lending",
+    "order-postonly-normalization"
+  ]
 }

@@ -7,7 +7,7 @@ const NativeWebSocket = originalWebSocket;
 
 export interface ErrorSummary {
   source: AcexInternalError["source"];
-  exchange?: string;
+  venue?: string;
   symbol?: string;
   accountId?: string;
   message: string;
@@ -168,7 +168,7 @@ export function restoreTrackedWebSocket(): void {
 export function summarizeError(error: AcexInternalError): ErrorSummary {
   return {
     source: error.source,
-    exchange: error.exchange,
+    venue: error.venue,
     symbol: error.symbol,
     accountId: error.accountId,
     message: error.error.message,

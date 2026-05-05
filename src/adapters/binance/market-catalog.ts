@@ -135,7 +135,7 @@ function normalizeSpotSymbol(
   const notionalValue = notionalFilter?.minNotional ?? notionalFilter?.notional;
 
   return {
-    exchange: "binance",
+    venue: "binance",
     family: "spot",
     symbol: `${symbol.baseAsset}/${symbol.quoteAsset}`,
     id: symbol.symbol,
@@ -180,7 +180,7 @@ function normalizeDerivativesSymbol(
   const notionalValue = notionalFilter?.minNotional ?? notionalFilter?.notional;
 
   return {
-    exchange: "binance",
+    venue: "binance",
     family,
     symbol: buildFuturesSymbol(
       symbol.baseAsset,

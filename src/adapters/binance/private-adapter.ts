@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import BigNumber from "bignumber.js";
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type { AccountCredentials, PositionSide } from "../../types/index.ts";
 import type {
@@ -280,9 +281,13 @@ function mapAccountRisk(
   input: BinancePapiAccount,
   receivedAt: number,
 ): RawRiskUpdate | undefined {
+  const uniMmr = firstString(input.uniMMR);
+  const riskRatio = uniMmr
+    ? new BigNumber(1).dividedBy(uniMmr).toString(10)
+    : undefined;
   const risk: RawRiskUpdate = {
     equity: firstString(input.accountEquity, input.totalEquity),
-    marginRatio: input.uniMMR,
+    riskRatio,
     initialMargin: firstString(
       input.accountInitialMargin,
       input.totalInitialMargin,
@@ -297,7 +302,7 @@ function mapAccountRisk(
 
   if (
     !risk.equity &&
-    !risk.marginRatio &&
+    !risk.riskRatio &&
     !risk.initialMargin &&
     !risk.maintenanceMargin
   ) {
@@ -473,7 +478,7 @@ async function readJson<T>(response: Response, url: string): Promise<T> {
 }
 
 export class BinancePrivateAdapter implements PrivateUserDataAdapter {
-  readonly exchange = "binance" as const;
+  readonly venue = "binance" as const;
 
   async bootstrapAccount(
     credentials: AccountCredentials,

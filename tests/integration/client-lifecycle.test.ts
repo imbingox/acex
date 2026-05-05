@@ -26,7 +26,7 @@ test("root entry exposes lifecycle snapshot and structured error stream", async 
 
   await expect(
     client.market.subscribeL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).rejects.toMatchObject({
@@ -53,7 +53,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   await client.start();
 
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const socket = await waitForSocket(
@@ -70,7 +70,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   await subscribePromise;
 
   const fundingSubscribePromise = client.market.subscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const fundingSocket = await waitForSocket(
@@ -94,7 +94,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
     clientStatus: "stopped",
     markets: [
       {
-        exchange: "binance",
+        venue: "binance",
         symbol: "BTC/USDT:USDT",
         activity: "inactive",
         ready: true,
@@ -104,7 +104,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   });
   expect(
     client.market.getL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -116,7 +116,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   });
   expect(
     client.market.getFundingRate({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -157,7 +157,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
 
   expect(
     client.market.getL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -170,7 +170,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   });
   expect(
     client.market.getFundingRate({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -183,7 +183,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
   });
 });
 
-test("health exchange filters only emit matching market events", async () => {
+test("health venue filters only emit matching market events", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
@@ -193,7 +193,7 @@ test("health exchange filters only emit matching market events", async () => {
   });
   const health = client.events.health()[Symbol.asyncIterator]();
   const binanceHealth = client.events
-    .health({ exchange: "binance" })
+    .health({ venue: "binance" })
     [Symbol.asyncIterator]();
   const firstBinanceEvent = binanceHealth.next();
 
@@ -210,7 +210,7 @@ test("health exchange filters only emit matching market events", async () => {
   await expectPending(firstBinanceEvent, 20);
 
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const socket = await waitForSocket(
@@ -235,7 +235,7 @@ test("health exchange filters only emit matching market events", async () => {
 
   expect(marketStatusEvent.value).toMatchObject({
     type: "market.status_changed",
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
     status: {
       activity: "active",
@@ -243,7 +243,7 @@ test("health exchange filters only emit matching market events", async () => {
   });
   expect(await nextEvent(binanceHealth)).toMatchObject({
     type: "market.status_changed",
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
     status: {
       ready: true,
@@ -254,7 +254,7 @@ test("health exchange filters only emit matching market events", async () => {
     clientStatus: "running",
     markets: [
       expect.objectContaining({
-        exchange: "binance",
+        venue: "binance",
         symbol: "BTC/USDT:USDT",
         activity: "active",
         ready: true,
@@ -278,7 +278,7 @@ test("health account filters only emit matching private status events", async ()
   });
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -306,7 +306,7 @@ test("health account filters only emit matching private status events", async ()
   expect(accountEvent.value).toMatchObject({
     type: "account.status_changed",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     status: {
       activity: "active",
       ready: false,
@@ -320,7 +320,7 @@ test("health account filters only emit matching private status events", async ()
   expect(await nextEvent(accountHealth)).toMatchObject({
     type: "account.status_changed",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     status: {
       activity: "active",
       ready: true,
@@ -335,7 +335,7 @@ test("health account filters only emit matching private status events", async ()
   expect(await nextEvent(accountHealth)).toMatchObject({
     type: "order.status_changed",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     status: {
       activity: "active",
       ready: true,
@@ -347,7 +347,7 @@ test("health account filters only emit matching private status events", async ()
     accounts: [
       expect.objectContaining({
         accountId: "main-binance",
-        exchange: "binance",
+        venue: "binance",
         activity: "active",
         ready: true,
       }),
@@ -355,7 +355,7 @@ test("health account filters only emit matching private status events", async ()
     orders: [
       expect.objectContaining({
         accountId: "main-binance",
-        exchange: "binance",
+        venue: "binance",
         activity: "active",
         ready: true,
       }),

@@ -9,15 +9,15 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
-  Exchange,
   HealthEvent,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
+  Venue,
 } from "../types/index.ts";
 
 export interface RegisteredAccountRecord {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   credentials?: AccountCredentials;
   options?: Record<string, unknown>;
 }
@@ -49,7 +49,7 @@ export interface ManagerLifecycle {
 
 export interface AccountAwareManager {
   onAccountRemoved(accountId: string, now: number): void;
-  onCredentialsUpdated(accountId: string, exchange: Exchange): void;
+  onCredentialsUpdated(accountId: string, venue: Venue): void;
 }
 
 export interface HealthReporter<T> {
@@ -65,46 +65,51 @@ export interface PrivateSubscriptionState {
 }
 
 export interface PrivateAccountDataConsumer {
-  onPrivateAccountPending(accountId: string, exchange: Exchange): void;
+  onPrivateAccountPending(accountId: string, venue: Venue): void;
   onPrivateAccountBootstrap(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     bootstrap: RawAccountBootstrap,
   ): void;
   onPrivateAccountUpdate(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     update: RawAccountUpdate,
   ): void;
   onPrivateAccountStreamState(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     state: PrivateSubscriptionState,
   ): void;
 }
 
 export interface PrivateOrderDataConsumer {
-  onPrivateOrderPending(accountId: string, exchange: Exchange): void;
+  onPrivateOrderPending(accountId: string, venue: Venue): void;
   onPrivateOrderBootstrap(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     snapshots: RawOrderUpdate[],
   ): void;
   onPrivateOrderUpdate(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     update: RawOrderUpdate,
   ): void;
   onPrivateOrderStreamState(
     accountId: string,
-    exchange: Exchange,
+    venue: Venue,
     state: PrivateSubscriptionState,
   ): void;
 }
 
 export function hasPrivateCredentials(
   credentials?: AccountCredentials,
+  venue?: Venue,
 ): boolean {
+  if (venue === "juplend") {
+    return Boolean(credentials?.apiKey);
+  }
+
   return Boolean(credentials?.apiKey && credentials.secret);
 }
 

@@ -1,14 +1,10 @@
 import type BigNumber from "bignumber.js";
-import type {
-  Exchange,
-  MarketFreshness,
-  SubscriptionActivity,
-} from "./shared.ts";
+import type { MarketFreshness, SubscriptionActivity, Venue } from "./shared.ts";
 
 export type MarketType = "spot" | "swap" | "future";
 
 export interface MarketDefinition {
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   id: string;
   type: MarketType;
@@ -31,7 +27,7 @@ export interface MarketDefinition {
 }
 
 export interface MarketDataStatus {
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   activity: SubscriptionActivity;
   ready: boolean;
@@ -53,7 +49,7 @@ export interface MarketDataStreamStatus {
 }
 
 export interface MarketKeyInput {
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
 }
 
@@ -89,12 +85,12 @@ export interface SubscribeL1BookInput extends MarketKeyInput {}
 export interface SubscribeFundingRateInput extends MarketKeyInput {}
 
 export interface MarketEventFilter {
-  exchange?: Exchange;
+  venue?: Venue;
   symbol?: string;
 }
 
 export interface L1Book {
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   bidPrice: BigNumber;
   bidSize: BigNumber;
@@ -108,7 +104,7 @@ export interface L1Book {
 }
 
 export interface FundingRateSnapshot {
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   fundingRate: BigNumber;
   nextFundingTime?: number;
@@ -123,7 +119,7 @@ export interface FundingRateSnapshot {
 
 export interface MarketStatusChangedEvent {
   type: "market.status_changed";
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   status: MarketDataStatus;
   ts: number;
@@ -131,7 +127,7 @@ export interface MarketStatusChangedEvent {
 
 export interface L1BookUpdatedEvent {
   type: "l1_book.updated";
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   snapshot: L1Book;
   ts: number;
@@ -139,7 +135,7 @@ export interface L1BookUpdatedEvent {
 
 export interface FundingRateUpdatedEvent {
   type: "funding_rate.updated";
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   snapshot: FundingRateSnapshot;
   ts: number;
@@ -168,9 +164,9 @@ export interface MarketManager {
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
   unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
 
-  getMarket(exchange: Exchange, symbol: string): MarketDefinition | undefined;
+  getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
-  listMarkets(exchange?: Exchange): MarketDefinition[];
+  listMarkets(venue?: Venue): MarketDefinition[];
   normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getL1Books(symbol: string): L1Book[];

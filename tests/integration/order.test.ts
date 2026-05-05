@@ -22,13 +22,13 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
   const iterator = client.order.events
     .updates({
       accountId: "main-binance",
-      exchange: "binance",
+      venue: "binance",
     })
     [Symbol.asyncIterator]();
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -58,7 +58,7 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
   expect(await nextEvent(iterator)).toMatchObject({
     type: "order.snapshot_replaced",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     snapshot: [
       {
         orderId: "1001",
@@ -138,7 +138,7 @@ test("order status enters reconnecting on disconnect and recovers after websocke
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -183,7 +183,7 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -208,7 +208,7 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
 
   expect(snapshot).toMatchObject({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     orderId: "2001",
     clientOrderId: "cid-2001",
     symbol: "BTC/USDT:USDT",
@@ -254,7 +254,7 @@ test("createOrder sends post-only limit orders with Binance GTX timeInForce", as
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -296,7 +296,7 @@ test("cancelOrder accepts clientOrderId and updates the cached snapshot", async 
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -410,7 +410,7 @@ test("cancelAllOrders scopes by symbol and only updates matching cached orders",
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -454,7 +454,7 @@ test("cancelOrder validates that at least one order identifier is provided", asy
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -480,7 +480,7 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",
@@ -506,7 +506,7 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
   expect(error).toMatchObject({
     source: "adapter",
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   expect(error.error).toBeInstanceOf(Error);
@@ -525,13 +525,13 @@ test("order public status stream and unsubscribe expose stopped semantics", asyn
   const statusIterator = client.order.events
     .status({
       accountId: "main-binance",
-      exchange: "binance",
+      venue: "binance",
     })
     [Symbol.asyncIterator]();
 
   await client.registerAccount({
     accountId: "main-binance",
-    exchange: "binance",
+    venue: "binance",
     credentials: {
       apiKey: "key",
       secret: "secret",

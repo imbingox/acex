@@ -1,5 +1,6 @@
 import { BinanceMarketAdapter } from "../adapters/binance/adapter.ts";
 import { BinancePrivateAdapter } from "../adapters/binance/private-adapter.ts";
+import { JuplendPrivateAdapter } from "../adapters/juplend/private-adapter.ts";
 import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
@@ -33,6 +34,7 @@ import type {
   RegisterAccountInput,
   RegisterAccountResult,
   StopOptions,
+  Venue,
 } from "../types/index.ts";
 import {
   type ClientContext,
@@ -87,14 +89,20 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketManager: MarketManagerImpl;
   private readonly accountManager: AccountManagerImpl;
   private readonly orderManager: OrderManagerImpl;
-  private readonly privateAdapter: PrivateUserDataAdapter;
+  private readonly privateAdapters: Map<string, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
 
     const marketAdapter = new BinanceMarketAdapter();
-    this.privateAdapter = new BinancePrivateAdapter();
+    const privateAdapters = [
+      new BinancePrivateAdapter(),
+      new JuplendPrivateAdapter(),
+    ];
+    this.privateAdapters = new Map(
+      privateAdapters.map((adapter) => [adapter.venue, adapter]),
+    );
 
     this.marketManager = new MarketManagerImpl(this, marketAdapter, {
       initialL1TimeoutMs: options.market?.l1InitialMessageTimeoutMs,
@@ -106,7 +114,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.orderManager = new OrderManagerImpl(this);
     this.privateCoordinator = new PrivateSubscriptionCoordinator(
       this,
-      this.privateAdapter,
+      privateAdapters,
       this.accountManager as PrivateAccountDataConsumer,
       this.orderManager as PrivateOrderDataConsumer,
       options.account,
@@ -141,20 +149,20 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       throw this.createError(
         "ACCOUNT_ALREADY_EXISTS",
         `Account already exists: ${input.accountId}`,
-        { accountId: input.accountId, exchange: input.exchange },
+        { accountId: input.accountId, venue: input.venue },
       );
     }
 
     this.registeredAccounts.set(input.accountId, {
       accountId: input.accountId,
-      exchange: input.exchange,
+      venue: input.venue,
       credentials: input.credentials,
-      options: input.options,
+      options: input.options as Record<string, unknown> | undefined,
     });
 
     return {
       accountId: input.accountId,
-      exchange: input.exchange,
+      venue: input.venue,
     };
   }
 
@@ -177,8 +185,8 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       return;
     }
 
-    this.accountManager.onCredentialsUpdated(accountId, account.exchange);
-    this.orderManager.onCredentialsUpdated(accountId, account.exchange);
+    this.accountManager.onCredentialsUpdated(accountId, account.venue);
+    this.orderManager.onCredentialsUpdated(accountId, account.venue);
     this.privateCoordinator.onCredentialsUpdated(accountId);
   }
 
@@ -262,14 +270,14 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
   ensurePrivateCredentials(accountId: string): void {
     const account = this.getRegisteredAccount(accountId);
-    if (hasPrivateCredentials(account.credentials)) {
+    if (hasPrivateCredentials(account.credentials, account.venue)) {
       return;
     }
 
     throw this.createError(
       "CREDENTIALS_MISSING",
       `Account credentials are required for private subscriptions: ${accountId}`,
-      { accountId, exchange: account.exchange },
+      { accountId, venue: account.venue },
     );
   }
 
@@ -303,7 +311,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       positionSide: input.positionSide,
     };
 
-    return this.privateAdapter.createOrder(
+    return this.getPrivateAdapter(account.venue).createOrder(
       account.credentials ?? {},
       request,
       account.options,
@@ -318,7 +326,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       clientOrderId: input.clientOrderId,
     };
 
-    return this.privateAdapter.cancelOrder(
+    return this.getPrivateAdapter(account.venue).cancelOrder(
       account.credentials ?? {},
       request,
       account.options,
@@ -331,7 +339,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       symbol: input.symbol,
     };
 
-    return this.privateAdapter.cancelAllOrders(
+    return this.getPrivateAdapter(account.venue).cancelAllOrders(
       account.credentials ?? {},
       request,
       account.options,
@@ -390,22 +398,36 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
   private getPrivateCommandAccount(accountId: string): RegisteredAccountRecord {
     const account = this.getRegisteredAccount(accountId);
-    if (account.exchange !== this.privateAdapter.exchange) {
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (adapter.venue === "juplend") {
       throw this.createError(
-        "EXCHANGE_NOT_SUPPORTED",
-        `Exchange is not supported yet: ${account.exchange}`,
-        { accountId, exchange: account.exchange },
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support private order commands: ${account.venue}`,
+        { accountId, venue: account.venue },
       );
     }
 
-    if (!hasPrivateCredentials(account.credentials)) {
+    if (!hasPrivateCredentials(account.credentials, account.venue)) {
       throw this.createError(
         "CREDENTIALS_MISSING",
         `Account credentials are required for private order commands: ${accountId}`,
-        { accountId, exchange: account.exchange },
+        { accountId, venue: account.venue },
       );
     }
 
     return account;
+  }
+
+  private getPrivateAdapter(venue: Venue): PrivateUserDataAdapter {
+    const adapter = this.privateAdapters.get(venue);
+    if (!adapter) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue is not supported yet: ${venue}`,
+        { venue },
+      );
+    }
+
+    return adapter;
   }
 }

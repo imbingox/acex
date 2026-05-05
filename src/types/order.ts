@@ -1,15 +1,15 @@
 import type BigNumber from "bignumber.js";
 import type { PositionSide } from "./account.ts";
 import type {
-  Exchange,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
   SubscriptionActivity,
+  Venue,
 } from "./shared.ts";
 
 export interface OrderDataStatus {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   activity: SubscriptionActivity;
   ready: boolean;
   runtimeStatus?: PrivateRuntimeStatus;
@@ -22,7 +22,7 @@ export interface OrderDataStatus {
 export interface OrderStatusChangedEvent {
   type: "order.status_changed";
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   status: OrderDataStatus;
   ts: number;
 }
@@ -89,13 +89,13 @@ export interface CancelAllOrdersInput {
 
 export interface OrderEventFilter {
   accountId?: string;
-  exchange?: Exchange;
+  venue?: Venue;
   symbol?: string;
 }
 
 export interface OrderSnapshot {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   orderId?: string;
   clientOrderId?: string;
   symbol: string;
@@ -118,7 +118,7 @@ export interface OrderSnapshot {
 
 export interface OrderEventBase {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   ts: number;
 }
@@ -146,7 +146,7 @@ export interface OrderRejectedEvent extends OrderEventBase {
 export interface OrderSnapshotReplacedEvent {
   type: "order.snapshot_replaced";
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   snapshot: OrderSnapshot[];
   ts: number;
 }

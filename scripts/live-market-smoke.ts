@@ -16,7 +16,7 @@ interface CliOptions {
 
 interface ErrorSummary {
   source: AcexInternalError["source"];
-  exchange?: string;
+  venue?: string;
   symbol?: string;
   accountId?: string;
   message: string;
@@ -294,7 +294,7 @@ function summarizeSocket(socket: TrackedWebSocket): Record<string, unknown> {
 function summarizeError(error: AcexInternalError): ErrorSummary {
   return {
     source: error.source,
-    exchange: error.exchange,
+    venue: error.venue,
     symbol: error.symbol,
     accountId: error.accountId,
     message: error.error.message,
@@ -400,7 +400,7 @@ async function smokeSymbol(options: {
   reconnectWaitMs: number;
 }): Promise<SmokeResult> {
   const key = {
-    exchange: "binance" as const,
+    venue: "binance" as const,
     symbol: options.symbol,
   };
   const iterator = options.client.market.events
@@ -598,7 +598,7 @@ async function smokeFundingRateAttempt(options: {
   attempt: number;
 }): Promise<FundingSmokeResult> {
   const key = {
-    exchange: "binance" as const,
+    venue: "binance" as const,
     symbol: options.symbol,
   };
   const iterator = options.client.market.events

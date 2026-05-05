@@ -1,14 +1,14 @@
 import type BigNumber from "bignumber.js";
 import type {
-  Exchange,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
   SubscriptionActivity,
+  Venue,
 } from "./shared.ts";
 
 export interface AccountDataStatus {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   activity: SubscriptionActivity;
   ready: boolean;
   runtimeStatus?: PrivateRuntimeStatus;
@@ -21,7 +21,7 @@ export interface AccountDataStatus {
 export interface AccountStatusChangedEvent {
   type: "account.status_changed";
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   status: AccountDataStatus;
   ts: number;
 }
@@ -44,13 +44,13 @@ export interface PositionKeyInput {
 
 export interface AccountEventFilter {
   accountId?: string;
-  exchange?: Exchange;
+  venue?: Venue;
   symbol?: string;
 }
 
 export interface BalanceSnapshot {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   asset: string;
   free: BigNumber;
   used: BigNumber;
@@ -59,11 +59,21 @@ export interface BalanceSnapshot {
   receivedAt: number;
   updatedAt: number;
   seq: number;
+  lending?: LendingBalanceFacet;
+}
+
+export interface LendingBalanceFacet {
+  supplied: BigNumber;
+  borrowed: BigNumber;
+  interest: BigNumber;
+  netAsset: BigNumber;
+  supplyAPY?: BigNumber;
+  borrowAPY?: BigNumber;
 }
 
 export interface PositionSnapshot {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   symbol: string;
   side: PositionSide;
   size: BigNumber;
@@ -80,20 +90,30 @@ export interface PositionSnapshot {
 
 export interface RiskSnapshot {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   equity?: BigNumber;
-  marginRatio?: BigNumber;
+  riskRatio?: BigNumber;
   initialMargin?: BigNumber;
   maintenanceMargin?: BigNumber;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
   seq: number;
+  lending?: LendingRiskFacet;
+}
+
+export interface LendingRiskFacet {
+  marginLevel?: BigNumber;
+  healthFactor?: BigNumber;
+  ltv?: BigNumber;
+  liquidationThreshold?: BigNumber;
+  totalCollateralUSD?: BigNumber;
+  totalDebtUSD?: BigNumber;
 }
 
 export interface AccountSnapshot {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   balances: Record<string, BalanceSnapshot>;
   positions: PositionSnapshot[];
   risk?: RiskSnapshot;
@@ -104,7 +124,7 @@ export interface AccountSnapshot {
 
 export interface AccountEventBase {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
   ts: number;
 }
 

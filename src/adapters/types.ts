@@ -1,11 +1,11 @@
 import type {
   AccountCredentials,
   CreateOrderType,
-  Exchange,
   MarketDefinition,
   OrderSide,
   OrderStatus,
   PositionSide,
+  Venue,
 } from "../types/index.ts";
 
 export interface StreamHandle {
@@ -68,7 +68,7 @@ export interface FundingRateStreamOptions {
 }
 
 export interface MarketAdapter {
-  readonly exchange: Exchange;
+  readonly venue: Venue;
   loadMarkets(): Promise<MarketDefinition[]>;
   createL1BookStream(
     market: MarketDefinition,
@@ -89,6 +89,16 @@ export interface RawBalanceUpdate {
   total?: string;
   exchangeTs?: number;
   receivedAt: number;
+  lending?: RawLendingBalanceUpdate;
+}
+
+export interface RawLendingBalanceUpdate {
+  supplied: string;
+  borrowed: string;
+  interest: string;
+  netAsset: string;
+  supplyAPY?: string;
+  borrowAPY?: string;
 }
 
 export interface RawPositionUpdate {
@@ -106,11 +116,21 @@ export interface RawPositionUpdate {
 
 export interface RawRiskUpdate {
   equity?: string;
-  marginRatio?: string;
+  riskRatio?: string;
   initialMargin?: string;
   maintenanceMargin?: string;
   exchangeTs?: number;
   receivedAt: number;
+  lending?: RawLendingRiskUpdate;
+}
+
+export interface RawLendingRiskUpdate {
+  marginLevel?: string;
+  healthFactor?: string;
+  ltv?: string;
+  liquidationThreshold?: string;
+  totalCollateralUSD?: string;
+  totalDebtUSD?: string;
 }
 
 export interface RawAccountBootstrap {
@@ -171,6 +191,7 @@ export interface CancelAllOrdersRequest {
 }
 
 export interface PrivateStreamCallbacks {
+  onAccountSnapshot(snapshot: RawAccountBootstrap): void;
   onAccountUpdate(update: RawAccountUpdate): void;
   onOrderUpdate(update: RawOrderUpdate): void;
   onDisconnected(): void;
@@ -183,11 +204,12 @@ export interface PrivateStreamOptions {
   reconnectDelayMs: number;
   reconnectMaxDelayMs: number;
   listenKeyKeepAliveMs: number;
+  juplendPollIntervalMs?: number;
   now?: () => number;
 }
 
 export interface PrivateUserDataAdapter {
-  readonly exchange: Exchange;
+  readonly venue: Venue;
   bootstrapAccount(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,

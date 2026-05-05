@@ -174,11 +174,11 @@ function summarizeSnapshot(
     risk: risk
       ? {
           hasEquity: risk.equity !== undefined,
-          hasMarginRatio: risk.marginRatio !== undefined,
+          hasMarginRatio: risk.riskRatio !== undefined,
           hasInitialMargin: risk.initialMargin !== undefined,
           hasMaintenanceMargin: risk.maintenanceMargin !== undefined,
           equity: showAmounts ? risk.equity?.toFixed() : undefined,
-          marginRatio: showAmounts ? risk.marginRatio?.toFixed() : undefined,
+          riskRatio: showAmounts ? risk.riskRatio?.toFixed() : undefined,
           initialMargin: showAmounts
             ? risk.initialMargin?.toFixed()
             : undefined,
@@ -203,7 +203,7 @@ async function smokeAccount(options: {
   const iterator = options.client.account.events
     .updates({
       accountId: options.accountId,
-      exchange: "binance",
+      venue: "binance",
     })
     [Symbol.asyncIterator]();
   const socketIndex = TrackedWebSocket.instances.length;
@@ -364,7 +364,7 @@ async function main(): Promise<void> {
   try {
     await client.registerAccount({
       accountId: cli.accountId,
-      exchange: "binance",
+      venue: "binance",
       credentials: {
         apiKey,
         secret,

@@ -238,7 +238,7 @@ async function smokeOrders(options: {
   const iterator = options.client.order.events
     .updates({
       accountId: options.accountId,
-      exchange: "binance",
+      venue: "binance",
     })
     [Symbol.asyncIterator]();
   const socketIndex = TrackedWebSocket.instances.length;
@@ -398,7 +398,7 @@ async function main(): Promise<void> {
   try {
     await client.registerAccount({
       accountId: cli.accountId,
-      exchange: "binance",
+      venue: "binance",
       credentials: {
         apiKey,
         secret,

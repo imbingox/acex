@@ -22,7 +22,7 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
   ]);
 
   expect(client.market.getMarket("binance", "BTC/USDT")).toMatchObject({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT",
     type: "spot",
     contract: false,
@@ -69,7 +69,7 @@ test("normalizeOrderInput floors price and amount to market steps", async () => 
 
   expect(
     client.market.normalizeOrderInput({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
       price: "101000.123456789",
       amount: "0.010987654321",
@@ -96,7 +96,7 @@ test("normalizeOrderInput reports min-notional rejection after normalization", a
 
   expect(
     client.market.normalizeOrderInput({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
       price: "1000.09",
       amount: "0.0049",
@@ -130,7 +130,7 @@ test("market catalog load failure emits an adapter error and wrapped AcexError",
   const errorEvent = await nextEvent(errors);
   expect(errorEvent).toMatchObject({
     source: "adapter",
-    exchange: "binance",
+    venue: "binance",
   });
   expect(errorEvent.error.message).toContain("Binance request failed: 503");
 
@@ -147,14 +147,14 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   });
   const iterator = client.market.events
     .l1BookUpdates({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
 
   await client.start();
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
@@ -173,11 +173,11 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   await subscribePromise;
 
   const book = client.market.getL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const status = client.market.getMarketStatus({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
@@ -209,13 +209,13 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   expect(event.snapshot.bidSize).toEqual(new BigNumber("1.500"));
 
   await client.market.unsubscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -235,14 +235,14 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
   });
   const iterator = client.market.events
     .fundingRateUpdates({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
 
   await client.start();
   const subscribePromise = client.market.subscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
@@ -263,11 +263,11 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
   await subscribePromise;
 
   const fundingRate = client.market.getFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const status = client.market.getMarketStatus({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
@@ -302,13 +302,13 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
   expect(event.snapshot.fundingRate).toEqual(new BigNumber("0.00010000"));
 
   await client.market.unsubscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -331,7 +331,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
 
   await client.start();
   const subscribePromise = client.market.subscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const firstSocket = await waitForSocket(
@@ -353,7 +353,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -366,7 +366,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -392,7 +392,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
 
   expect(
     client.market.getFundingRate({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -405,7 +405,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
   });
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -425,7 +425,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
 
   await client.start();
   const bookSubscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const bookSocket = await waitForSocket(
@@ -442,7 +442,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   await bookSubscribePromise;
 
   const fundingSubscribePromise = client.market.subscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const fundingSocket = await waitForSocket(
@@ -464,7 +464,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -473,7 +473,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   });
   expect(
     client.market.getFundingRate({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -484,13 +484,13 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   });
 
   await client.market.unsubscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -501,7 +501,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   });
   expect(
     client.market.getFundingRate({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -514,7 +514,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   });
   expect(
     client.market.getL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -537,13 +537,13 @@ test("market update events keep publish-time snapshot status", async () => {
   });
   const l1Iterator = client.market.events
     .l1BookUpdates({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
   const fundingIterator = client.market.events
     .fundingRateUpdates({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
@@ -551,7 +551,7 @@ test("market update events keep publish-time snapshot status", async () => {
   await client.start();
 
   const bookSubscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const bookSocket = await waitForSocket(
@@ -568,7 +568,7 @@ test("market update events keep publish-time snapshot status", async () => {
   await bookSubscribePromise;
 
   const fundingSubscribePromise = client.market.subscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const fundingSocket = await waitForSocket(
@@ -586,11 +586,11 @@ test("market update events keep publish-time snapshot status", async () => {
   await fundingSubscribePromise;
 
   await client.market.unsubscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   await client.market.unsubscribeFundingRate({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
@@ -621,7 +621,7 @@ test("spot funding rate subscriptions fail explicitly", async () => {
 
   await expect(
     client.market.subscribeFundingRate({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT",
     }),
   ).rejects.toMatchObject({
@@ -631,7 +631,7 @@ test("spot funding rate subscriptions fail explicitly", async () => {
   const errorEvent = await nextEvent(errors);
   expect(errorEvent).toMatchObject({
     source: "market",
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT",
   });
 
@@ -649,7 +649,7 @@ test("unknown and inactive markets have explicit semantics", async () => {
 
   await expect(
     client.market.subscribeL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "DOGE/USDT",
     }),
   ).rejects.toMatchObject({
@@ -658,7 +658,7 @@ test("unknown and inactive markets have explicit semantics", async () => {
 
   await expect(
     client.market.subscribeL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "ETH/USDT",
     }),
   ).rejects.toMatchObject({
@@ -677,7 +677,7 @@ test("watchdog marks stale data and disconnect marks ws_disconnected", async () 
 
   await client.start();
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT",
   });
   const socket = await waitForSocket(
@@ -698,7 +698,7 @@ test("watchdog marks stale data and disconnect marks ws_disconnected", async () 
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT",
     }),
   ).toMatchObject({
@@ -712,7 +712,7 @@ test("watchdog marks stale data and disconnect marks ws_disconnected", async () 
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT",
     }),
   ).toMatchObject({
@@ -735,7 +735,7 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
 
   await client.start();
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
 
@@ -756,7 +756,7 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
 
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -781,7 +781,7 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
 
   expect(
     client.market.getL1Book({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -791,7 +791,7 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
   });
   expect(
     client.market.getMarketStatus({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
@@ -811,20 +811,20 @@ test("market all and status streams expose public event filtering", async () => 
   });
   const allIterator = client.market.events
     .all({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
   const statusIterator = client.market.events
     .status({
-      exchange: "binance",
+      venue: "binance",
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
 
   await client.start();
   const subscribePromise = client.market.subscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   const socket = await waitForSocket(
@@ -834,7 +834,7 @@ test("market all and status streams expose public event filtering", async () => 
 
   const pendingStatus = {
     type: "market.status_changed",
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
     status: {
       activity: "active",
@@ -865,7 +865,7 @@ test("market all and status streams expose public event filtering", async () => 
   expect(await nextEvent(statusIterator)).toMatchObject(freshStatus);
   expect(await nextEvent(allIterator)).toMatchObject({
     type: "l1_book.updated",
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
     snapshot: {
       bidPrice: new BigNumber("102000.10"),
@@ -875,7 +875,7 @@ test("market all and status streams expose public event filtering", async () => 
   expect(await nextEvent(allIterator)).toMatchObject(freshStatus);
 
   await client.market.unsubscribeL1Book({
-    exchange: "binance",
+    venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
   let inactiveStatusEvent: unknown;

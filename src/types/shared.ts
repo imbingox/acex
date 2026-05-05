@@ -1,6 +1,12 @@
-export const SUPPORTED_EXCHANGES = ["binance", "okx", "bybit", "gate"] as const;
+export const SUPPORTED_VENUES = [
+  "binance",
+  "okx",
+  "bybit",
+  "gate",
+  "juplend",
+] as const;
 
-export type Exchange = (typeof SUPPORTED_EXCHANGES)[number];
+export type Venue = (typeof SUPPORTED_VENUES)[number];
 
 export type ClientStatus =
   | "idle"
@@ -30,6 +36,9 @@ export interface AccountRuntimeOptions {
   streamReconnectDelayMs?: number;
   streamReconnectMaxDelayMs?: number;
   listenKeyKeepAliveMs?: number;
+  juplend?: {
+    pollIntervalMs?: number;
+  };
 }
 
 export interface CreateClientOptions {
@@ -47,16 +56,41 @@ export interface AccountCredentials {
   extra?: Record<string, string>;
 }
 
-export interface RegisterAccountInput {
-  accountId: string;
-  exchange: Exchange;
-  credentials?: AccountCredentials;
-  options?: Record<string, unknown>;
+export interface BinanceAccountOptions {
+  timestamp?: number;
+  recvWindow?: number;
 }
+
+export interface JuplendAccountCredentials {
+  apiKey: string;
+}
+
+export interface JuplendAccountOptions {
+  walletAddress: string;
+  positionId?: string;
+}
+
+export interface RegisterCexAccountInput {
+  accountId: string;
+  venue: Exclude<Venue, "juplend">;
+  credentials?: AccountCredentials;
+  options?: BinanceAccountOptions;
+}
+
+export interface RegisterJuplendAccountInput {
+  accountId: string;
+  venue: "juplend";
+  credentials: JuplendAccountCredentials;
+  options: JuplendAccountOptions;
+}
+
+export type RegisterAccountInput =
+  | RegisterCexAccountInput
+  | RegisterJuplendAccountInput;
 
 export interface RegisterAccountResult {
   accountId: string;
-  exchange: Exchange;
+  venue: Venue;
 }
 
 export interface StopOptions {
@@ -66,7 +100,7 @@ export interface StopOptions {
 
 export interface AcexInternalError {
   source: "client" | "market" | "account" | "order" | "adapter" | "runtime";
-  exchange?: Exchange;
+  venue?: Venue;
   accountId?: string;
   symbol?: string;
   error: Error;
@@ -88,6 +122,8 @@ export type PrivateRuntimeStatus =
 export type PrivateRuntimeReason =
   | "credentials_missing"
   | "auth_failed"
+  | "http_failed"
+  | "rate_limited"
   | "ws_disconnected"
   | "heartbeat_timeout"
   | "reconciling";

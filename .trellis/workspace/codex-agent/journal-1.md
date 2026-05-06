@@ -404,3 +404,37 @@ Implemented venue-based account registration and Juplend read-only lending accou
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: Venue capability queries and npm docs packaging
+
+**Date**: 2026-05-06
+**Task**: Venue capability queries and npm docs packaging
+**Branch**: `feat/new_account`
+
+### Summary
+
+Added top-level venue capability queries, moved capability truth closer to adapters, documented constraints, and included docs/api.md in the published npm package.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ea9a4a7` | (see git log) |
+| `46d1291` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -21,6 +21,7 @@ export interface StreamHandle {
 // 行情 adapter
 export interface MarketAdapter {
   readonly exchange: Exchange;
+  readonly marketCapabilities: VenueMarketCapabilities;
   loadMarkets(): Promise<MarketDefinition[]>;
   createL1BookStream(
     market: MarketDefinition,
@@ -32,6 +33,10 @@ export interface MarketAdapter {
 // 私有链路 adapter
 export interface PrivateUserDataAdapter {
   readonly exchange: Exchange;
+  readonly readOnly: boolean;
+  readonly notes: string[];
+  readonly accountCapabilities: VenueAccountCapabilities;
+  readonly orderCapabilities: VenueOrderCapabilities;
   bootstrapAccount(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
@@ -74,6 +79,8 @@ src/adapters/binance/book-ticker.ts        — subscribeBinanceBookTicker
 src/adapters/binance/market-catalog.ts     — loadBinanceMarkets
 src/adapters/binance/private-adapter.ts    — BinancePrivateAdapter
 ```
+
+capability 字段只声明该 adapter 的 SDK runtime 实现能力，完整聚合语义见 [Venue Capabilities](./venue-capabilities.md)。
 
 ### 3. Contracts
 

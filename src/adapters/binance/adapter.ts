@@ -1,4 +1,7 @@
-import type { MarketDefinition } from "../../types/index.ts";
+import type {
+  MarketDefinition,
+  VenueMarketCapabilities,
+} from "../../types/index.ts";
 import type {
   FundingRateStreamCallbacks,
   FundingRateStreamOptions,
@@ -16,6 +19,12 @@ import {
 
 export class BinanceMarketAdapter implements MarketAdapter {
   readonly venue = "binance" as const;
+  readonly marketCapabilities: VenueMarketCapabilities = {
+    catalog: "supported",
+    l1Book: "supported",
+    fundingRate: "market_dependent",
+    marketTypes: ["spot", "swap", "future"],
+  };
 
   private readonly definitions = new Map<string, BinanceMarketDefinition>();
 

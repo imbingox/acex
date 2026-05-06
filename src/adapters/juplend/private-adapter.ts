@@ -1,6 +1,10 @@
 import BigNumber from "bignumber.js";
 import { AcexError } from "../../errors.ts";
-import type { AccountCredentials } from "../../types/index.ts";
+import type {
+  AccountCredentials,
+  VenueAccountCapabilities,
+  VenueOrderCapabilities,
+} from "../../types/index.ts";
 import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
@@ -361,6 +365,36 @@ function mapAccount(
 
 export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
   readonly venue = "juplend" as const;
+  readonly readOnly = true;
+  readonly notes = [
+    "Juplend support is limited to read-only lending account views.",
+    "Order and market data managers are not supported for this venue.",
+  ];
+  readonly accountCapabilities: VenueAccountCapabilities = {
+    register: "supported",
+    snapshot: "supported",
+    updates: "polling",
+    balances: "supported",
+    positions: "unsupported",
+    risk: "supported",
+    lending: "supported",
+    credentialsRequired: true,
+  };
+  readonly orderCapabilities: VenueOrderCapabilities = {
+    supported: false,
+    openOrders: "unsupported",
+    updates: "unsupported",
+    create: "unsupported",
+    cancel: "unsupported",
+    cancelAll: "unsupported",
+    orderTypes: [],
+    timeInForce: [],
+    postOnly: false,
+    reduceOnly: false,
+    positionSide: "unsupported",
+    clientOrderId: false,
+    reason: "read_only",
+  };
 
   async bootstrapAccount(
     credentials: AccountCredentials,

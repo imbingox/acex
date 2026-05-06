@@ -16,7 +16,8 @@
   },
   "files": [
     "index.ts",
-    "src/"
+    "src/",
+    "docs/api.md"
   ],
   "scripts": {
     "changeset": "changeset",

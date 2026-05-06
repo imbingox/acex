@@ -36,6 +36,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 | [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
 | [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |
 | [Type Safety](./type-safety.md) | 类型定义位置、显式返回类型、避免宽化和循环引用 | Active |
+| [Venue Capabilities](./venue-capabilities.md) | venue 级 runtime capability 查询 contract、静态能力表语义、返回值 clone 要求 | Active |
 | [Venue Lending](./venue-lending.md) | DEX 借贷只读账户视图、lending facet、riskRatio 与 polling adapter 语义 | Active |
 
 ---
@@ -61,6 +62,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 - 调整目录结构、增加 manager、增加适配器、修改层级依赖：读 [Code Organization](./code-organization.md)
 - 新增或修改交易所 adapter、修改 `MarketAdapter` / `PrivateUserDataAdapter` 接口、接入新的 `StreamHandle` 或 `Raw*` 类型：读 [Adapter Contract](./adapter-contract.md)
 - 新增或修改 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`、Binance 持仓模式约束、交易命令错误语义：读 [Order Execution](./order-execution.md)
+- 新增或修改 `getVenueCapabilities()` / `listVenueCapabilities()`、新增 venue runtime 能力、调整只读/可交易状态：读 [Venue Capabilities](./venue-capabilities.md)
 - 新增或修改 GitHub Actions 发布流程、npm publish 参数、发布前质量门禁：读 [Release Publishing](./release-publishing.md)
 - 新增公共类型、修复类型错误、改返回值语义：读 [Type Safety](./type-safety.md)
 

@@ -6,6 +6,9 @@ import type {
   OrderStatus,
   PositionSide,
   Venue,
+  VenueAccountCapabilities,
+  VenueMarketCapabilities,
+  VenueOrderCapabilities,
 } from "../types/index.ts";
 
 export interface StreamHandle {
@@ -69,6 +72,7 @@ export interface FundingRateStreamOptions {
 
 export interface MarketAdapter {
   readonly venue: Venue;
+  readonly marketCapabilities: VenueMarketCapabilities;
   loadMarkets(): Promise<MarketDefinition[]>;
   createL1BookStream(
     market: MarketDefinition,
@@ -210,6 +214,10 @@ export interface PrivateStreamOptions {
 
 export interface PrivateUserDataAdapter {
   readonly venue: Venue;
+  readonly readOnly: boolean;
+  readonly notes: string[];
+  readonly accountCapabilities: VenueAccountCapabilities;
+  readonly orderCapabilities: VenueOrderCapabilities;
   bootstrapAccount(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,

@@ -7,8 +7,10 @@ import type {
   MarketDataStatus,
   MarketManager,
   MarketStatusChangedEvent,
+  MarketType,
 } from "./market.ts";
 import type {
+  CreateOrderType,
   OrderDataStatus,
   OrderManager,
   OrderStatusChangedEvent,
@@ -56,6 +58,73 @@ export interface ClientEventStreams {
   errors(): AsyncIterable<AcexInternalError>;
 }
 
+export type VenueRuntimeStatus = "available" | "type_only" | "reserved";
+
+export type VenueCapabilitySupport = "supported" | "unsupported";
+
+export type VenueCapabilityReason =
+  | "not_implemented"
+  | "read_only"
+  | "market_type_unsupported"
+  | "sdk_reserved";
+
+export type FundingRateCapability = VenueCapabilitySupport | "market_dependent";
+
+export type PrivateUpdateCapability = "websocket" | "polling" | "unsupported";
+
+export type CancelAllOrdersCapability = "symbol" | "account" | "unsupported";
+
+export type PositionSideCapability =
+  | "optional"
+  | "required_for_hedge"
+  | "unsupported";
+
+export type OrderTimeInForceCapability = "gtc" | "post_only";
+
+export interface VenueMarketCapabilities {
+  catalog: VenueCapabilitySupport;
+  l1Book: VenueCapabilitySupport;
+  fundingRate: FundingRateCapability;
+  marketTypes: MarketType[];
+}
+
+export interface VenueAccountCapabilities {
+  register: VenueCapabilitySupport;
+  snapshot: VenueCapabilitySupport;
+  updates: PrivateUpdateCapability;
+  balances: VenueCapabilitySupport;
+  positions: VenueCapabilitySupport;
+  risk: VenueCapabilitySupport;
+  lending: VenueCapabilitySupport;
+  credentialsRequired: boolean;
+}
+
+export interface VenueOrderCapabilities {
+  supported: boolean;
+  openOrders: VenueCapabilitySupport;
+  updates: PrivateUpdateCapability;
+  create: VenueCapabilitySupport;
+  cancel: VenueCapabilitySupport;
+  cancelAll: CancelAllOrdersCapability;
+  orderTypes: CreateOrderType[];
+  timeInForce: OrderTimeInForceCapability[];
+  postOnly: boolean;
+  reduceOnly: boolean;
+  positionSide: PositionSideCapability;
+  clientOrderId: boolean;
+  reason?: VenueCapabilityReason;
+}
+
+export interface VenueCapabilities {
+  venue: Venue;
+  runtimeStatus: VenueRuntimeStatus;
+  readOnly: boolean;
+  notes: string[];
+  market: VenueMarketCapabilities;
+  account: VenueAccountCapabilities;
+  order: VenueOrderCapabilities;
+}
+
 export interface AcexClient {
   readonly market: MarketManager;
   readonly account: AccountManager;
@@ -64,6 +133,8 @@ export interface AcexClient {
 
   getStatus(): ClientStatus;
   getHealth(): ClientHealthSnapshot;
+  getVenueCapabilities(venue: Venue): VenueCapabilities;
+  listVenueCapabilities(): VenueCapabilities[];
 
   registerAccount(input: RegisterAccountInput): Promise<RegisterAccountResult>;
   updateAccountCredentials(

@@ -1,7 +1,12 @@
 import { createHmac } from "node:crypto";
 import BigNumber from "bignumber.js";
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
-import type { AccountCredentials, PositionSide } from "../../types/index.ts";
+import type {
+  AccountCredentials,
+  PositionSide,
+  VenueAccountCapabilities,
+  VenueOrderCapabilities,
+} from "../../types/index.ts";
 import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
@@ -479,6 +484,36 @@ async function readJson<T>(response: Response, url: string): Promise<T> {
 
 export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   readonly venue = "binance" as const;
+  readonly readOnly = false;
+  readonly notes = [
+    "Capabilities describe the current SDK runtime, not Binance's full exchange API surface.",
+    "Funding rate support depends on the market type.",
+    "Order commands currently target Binance PAPI UM USD-M symbols; venue-level order.supported does not mean every Binance market type is orderable.",
+  ];
+  readonly accountCapabilities: VenueAccountCapabilities = {
+    register: "supported",
+    snapshot: "supported",
+    updates: "websocket",
+    balances: "supported",
+    positions: "supported",
+    risk: "supported",
+    lending: "unsupported",
+    credentialsRequired: true,
+  };
+  readonly orderCapabilities: VenueOrderCapabilities = {
+    supported: true,
+    openOrders: "supported",
+    updates: "websocket",
+    create: "supported",
+    cancel: "supported",
+    cancelAll: "symbol",
+    orderTypes: ["limit", "market"],
+    timeInForce: ["gtc", "post_only"],
+    postOnly: true,
+    reduceOnly: true,
+    positionSide: "required_for_hedge",
+    clientOrderId: true,
+  };
 
   async bootstrapAccount(
     credentials: AccountCredentials,

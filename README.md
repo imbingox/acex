@@ -114,12 +114,29 @@ await client.stop();
 
 Juplend 使用 Jupiter Portfolio API 读取 Solana 钱包的借贷仓位，不需要私钥，也不支持 supply / borrow / repay / withdraw 等写操作。`accountId` 是你自定义的 SDK 账户名；Solana 钱包地址放在 `options.walletAddress`。如果只想观察某个 Juplend NFT position，可传 `options.positionId`。
 
+### 查询 venue 能力
+
+`getVenueCapabilities()` 查询的是当前 SDK runtime 已实现能力，不是交易所官网完整能力，也不会检查 API key 是否有交易权限：
+
+```ts
+const binance = client.getVenueCapabilities("binance");
+console.log(binance.order.supported); // true
+console.log(binance.market.fundingRate); // "market_dependent"
+
+const juplend = client.getVenueCapabilities("juplend");
+console.log(juplend.readOnly); // true
+console.log(juplend.order.reason); // "read_only"
+
+const capabilities = client.listVenueCapabilities();
+```
+
 价格、数量等输出字段统一是 `BigNumber`；`createOrder()` 的 `price` / `amount` 输入仍接受 decimal string。详见手册 [§3 核心概念](./docs/api.md#3-核心概念)。
 
 ## 核心能力
 
 | 能力 | 概述 | 详细文档 |
 |---|---|---|
+| **Capabilities** | `getVenueCapabilities` / `listVenueCapabilities` 查询 SDK 当前 runtime 支持能力 | [docs/api.md §4](./docs/api.md#43-venue-capabilities) |
 | **Market** | Market catalog、L1 Book / Funding Rate 订阅、增量事件、订阅状态与自动重连 | [docs/api.md §5](./docs/api.md#5-marketmanager) |
 | **Account** | 账户快照、余额、持仓、风险投影与事件流 | [docs/api.md §6](./docs/api.md#6-accountmanager) |
 | **Order** | open orders 投影、订单事件流，`createOrder` / `cancelOrder` / `cancelAllOrders` 第一版命令 | [docs/api.md §7](./docs/api.md#7-ordermanager) |

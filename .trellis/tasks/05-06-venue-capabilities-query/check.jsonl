@@ -1,0 +1,9 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "backend SDK architecture and quality expectations"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "verify public API and layering"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "verify public type safety"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "verify capability contract does not leak adapter specifics"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "verify order capability representation"}
+{"file": ".trellis/spec/backend/venue-lending.md", "reason": "verify Juplend read-only representation"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "verify required checks"}
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "verify venue runtime capability contract"}

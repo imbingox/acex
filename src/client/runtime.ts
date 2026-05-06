@@ -5,6 +5,7 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  MarketAdapter,
   PrivateUserDataAdapter,
   RawOrderUpdate,
 } from "../adapters/types.ts";
@@ -35,6 +36,7 @@ import type {
   RegisterAccountResult,
   StopOptions,
   Venue,
+  VenueCapabilities,
 } from "../types/index.ts";
 import {
   type ClientContext,
@@ -45,6 +47,10 @@ import {
   type RegisteredAccountRecord,
 } from "./context.ts";
 import { PrivateSubscriptionCoordinator } from "./private-subscription-coordinator.ts";
+import {
+  getVenueCapabilitiesSnapshot,
+  listVenueCapabilitiesSnapshots,
+} from "./venue-capabilities.ts";
 
 const activeClients = new Set<AcexClientImpl>();
 
@@ -89,13 +95,15 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketManager: MarketManagerImpl;
   private readonly accountManager: AccountManagerImpl;
   private readonly orderManager: OrderManagerImpl;
-  private readonly privateAdapters: Map<string, PrivateUserDataAdapter>;
+  private readonly marketAdapters: Map<Venue, MarketAdapter>;
+  private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
 
     const marketAdapter = new BinanceMarketAdapter();
+    this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
     const privateAdapters = [
       new BinancePrivateAdapter(),
       new JuplendPrivateAdapter(),
@@ -140,6 +148,20 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       orders: this.orderManager.getStatuses(),
       updatedAt: this.now(),
     };
+  }
+
+  getVenueCapabilities(venue: Venue): VenueCapabilities {
+    return getVenueCapabilitiesSnapshot(venue, {
+      marketAdapters: this.marketAdapters,
+      privateAdapters: this.privateAdapters,
+    });
+  }
+
+  listVenueCapabilities(): VenueCapabilities[] {
+    return listVenueCapabilitiesSnapshots({
+      marketAdapters: this.marketAdapters,
+      privateAdapters: this.privateAdapters,
+    });
   }
 
   async registerAccount(

@@ -41,6 +41,85 @@ test("root entry exposes lifecycle snapshot and structured error stream", async 
   await errors.return?.();
 });
 
+test("client exposes venue runtime capabilities without starting", () => {
+  const client = createClient();
+
+  const binance = client.getVenueCapabilities("binance");
+  expect(binance).toMatchObject({
+    venue: "binance",
+    runtimeStatus: "available",
+    readOnly: false,
+    market: {
+      catalog: "supported",
+      l1Book: "supported",
+      fundingRate: "market_dependent",
+    },
+    account: {
+      snapshot: "supported",
+      updates: "websocket",
+      lending: "unsupported",
+    },
+    order: {
+      supported: true,
+      create: "supported",
+      cancelAll: "symbol",
+      orderTypes: ["limit", "market"],
+      postOnly: true,
+      reduceOnly: true,
+      positionSide: "required_for_hedge",
+      clientOrderId: true,
+    },
+  });
+
+  expect(client.getVenueCapabilities("juplend")).toMatchObject({
+    venue: "juplend",
+    runtimeStatus: "available",
+    readOnly: true,
+    account: {
+      snapshot: "supported",
+      updates: "polling",
+      lending: "supported",
+    },
+    order: {
+      supported: false,
+      reason: "read_only",
+    },
+  });
+
+  for (const venue of ["okx", "bybit", "gate"] as const) {
+    expect(client.getVenueCapabilities(venue)).toMatchObject({
+      venue,
+      runtimeStatus: "type_only",
+      market: {
+        catalog: "unsupported",
+      },
+      order: {
+        supported: false,
+        reason: "not_implemented",
+      },
+    });
+  }
+
+  expect(client.listVenueCapabilities().map((entry) => entry.venue)).toEqual([
+    "binance",
+    "okx",
+    "bybit",
+    "gate",
+    "juplend",
+  ]);
+
+  binance.notes.push("caller mutation");
+  binance.order.orderTypes.push("limit");
+
+  expect(client.getVenueCapabilities("binance").notes).not.toContain(
+    "caller mutation",
+  );
+  expect(client.getVenueCapabilities("binance").order.orderTypes).toEqual([
+    "limit",
+    "market",
+  ]);
+});
+
 test("client stop keeps lifecycle and market health semantics observable", async () => {
   installBinanceMarketInfra();
   const client = createClient({

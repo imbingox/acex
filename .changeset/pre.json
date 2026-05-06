@@ -7,6 +7,8 @@
   "changesets": [
     "funding-aggregators",
     "juplend-venue-lending",
-    "order-postonly-normalization"
+    "order-postonly-normalization",
+    "publish-api-docs",
+    "venue-capabilities"
   ]
 }

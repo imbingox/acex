@@ -1,5 +1,15 @@
 # @imbingox/acex
 
+## 0.3.0-beta.3
+
+### Minor Changes
+
+- ea9a4a7: Add top-level venue capability queries for SDK runtime support by venue.
+
+### Patch Changes
+
+- 46d1291: Include `docs/api.md` in the published npm package.
+
 ## 0.3.0-beta.2
 
 ### Minor Changes

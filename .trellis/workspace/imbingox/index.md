@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-04-23
+- **Total Sessions**: 8
+- **Last Active**: 2026-05-10
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~325 | Active |
+| `journal-1.md` | ~359 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-05-10 | Trellis 0.5.12 升级与 spec/docs drift 修复 | `1304f44`, `5b4e602` | `chore/update` |
 | 7 | 2026-04-23 | Finalize Trellis 0.5 migration workflow | `5673eeb`, `6ee7ac7` | `main` |
 | 6 | 2026-04-23 | Reconcile specs and API docs | `8ef8dc2` | `main` |
 | 5 | 2026-04-16 | Finalize frontend specs and archive Trellis tasks | `f7897b9` | `main` |

@@ -26,11 +26,11 @@ export * from "./client.ts";
 当前代码库里的代表性签名：
 
 ```ts
-export type Exchange = (typeof SUPPORTED_EXCHANGES)[number];
+export type Venue = (typeof SUPPORTED_VENUES)[number];
 
 export interface HealthEventFilter {
   scope?: "client" | "market" | "account" | "order";
-  exchange?: Exchange;
+  venue?: Venue;
   accountId?: string;
   symbol?: string;
 }
@@ -45,7 +45,7 @@ export type PrivateRuntimeReason =
 // src/managers/order-manager.ts:478
 private createStatus(
   accountId: string,
-  exchange: Exchange,
+  venue: Venue,
   activity: "active" | "inactive",
 ): OrderDataStatus
 ```
@@ -54,7 +54,7 @@ private createStatus(
 
 #### 3.1 闭合集合必须复用已有联合类型
 
-- 已有 `Exchange`、`ClientStatus`、`PrivateRuntimeStatus` 这类闭合集合时，不要重新写成裸 `string`。
+- 已有 `Venue`、`ClientStatus`、`PrivateRuntimeStatus` 这类闭合集合时，不要重新写成裸 `string`。
 - filter、status、event 上下游必须共用同一个联合类型。
 - 当两个领域共享同一组原因码时，提取到 `src/types/shared.ts`。
   - 当前 `AccountDataStatus.reason` 与 `OrderDataStatus.reason` 都必须复用 `PrivateRuntimeReason`
@@ -77,16 +77,16 @@ private createStatus(
 
 #### 3.5 union event filter 请求字段时，缺字段事件必须失败
 
-- `HealthEvent` 是 `client` / `market` / `account` / `order` 的 union，不是每个事件都带 `exchange`、`accountId`、`symbol`。
-- 当 `matchesHealthFilter()` 收到 `exchange`、`accountId` 或 `symbol` 条件时，**没有该字段的事件必须返回 `false`**。
-- 不能写成“字段存在才比较，否则直接跳过”的逻辑，否则会把 `client.status_changed` 这类事件错误放进 `health({ exchange: "binance" })`。
+- `HealthEvent` 是 `client` / `market` / `account` / `order` 的 union，不是每个事件都带 `venue`、`accountId`、`symbol`。
+- 当 `matchesHealthFilter()` 收到 `venue`、`accountId` 或 `symbol` 条件时，**没有该字段的事件必须返回 `false`**。
+- 不能写成“字段存在才比较，否则直接跳过”的逻辑，否则会把 `client.status_changed` 这类事件错误放进 `health({ venue: "binance" })`。
 
 ### 4. Validation & Error Matrix
 
 | 场景 | 正确写法 | 常见错误 |
 |---|---|---|
-| 事件 filter 上的交易所字段 | `exchange?: Exchange` | `exchange?: string` |
-| `HealthEvent` union 上的字段过滤 | 请求 `exchange` / `accountId` / `symbol` 时，缺字段事件直接过滤掉 | 只有字段存在才比较，导致 `client.status_changed` 被错误放行 |
+| 事件 filter 上的交易所字段 | `venue?: Venue` | `venue?: string` |
+| `HealthEvent` union 上的字段过滤 | 请求 `venue` / `accountId` / `symbol` 时，缺字段事件直接过滤掉 | 只有字段存在才比较，导致 `client.status_changed` 被错误放行 |
 | runtime 创建状态对象 | 显式返回 `OrderDataStatus` | 省略返回类型导致 `runtimeStatus` 被推成 `string` |
 | manager 返回状态 | 直接返回 `OrderDataStatus` | 通过自引用 alias 或重复定义接口 |
 | 纯类型依赖 | `import type { Foo }` | 普通 import 造成不必要运行时依赖 |
@@ -98,7 +98,7 @@ private createStatus(
 
 ```ts
 export interface HealthEventFilter {
-  exchange?: Exchange;
+  venue?: Venue;
 }
 ```
 
@@ -112,8 +112,8 @@ export type PrivateRuntimeReason =
 ```
 
 ```ts
-if (filter.exchange) {
-  if (!("exchange" in event) || event.exchange !== filter.exchange) {
+if (filter.venue) {
+  if (!("venue" in event) || event.venue !== filter.venue) {
     return false;
   }
 }
@@ -123,7 +123,7 @@ if (filter.exchange) {
 createStatus(...): OrderDataStatus {
   return {
     accountId,
-    exchange,
+    venue,
     activity,
     ready: false,
     runtimeStatus: activity === "active" ? "bootstrap_pending" : "stopped",
@@ -143,7 +143,7 @@ import type { MarketManager } from "../types/index.ts";
 
 ```ts
 export interface HealthEventFilter {
-  exchange?: string;
+  venue?: string;
 }
 ```
 
@@ -156,14 +156,14 @@ reason?: "auth_failed" | "ws_disconnected" | "reconciling";
 ```
 
 ```ts
-if ("exchange" in event && filter.exchange && event.exchange !== filter.exchange) {
+if ("venue" in event && filter.venue && event.venue !== filter.venue) {
   return false;
 }
 ```
 
 问题：
-- `client.status_changed` 没有 `exchange` 字段，会直接漏过这段判断
-- 调用 `health({ exchange: "binance" })` 时会错误收到 client 级事件
+- `client.status_changed` 没有 `venue` 字段，会直接漏过这段判断
+- 调用 `health({ venue: "binance" })` 时会错误收到 client 级事件
 
 ```ts
 createStatus(...) {
@@ -185,9 +185,9 @@ bun run test
 断言重点：
 
 - public contract 仍可从根入口正确导入
-- `Exchange`、状态枚举、事件 filter 等没有被宽化成 `string`
+- `Venue`、状态枚举、事件 filter 等没有被宽化成 `string`
 - 重构后 manager 返回值仍符合文档约定
-- `health({ exchange })` / `health({ accountId })` / `health({ symbol })` 不会收到缺少对应字段的 union 成员事件
+- `health({ venue })` / `health({ accountId })` / `health({ symbol })` 不会收到缺少对应字段的 union 成员事件
 
 ### 7. Wrong vs Correct
 

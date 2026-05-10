@@ -902,9 +902,6 @@ type PrivateRuntimeStatus =
 type PrivateRuntimeReason =
   | "credentials_missing" | "auth_failed" | "http_failed" | "rate_limited"
   | "ws_disconnected" | "heartbeat_timeout" | "reconciling";
-type PrivateRuntimeReason =
-  | "credentials_missing" | "auth_failed"
-  | "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 
 type OrderSide = "buy" | "sell";
 type OrderStatus =

@@ -30,11 +30,15 @@ src/
 │   └── filters.ts
 │
 ├── adapters/                             # Layer 1: 交易所适配器
-│   ├── types.ts                          # MarketAdapter 接口契约
-│   └── binance/
-│       ├── adapter.ts                    # BinanceMarketAdapter
-│       ├── book-ticker.ts               # Binance WS bookTicker
-│       └── market-catalog.ts            # Binance 市场目录加载
+│   ├── types.ts                          # MarketAdapter / PrivateUserDataAdapter 接口契约
+│   ├── binance/
+│   │   ├── adapter.ts                    # BinanceMarketAdapter
+│   │   ├── book-ticker.ts                # Binance WS bookTicker (L1 Book)
+│   │   ├── mark-price.ts                 # Binance WS markPrice (Funding Rate)
+│   │   ├── market-catalog.ts             # Binance 市场目录加载
+│   │   └── private-adapter.ts            # BinancePrivateAdapter (PAPI UM listenKey + WS)
+│   └── juplend/
+│       └── private-adapter.ts            # JuplendPrivateAdapter (HTTP polling 只读借贷)
 │
 ├── managers/                             # Layer 2: 领域 Manager
 │   ├── market-manager.ts
@@ -45,6 +49,7 @@ src/
     ├── create-client.ts
     ├── context.ts                        # ClientContext 接口 + 生命周期接口
     ├── private-subscription-coordinator.ts
+    ├── venue-capabilities.ts             # capability 聚合 helper
     └── runtime.ts                        # AcexClientImpl（薄编排器）
 ```
 
@@ -52,9 +57,9 @@ src/
 
 ```text
 Layer 4  公开 API          src/index.ts, src/errors.ts
-Layer 3  编排层            src/client/{runtime, create-client, context}.ts
+Layer 3  编排层            src/client/{runtime, create-client, context, private-subscription-coordinator, venue-capabilities}.ts
 Layer 2  领域层            src/managers/{market, account, order}-manager.ts
-Layer 1  适配层            src/adapters/{types, binance/*}
+Layer 1  适配层            src/adapters/{types, binance/*, juplend/*}
 Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket, filters}.ts
          类型定义          src/types/*（跨层共享）
 ```
@@ -80,7 +85,7 @@ export * from "./types/index.ts";
 
 #### 3.2 `src/types/*` 只放 public contract
 
-- `src/types/shared.ts`：跨领域共用类型（`Exchange`、`CreateClientOptions`、状态枚举等）。
+- `src/types/shared.ts`：跨领域共用类型（`Venue`、`CreateClientOptions`、状态枚举等）。
 - `src/types/market.ts`：market 领域类型与 `MarketManager` 接口。
 - `src/types/account.ts`：account 领域类型与 `AccountManager` 接口。
 - `src/types/order.ts`：order 领域类型与 `OrderManager` 接口。
@@ -99,7 +104,7 @@ export * from "./types/index.ts";
   - `adapter.ts`：实现 `MarketAdapter` 接口（行情 catalog + L1 Book 流）。
   - `private-adapter.ts`：实现 `PrivateUserDataAdapter` 接口（账户 bootstrap、open orders bootstrap、交易命令、私有 WS 流、listenKey keepalive）。
   - 交易所特定的 WS/REST 逻辑文件。
-- 私有 adapter 必须把交易所特定 REST / WS 细节、签名方案、listenKey 维护完全封装在 `adapters/<exchange>/` 内部，对外只返回标准化的 `RawAccountBootstrap` / `RawAccountUpdate` / `RawOrderUpdate`。
+- 私有 adapter 必须把交易所特定 REST / WS 细节、签名方案、listenKey 维护完全封装在 `adapters/<venue>/` 内部，对外只返回标准化的 `RawAccountBootstrap` / `RawAccountUpdate` / `RawOrderUpdate`。
 - **交易所特定类型（如 `BinanceMarketDefinition.family`）不得泄漏到适配器之外**。适配器对外只返回标准 `MarketDefinition` / `Raw*` 类型。
 - 完整接口级契约见 [Adapter Contract](./adapter-contract.md)。
 
@@ -137,11 +142,11 @@ export * from "./types/index.ts";
 | 新增账户订阅实现 | `src/managers/account-manager.ts` | 塞进 runtime.ts |
 | 新增 client 生命周期逻辑 | `src/client/runtime.ts` | 分散到三个 manager 各写一份 |
 | 新增通用异步流原语 | `src/internal/*` | 混进某个 manager 文件 |
-| 新增交易所适配逻辑 | `src/adapters/<exchange>/` | 混进 manager 或 runtime |
+| 新增交易所适配逻辑 | `src/adapters/<venue>/` | 混进 manager 或 runtime |
 | 新增 account/order 共享 private stream 编排 | `src/client/private-subscription-coordinator.ts` | 让两个 manager 各自维护一条 websocket |
 | 新增根导出 | `src/index.ts` | 让调用方直接依赖深层内部路径 |
 | Manager 需要访问 runtime | 通过 `ClientContext` 接口 | 直接 import `AcexClientImpl` 具体类 |
-| 交易所特定类型 | 留在 `adapters/<exchange>/` 内部 | 泄漏到 manager 或 runtime 的类型签名中 |
+| 交易所特定类型 | 留在 `adapters/<venue>/` 内部 | 泄漏到 manager 或 runtime 的类型签名中 |
 
 需要继续拆分的信号：
 
@@ -158,7 +163,7 @@ export * from "./types/index.ts";
 
 - 创建 `src/adapters/okx/` 子目录
 - 在其中实现 `OkxMarketAdapter`（implements `MarketAdapter`）与 `OkxPrivateAdapter`（implements `PrivateUserDataAdapter`）
-- **当前 runtime 硬编码单一 Binance adapter**（`src/client/runtime.ts:96-97` 直接 `new BinanceMarketAdapter()` / `new BinancePrivateAdapter()`），接入第二家交易所前需要先引入 adapter registry（按 `Exchange` 分派），或在 plan 里明确这一步；仅实现 adapter 类本身不够。这一结构性限制也记录在 `docs/architecture.md`
+- **加入 runtime registry**：runtime 已经把 adapter 抽成 `marketAdapters: Map<Venue, MarketAdapter>` / `privateAdapters: Map<Venue, PrivateUserDataAdapter>`（`src/client/runtime.ts:105-113`），新 venue 只需把实例 push 到对应 Map。`PrivateSubscriptionCoordinator` 与 `getPrivateAdapter()` 已经按 `venue` 分派。**注意**：Market 侧 registry 虽然已经是 `Map<Venue, MarketAdapter>`，但 `MarketManagerImpl` 当前只持有单一 `MarketAdapter` 引用——跨多个 market venue 之前需要让 manager 改为按 `key.venue` 从 `marketAdapters` 取实例
 - Manager 代码不需要改动（Manager 通过 `ClientContext` 与 runtime 交互，不直接持有 adapter 引用）
 - 新 adapter 的接口级约束见 [Adapter Contract](./adapter-contract.md)
 
@@ -264,17 +269,25 @@ export class MarketManagerImpl
 ```
 
 ```ts
-// src/client/runtime.ts (~280 行，薄编排器)
+// src/client/runtime.ts (~450 行，薄编排器)
 export class AcexClientImpl implements AcexClient, ClientContext {
   constructor(options: CreateClientOptions = {}) {
     const marketAdapter = new BinanceMarketAdapter();
-    const privateAdapter = new BinancePrivateAdapter();
+    this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
+    const privateAdapters = [
+      new BinancePrivateAdapter(),
+      new JuplendPrivateAdapter(),
+    ];
+    this.privateAdapters = new Map(
+      privateAdapters.map((a) => [a.venue, a]),
+    );
+
     this.marketManager = new MarketManagerImpl(this, marketAdapter, marketOptions);
     this.accountManager = new AccountManagerImpl(this);
     this.orderManager = new OrderManagerImpl(this);
     this.privateCoordinator = new PrivateSubscriptionCoordinator(
       this,
-      privateAdapter,
+      privateAdapters,
       this.accountManager,
       this.orderManager,
       options.account,

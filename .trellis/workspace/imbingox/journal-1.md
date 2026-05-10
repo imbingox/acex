@@ -323,3 +323,37 @@ Aligned Trellis specs and workflow, restored placeholder frontend/database/loggi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Trellis 0.5.12 升级与 spec/docs drift 修复
+
+**Date**: 2026-05-10
+**Task**: Trellis 0.5.12 升级与 spec/docs drift 修复
+**Branch**: `chore/update`
+
+### Summary
+
+升级 trellis 脚手架到 0.5.12，把 .agents/.claude/.codex 从 gitignore 解开并入库；随后全仓库扫描文档 drift，分 7 处依次修复：(1) .trellis/spec/backend/index.md 的 5 层架构补 private-subscription-coordinator/venue-capabilities/juplend；(2) type-safety.md 全文 Exchange→Venue / SUPPORTED_EXCHANGES→SUPPORTED_VENUES / exchange→venue；(3) adapter-contract.md 接口签名 exchange→venue 且参考实现补 mark-price + juplend；(4) code-organization.md 目录树补全、Exchange→Venue、§5 Good 注脚改成 registry 现状、§7 Correct 示例改成 Map 注册；(5) docs/architecture.md §1 表格补 Juplend、行号 :74→:82 / :96-97→:105-113、§8 step 4 重写；(6) docs/api.md 删掉重复缩水的 PrivateRuntimeReason；(7) package.json 把 @mindfoldhq/trellis 从 dependencies 挪到 devDependencies（CLI 工具，SDK 不 import）。最后跑 bun run lint 与 type-check 全绿。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1304f44` | (see git log) |
+| `5b4e602` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

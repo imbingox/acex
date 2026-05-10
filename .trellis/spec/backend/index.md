@@ -10,9 +10,9 @@
 
 ```text
 Layer 4  公开 API          src/index.ts, src/errors.ts
-Layer 3  编排层            src/client/{runtime, create-client, context}.ts
+Layer 3  编排层            src/client/{runtime, create-client, context, private-subscription-coordinator, venue-capabilities}.ts
 Layer 2  领域层            src/managers/{market, account, order}-manager.ts
-Layer 1  适配层            src/adapters/{types, binance/*}
+Layer 1  适配层            src/adapters/{types, binance/*, juplend/*}
 Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket, filters}.ts
          类型定义          src/types/*（跨层共享）
 ```

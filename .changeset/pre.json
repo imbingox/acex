@@ -5,6 +5,7 @@
     "@imbingox/acex": "0.2.0"
   },
   "changesets": [
+    "binance-account-risk-polling",
     "funding-aggregators",
     "juplend-venue-lending",
     "order-postonly-normalization",

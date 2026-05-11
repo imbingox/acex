@@ -32,6 +32,15 @@ const DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS = 10_000;
 const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
 const DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS = 5_000;
 
+function normalizePositiveInterval(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? value
+    : fallback;
+}
+
 export class PrivateSubscriptionCoordinator {
   private readonly context: ClientContext;
   private readonly adapters: Map<Venue, PrivateUserDataAdapter>;
@@ -67,9 +76,10 @@ export class PrivateSubscriptionCoordinator {
       DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS;
     this.listenKeyKeepAliveMs =
       options.listenKeyKeepAliveMs ?? DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
-    this.binanceRiskPollIntervalMs =
-      options.binance?.riskPollIntervalMs ??
-      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS;
+    this.binanceRiskPollIntervalMs = normalizePositiveInterval(
+      options.binance?.riskPollIntervalMs,
+      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
+    );
     this.juplendPollIntervalMs = options.juplend?.pollIntervalMs;
   }
 
@@ -322,7 +332,14 @@ export class PrivateSubscriptionCoordinator {
         return;
       }
 
-      const latestAccount = this.getAccount(record.accountId);
+      let latestAccount: RegisteredAccountRecord;
+      try {
+        latestAccount = this.getAccount(record.accountId);
+      } catch (error) {
+        this.handleAccountRefreshLookupError(record, error);
+        return;
+      }
+
       record.accountRefreshInFlight = this.refreshAccount(
         record,
         latestAccount,
@@ -340,6 +357,27 @@ export class PrivateSubscriptionCoordinator {
           }
         });
     }, this.binanceRiskPollIntervalMs);
+  }
+
+  private handleAccountRefreshLookupError(
+    record: PrivateSubscriptionRecord,
+    error: unknown,
+  ): void {
+    this.stopAccountRefreshPolling(record);
+    if (error instanceof AcexError && error.code === "ACCOUNT_NOT_FOUND") {
+      return;
+    }
+
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error(`Failed to load ${record.venue} account for risk refresh`),
+      {
+        accountId: record.accountId,
+        venue: record.venue,
+      },
+    );
   }
 
   private async refreshAccount(

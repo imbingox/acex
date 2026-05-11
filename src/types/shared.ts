@@ -36,6 +36,9 @@ export interface AccountRuntimeOptions {
   streamReconnectDelayMs?: number;
   streamReconnectMaxDelayMs?: number;
   listenKeyKeepAliveMs?: number;
+  binance?: {
+    riskPollIntervalMs?: number;
+  };
   juplend?: {
     pollIntervalMs?: number;
   };

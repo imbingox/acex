@@ -75,6 +75,7 @@ export interface PrivateAccountDataConsumer {
     accountId: string,
     venue: Venue,
     update: RawAccountUpdate,
+    options?: { preserveStatus?: boolean },
   ): void;
   onPrivateAccountStreamState(
     accountId: string,

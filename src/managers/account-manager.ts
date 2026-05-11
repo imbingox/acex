@@ -277,6 +277,7 @@ export class AccountManagerImpl
     accountId: string,
     venue: Venue,
     update: RawAccountUpdate,
+    options: { preserveStatus?: boolean } = {},
   ): void {
     const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
@@ -358,16 +359,24 @@ export class AccountManagerImpl
       receivedAt: update.receivedAt,
       updatedAt: update.receivedAt,
     };
-    record.status = {
-      ...record.status,
-      activity: "active",
-      ready: true,
-      runtimeStatus: "healthy",
-      reason: undefined,
-      lastReceivedAt: update.receivedAt,
-      lastReadyAt: update.receivedAt,
-      inactiveSince: undefined,
-    };
+    record.status = options.preserveStatus
+      ? {
+          ...record.status,
+          activity: "active",
+          lastReceivedAt: update.receivedAt,
+          lastReadyAt: record.status.lastReadyAt ?? update.receivedAt,
+          inactiveSince: undefined,
+        }
+      : {
+          ...record.status,
+          activity: "active",
+          ready: true,
+          runtimeStatus: "healthy",
+          reason: undefined,
+          lastReceivedAt: update.receivedAt,
+          lastReadyAt: update.receivedAt,
+          inactiveSince: undefined,
+        };
     this.publishStatus(record);
   }
 
@@ -588,6 +597,10 @@ export class AccountManagerImpl
         input.riskRatio === undefined
           ? previous?.riskRatio
           : new BigNumber(input.riskRatio),
+      actualLeverage:
+        input.actualLeverage === undefined
+          ? previous?.actualLeverage
+          : new BigNumber(input.actualLeverage),
       initialMargin:
         input.initialMargin === undefined
           ? previous?.initialMargin

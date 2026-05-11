@@ -93,6 +93,7 @@ export interface RiskSnapshot {
   venue: Venue;
   equity?: BigNumber;
   riskRatio?: BigNumber;
+  actualLeverage?: BigNumber;
   initialMargin?: BigNumber;
   maintenanceMargin?: BigNumber;
   exchangeTs?: number;

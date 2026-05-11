@@ -19,6 +19,9 @@ interface PrivateSubscriptionRecord {
   accountReady: boolean;
   orderReady: boolean;
   stream?: StreamHandle;
+  accountRefreshTimer?: ReturnType<typeof setTimeout>;
+  accountRefreshInFlight?: Promise<void>;
+  accountRefreshGeneration: number;
   startPromise?: Promise<void>;
   reconcilePromise?: Promise<void>;
 }
@@ -27,6 +30,7 @@ const DEFAULT_STREAM_OPEN_TIMEOUT_MS = 15_000;
 const DEFAULT_STREAM_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS = 10_000;
 const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
+const DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS = 5_000;
 
 export class PrivateSubscriptionCoordinator {
   private readonly context: ClientContext;
@@ -37,6 +41,7 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamReconnectDelayMs: number;
   private readonly streamReconnectMaxDelayMs: number;
   private readonly listenKeyKeepAliveMs: number;
+  private readonly binanceRiskPollIntervalMs: number;
   private readonly juplendPollIntervalMs?: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
@@ -62,6 +67,9 @@ export class PrivateSubscriptionCoordinator {
       DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS;
     this.listenKeyKeepAliveMs =
       options.listenKeyKeepAliveMs ?? DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
+    this.binanceRiskPollIntervalMs =
+      options.binance?.riskPollIntervalMs ??
+      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS;
     this.juplendPollIntervalMs = options.juplend?.pollIntervalMs;
   }
 
@@ -81,6 +89,7 @@ export class PrivateSubscriptionCoordinator {
       } else {
         await this.ensureStream(record, account);
         await this.bootstrapAccount(record, account);
+        this.ensureAccountRefreshPolling(record);
       }
     } catch (error) {
       record.accountSubscribed = false;
@@ -96,6 +105,7 @@ export class PrivateSubscriptionCoordinator {
     }
 
     record.accountSubscribed = false;
+    this.stopAccountRefreshPolling(record);
     this.closeIfUnused(record);
   }
 
@@ -153,6 +163,7 @@ export class PrivateSubscriptionCoordinator {
 
   onClientStopping(): void {
     for (const record of this.records.values()) {
+      this.stopAccountRefreshPolling(record);
       this.closeStream(record);
     }
   }
@@ -164,6 +175,7 @@ export class PrivateSubscriptionCoordinator {
     }
 
     this.closeStream(record);
+    this.stopAccountRefreshPolling(record);
     this.records.delete(accountId);
   }
 
@@ -186,6 +198,7 @@ export class PrivateSubscriptionCoordinator {
   private async resumeRecord(record: PrivateSubscriptionRecord): Promise<void> {
     const account = this.getAccount(record.accountId);
     this.closeStream(record);
+    this.stopAccountRefreshPolling(record);
 
     try {
       if (record.venue === "juplend" && record.accountSubscribed) {
@@ -195,6 +208,7 @@ export class PrivateSubscriptionCoordinator {
         await this.ensureStream(record, account);
         if (record.accountSubscribed) {
           await this.bootstrapAccount(record, account);
+          this.ensureAccountRefreshPolling(record);
         }
       }
       if (record.ordersSubscribed) {
@@ -244,6 +258,7 @@ export class PrivateSubscriptionCoordinator {
       ordersSubscribed: false,
       accountReady: false,
       orderReady: false,
+      accountRefreshGeneration: 0,
     };
 
     this.records.set(account.accountId, record);
@@ -259,6 +274,7 @@ export class PrivateSubscriptionCoordinator {
       return;
     }
 
+    this.stopAccountRefreshPolling(record);
     this.closeStream(record);
     this.records.delete(record.accountId);
   }
@@ -266,6 +282,125 @@ export class PrivateSubscriptionCoordinator {
   private closeStream(record: PrivateSubscriptionRecord): void {
     record.stream?.close();
     record.stream = undefined;
+  }
+
+  private ensureAccountRefreshPolling(record: PrivateSubscriptionRecord): void {
+    if (
+      record.venue !== "binance" ||
+      !record.accountSubscribed ||
+      record.accountRefreshTimer ||
+      record.accountRefreshInFlight
+    ) {
+      return;
+    }
+
+    this.scheduleAccountRefreshPoll(record);
+  }
+
+  private stopAccountRefreshPolling(record: PrivateSubscriptionRecord): void {
+    record.accountRefreshGeneration += 1;
+    if (record.accountRefreshTimer) {
+      clearTimeout(record.accountRefreshTimer);
+      record.accountRefreshTimer = undefined;
+    }
+    record.accountRefreshInFlight = undefined;
+  }
+
+  private scheduleAccountRefreshPoll(record: PrivateSubscriptionRecord): void {
+    if (record.venue !== "binance" || !record.accountSubscribed) {
+      return;
+    }
+
+    const generation = record.accountRefreshGeneration;
+    record.accountRefreshTimer = setTimeout(() => {
+      record.accountRefreshTimer = undefined;
+      if (
+        generation !== record.accountRefreshGeneration ||
+        record.venue !== "binance" ||
+        !record.accountSubscribed
+      ) {
+        return;
+      }
+
+      const latestAccount = this.getAccount(record.accountId);
+      record.accountRefreshInFlight = this.refreshAccount(
+        record,
+        latestAccount,
+        generation,
+      )
+        .catch(() => {})
+        .finally(() => {
+          if (generation !== record.accountRefreshGeneration) {
+            return;
+          }
+
+          record.accountRefreshInFlight = undefined;
+          if (record.accountSubscribed && record.venue === "binance") {
+            this.scheduleAccountRefreshPoll(record);
+          }
+        });
+    }, this.binanceRiskPollIntervalMs);
+  }
+
+  private async refreshAccount(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (!adapter.refreshAccount) {
+      return;
+    }
+
+    try {
+      const update = await adapter.refreshAccount(account.credentials ?? {}, {
+        ...account.options,
+        accountId: account.accountId,
+      });
+      if (
+        !record.accountSubscribed ||
+        generation !== record.accountRefreshGeneration
+      ) {
+        return;
+      }
+
+      record.accountReady = true;
+      this.accountConsumer.onPrivateAccountUpdate(
+        record.accountId,
+        record.venue,
+        update,
+        { preserveStatus: true },
+      );
+    } catch (error) {
+      if (
+        !record.accountSubscribed ||
+        generation !== record.accountRefreshGeneration
+      ) {
+        return;
+      }
+
+      this.context.publishRuntimeError(
+        "adapter",
+        error instanceof Error
+          ? error
+          : new Error(
+              `Failed to refresh ${record.venue} private account state`,
+            ),
+        {
+          accountId: record.accountId,
+          venue: record.venue,
+        },
+      );
+      this.accountConsumer.onPrivateAccountStreamState(
+        record.accountId,
+        record.venue,
+        {
+          runtimeStatus: "degraded",
+          ready: record.accountReady,
+          reason: "http_failed",
+        },
+      );
+    }
   }
 
   private async ensureStream(

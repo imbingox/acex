@@ -158,6 +158,7 @@ const binanceFixtures = {
         unRealizedProfit: "10.50",
         liquidationPrice: "80000.00",
         leverage: "5",
+        notional: "1010.002",
         positionSide: "BOTH",
         updateTime: 1710000000200,
       },
@@ -224,7 +225,9 @@ export function installBinancePrivateAccountInfra(options?: {
   failCancelAllOrders?: boolean;
   balance?: unknown;
   account?: unknown;
+  accountResponses?: unknown[];
   umPositions?: unknown;
+  umPositionResponses?: unknown[];
   openOrders?: unknown;
   createOrder?: unknown;
   cancelOrder?: unknown;
@@ -234,6 +237,16 @@ export function installBinancePrivateAccountInfra(options?: {
 
   stopAllClientsForTests();
   FakeWebSocket.reset();
+
+  let accountRequestCount = 0;
+  let umPositionRequestCount = 0;
+
+  const nextResponse = (
+    responses: unknown[] | undefined,
+    fallback: unknown,
+    index: number,
+  ): unknown =>
+    responses?.[index] ?? responses?.[responses.length - 1] ?? fallback;
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -305,10 +318,20 @@ export function installBinancePrivateAccountInfra(options?: {
         case "GET /papi/v1/balance":
           return jsonResponse(options?.balance ?? binanceFixtures.papi.balance);
         case "GET /papi/v1/account":
-          return jsonResponse(options?.account ?? binanceFixtures.papi.account);
+          return jsonResponse(
+            nextResponse(
+              options?.accountResponses,
+              options?.account ?? binanceFixtures.papi.account,
+              accountRequestCount++,
+            ),
+          );
         case "GET /papi/v1/um/positionRisk":
           return jsonResponse(
-            options?.umPositions ?? binanceFixtures.papi.umPositions,
+            nextResponse(
+              options?.umPositionResponses,
+              options?.umPositions ?? binanceFixtures.papi.umPositions,
+              umPositionRequestCount++,
+            ),
           );
         case "GET /papi/v1/um/openOrders":
           return jsonResponse(

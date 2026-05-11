@@ -56,6 +56,7 @@ interface BinancePapiUmPosition {
   unrealizedProfit?: string;
   liquidationPrice?: string;
   leverage?: string;
+  notional?: string;
   positionSide?: string;
   updateTime?: number;
 }
@@ -285,14 +286,18 @@ function mapBalance(
 function mapAccountRisk(
   input: BinancePapiAccount,
   receivedAt: number,
+  positions: BinancePapiUmPosition[] = [],
 ): RawRiskUpdate | undefined {
   const uniMmr = firstString(input.uniMMR);
   const riskRatio = uniMmr
     ? new BigNumber(1).dividedBy(uniMmr).toString(10)
     : undefined;
+  const equity = firstString(input.accountEquity, input.totalEquity);
+  const actualLeverage = calculateActualLeverage(equity, positions);
   const risk: RawRiskUpdate = {
-    equity: firstString(input.accountEquity, input.totalEquity),
+    equity,
     riskRatio,
+    actualLeverage,
     initialMargin: firstString(
       input.accountInitialMargin,
       input.totalInitialMargin,
@@ -308,6 +313,7 @@ function mapAccountRisk(
   if (
     !risk.equity &&
     !risk.riskRatio &&
+    !risk.actualLeverage &&
     !risk.initialMargin &&
     !risk.maintenanceMargin
   ) {
@@ -315,6 +321,34 @@ function mapAccountRisk(
   }
 
   return risk;
+}
+
+function calculateActualLeverage(
+  equity: string | undefined,
+  positions: BinancePapiUmPosition[],
+): string | undefined {
+  if (!equity) {
+    return undefined;
+  }
+
+  const equityValue = new BigNumber(equity);
+  if (!equityValue.isFinite() || equityValue.isZero()) {
+    return undefined;
+  }
+
+  const grossExposure = positions.reduce((total, position) => {
+    const notional = firstString(position.notional);
+    if (!notional) {
+      return total;
+    }
+
+    const value = new BigNumber(notional);
+    return value.isFinite() ? total.plus(value.absoluteValue()) : total;
+  }, new BigNumber(0));
+
+  return grossExposure.isZero()
+    ? undefined
+    : grossExposure.dividedBy(equityValue).toString(10);
 }
 
 function mapUmPosition(
@@ -335,6 +369,22 @@ function mapUmPosition(
     leverage: input.leverage,
     liquidationPrice: input.liquidationPrice,
     exchangeTs: input.updateTime,
+    receivedAt,
+  };
+}
+
+function mapAccountRefresh(
+  account: BinancePapiAccount,
+  positions: BinancePapiUmPosition[],
+  receivedAt: number,
+): RawAccountUpdate {
+  return {
+    positions: positions.flatMap((position) => {
+      const mapped = mapUmPosition(position, receivedAt);
+      return mapped ? [mapped] : [];
+    }),
+    risk: mapAccountRisk(account, receivedAt, positions),
+    exchangeTs: account.updateTime,
     receivedAt,
   };
 }
@@ -550,10 +600,33 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         const mapped = mapUmPosition(position, receivedAt);
         return mapped ? [mapped] : [];
       }),
-      risk: mapAccountRisk(account, receivedAt),
+      risk: mapAccountRisk(account, receivedAt, positions),
       exchangeTs: account.updateTime,
       receivedAt,
     };
+  }
+
+  async refreshAccount(
+    credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawAccountUpdate> {
+    const receivedAt = Date.now();
+    const [account, positions] = await Promise.all([
+      this.signedRequest<BinancePapiAccount>(
+        "GET",
+        "/papi/v1/account",
+        credentials,
+        accountOptions,
+      ),
+      this.signedRequest<BinancePapiUmPosition[]>(
+        "GET",
+        "/papi/v1/um/positionRisk",
+        credentials,
+        accountOptions,
+      ),
+    ]);
+
+    return mapAccountRefresh(account, positions, receivedAt);
   }
 
   async bootstrapOpenOrders(

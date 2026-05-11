@@ -103,6 +103,7 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   expect(risk).toMatchObject({
     equity: new BigNumber("1400.75"),
     riskRatio: new BigNumber(1).dividedBy("31.0"),
+    actualLeverage: new BigNumber("1010.002").dividedBy("1400.75"),
     initialMargin: new BigNumber("120.10"),
     maintenanceMargin: new BigNumber("45.20"),
   });
@@ -197,6 +198,256 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     reason: undefined,
   });
 
+  await iterator.return?.();
+});
+
+test("Binance account polling refreshes risk and mark-to-market positions", async () => {
+  installBinancePrivateAccountInfra({
+    accountResponses: [
+      {
+        accountEquity: "1400.75",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000000100,
+      },
+      {
+        accountEquity: "1600.00",
+        accountInitialMargin: "150.00",
+        accountMaintMargin: "60.00",
+        uniMMR: "20.0",
+        updateTime: 1710000001100,
+      },
+    ],
+    umPositionResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0.010",
+          entryPrice: "100000.10",
+          markPrice: "101000.20",
+          unRealizedProfit: "10.50",
+          liquidationPrice: "80000.00",
+          leverage: "5",
+          notional: "1010.002",
+          positionSide: "BOTH",
+          updateTime: 1710000000200,
+        },
+      ],
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0.010",
+          entryPrice: "100000.10",
+          markPrice: "120000.00",
+          unRealizedProfit: "200.00",
+          liquidationPrice: "85000.00",
+          leverage: "5",
+          notional: "1200.00",
+          positionSide: "BOTH",
+          updateTime: 1710000001200,
+        },
+      ],
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      binance: {
+        riskPollIntervalMs: 5,
+      },
+    },
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000000000,
+    },
+  });
+
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "account.snapshot_replaced",
+  });
+
+  const firstPollEvent = await nextEvent(iterator, 200);
+  expect(firstPollEvent).toMatchObject({
+    type: "position.updated",
+    symbol: "BTC/USDT:USDT",
+    snapshot: {
+      markPrice: new BigNumber("120000.00"),
+      unrealizedPnl: new BigNumber("200.00"),
+      liquidationPrice: new BigNumber("85000.00"),
+    },
+  });
+  const secondPollEvent = await nextEvent(iterator, 200);
+  expect(secondPollEvent).toMatchObject({
+    type: "risk.updated",
+    snapshot: {
+      equity: new BigNumber("1600.00"),
+      riskRatio: new BigNumber(1).dividedBy("20.0"),
+      actualLeverage: new BigNumber("1200.00").dividedBy("1600.00"),
+      initialMargin: new BigNumber("150.00"),
+      maintenanceMargin: new BigNumber("60.00"),
+    },
+  });
+
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    equity: new BigNumber("1600.00"),
+    actualLeverage: new BigNumber("0.75"),
+  });
+  expect(
+    client.account.getPosition({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    markPrice: new BigNumber("120000.00"),
+    liquidationPrice: new BigNumber("85000.00"),
+  });
+
+  await client.account.unsubscribeAccount({
+    accountId: "main-binance",
+  });
+  await iterator.return?.();
+});
+
+test("Binance account polling does not mask websocket disconnect status", async () => {
+  installBinancePrivateAccountInfra({
+    accountResponses: [
+      {
+        accountEquity: "1400.75",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000000100,
+      },
+      {
+        accountEquity: "1600.00",
+        accountInitialMargin: "150.00",
+        accountMaintMargin: "60.00",
+        uniMMR: "20.0",
+        updateTime: 1710000001100,
+      },
+    ],
+    umPositionResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0.010",
+          entryPrice: "100000.10",
+          markPrice: "101000.20",
+          unRealizedProfit: "10.50",
+          liquidationPrice: "80000.00",
+          leverage: "5",
+          notional: "1010.002",
+          positionSide: "BOTH",
+          updateTime: 1710000000200,
+        },
+      ],
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0.010",
+          entryPrice: "100000.10",
+          markPrice: "120000.00",
+          unRealizedProfit: "200.00",
+          liquidationPrice: "85000.00",
+          leverage: "5",
+          notional: "1200.00",
+          positionSide: "BOTH",
+          updateTime: 1710000001200,
+        },
+      ],
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 50,
+      streamReconnectMaxDelayMs: 50,
+      binance: {
+        riskPollIntervalMs: 5,
+      },
+    },
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000000000,
+    },
+  });
+
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "account.snapshot_replaced",
+  });
+
+  socket.disconnect();
+  await Bun.sleep(0);
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    ready: true,
+    runtimeStatus: "reconnecting",
+    reason: "ws_disconnected",
+  });
+
+  expect(await nextEvent(iterator, 200)).toMatchObject({
+    type: "position.updated",
+  });
+  expect(await nextEvent(iterator, 200)).toMatchObject({
+    type: "risk.updated",
+    snapshot: {
+      equity: new BigNumber("1600.00"),
+    },
+  });
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    equity: new BigNumber("1600.00"),
+  });
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    ready: true,
+    runtimeStatus: "reconnecting",
+    reason: "ws_disconnected",
+  });
+
+  await client.account.unsubscribeAccount({
+    accountId: "main-binance",
+  });
   await iterator.return?.();
 });
 

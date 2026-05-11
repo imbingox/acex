@@ -121,6 +121,7 @@ export interface RawPositionUpdate {
 export interface RawRiskUpdate {
   equity?: string;
   riskRatio?: string;
+  actualLeverage?: string;
   initialMargin?: string;
   maintenanceMargin?: string;
   exchangeTs?: number;
@@ -222,6 +223,10 @@ export interface PrivateUserDataAdapter {
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawAccountBootstrap>;
+  refreshAccount?(
+    credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawAccountUpdate>;
   bootstrapOpenOrders(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,

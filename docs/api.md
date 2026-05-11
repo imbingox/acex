@@ -64,11 +64,14 @@ for await (const event of client.market.events.l1BookUpdates({
 await client.stop();
 ```
 
-同一个 client 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户。`account.juplend.pollIntervalMs` 只是 Juplend polling 配置，不会把 client 限定为 Juplend 专用：
+同一个 client 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户。`account.binance.riskPollIntervalMs` 只配置 Binance 风险/仓位校准间隔；`account.juplend.pollIntervalMs` 只配置 Juplend polling 间隔，不会把 client 限定为某个 venue：
 
 ```ts
 const client = createClient({
   account: {
+    binance: {
+      riskPollIntervalMs: 5_000,
+    },
     juplend: {
       pollIntervalMs: 30_000,
     },
@@ -208,6 +211,9 @@ const client = createClient({
     streamReconnectDelayMs: 1_000,
     streamReconnectMaxDelayMs: 10_000,
     listenKeyKeepAliveMs: 30 * 60_000,
+    binance: {
+      riskPollIntervalMs: 5_000,
+    },
     juplend: {
       pollIntervalMs: 30_000,
     },
@@ -927,6 +933,9 @@ interface AccountRuntimeOptions {
   streamReconnectDelayMs?: number;
   streamReconnectMaxDelayMs?: number;
   listenKeyKeepAliveMs?: number;
+  binance?: {
+    riskPollIntervalMs?: number; // 默认 5_000
+  };
   juplend?: {
     pollIntervalMs?: number;
   };
@@ -1215,6 +1224,7 @@ interface RiskSnapshot {
   venue: Venue;
   equity?: BigNumber;
   riskRatio?: BigNumber;
+  actualLeverage?: BigNumber;
   initialMargin?: BigNumber;
   maintenanceMargin?: BigNumber;
   exchangeTs?: number;

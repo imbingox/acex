@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
-- **Last Active**: 2026-05-06
+- **Total Sessions**: 13
+- **Last Active**: 2026-05-11
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~440 | Active |
+| `journal-1.md` | ~475 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-05-11 | Refresh Binance Account Risk | `50e4e09`, `9ee60cf`, `628cefe` | `docs/account-realtime-refresh-spec` |
 | 12 | 2026-05-06 | Venue capability queries and npm docs packaging | `ea9a4a7`, `46d1291` | `feat/new_account` |
 | 11 | 2026-05-05 | Juplend lending account view | `c411b69` | `feat/new_account` |
 | 10 | 2026-05-03 | Post-only orders and input normalization | `9dad2f0` | `feat/market` |

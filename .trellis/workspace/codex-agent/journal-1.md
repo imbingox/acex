@@ -438,3 +438,38 @@ Added top-level venue capability queries, moved capability truth closer to adapt
 ### Next Steps
 
 - None - task complete
+
+
+## Session 13: Refresh Binance Account Risk
+
+**Date**: 2026-05-11
+**Task**: Refresh Binance Account Risk
+**Branch**: `docs/account-realtime-refresh-spec`
+
+### Summary
+
+为 Binance account risk 增加 REST polling 校准和 actualLeverage 补充指标，修复 PR review 中指出的状态覆盖与 stale 风险，并补充 adapter contract：实时账户字段不能假设 WS 会因行情变化持续推送，必要时必须用 polling/refresh/stale 语义保证时效性。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `50e4e09` | (see git log) |
+| `9ee60cf` | (see git log) |
+| `628cefe` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

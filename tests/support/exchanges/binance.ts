@@ -144,6 +144,7 @@ const binanceFixtures = {
     ],
     account: {
       accountEquity: "1400.75",
+      actualEquity: "1300.50",
       accountInitialMargin: "120.10",
       accountMaintMargin: "45.20",
       uniMMR: "31.0",

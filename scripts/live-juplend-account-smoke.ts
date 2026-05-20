@@ -150,7 +150,8 @@ function summarizeSnapshot(
       ? {
           hasRiskRatio: risk.riskRatio !== undefined,
           riskRatio: showAmounts ? risk.riskRatio?.toFixed() : undefined,
-          equity: showAmounts ? risk.equity?.toFixed() : undefined,
+          netEquity: showAmounts ? risk.netEquity?.toFixed() : undefined,
+          riskEquity: showAmounts ? risk.riskEquity?.toFixed() : undefined,
           lending: risk.lending
             ? {
                 healthFactor: showAmounts

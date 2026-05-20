@@ -173,16 +173,16 @@ function summarizeSnapshot(
       : undefined,
     risk: risk
       ? {
-          hasEquity: risk.equity !== undefined,
+          hasNetEquity: risk.netEquity !== undefined,
+          hasRiskEquity: risk.riskEquity !== undefined,
           hasMarginRatio: risk.riskRatio !== undefined,
-          hasActualLeverage: risk.actualLeverage !== undefined,
+          hasRiskLeverage: risk.riskLeverage !== undefined,
           hasInitialMargin: risk.initialMargin !== undefined,
           hasMaintenanceMargin: risk.maintenanceMargin !== undefined,
-          equity: showAmounts ? risk.equity?.toFixed() : undefined,
+          netEquity: showAmounts ? risk.netEquity?.toFixed() : undefined,
+          riskEquity: showAmounts ? risk.riskEquity?.toFixed() : undefined,
           riskRatio: showAmounts ? risk.riskRatio?.toFixed() : undefined,
-          actualLeverage: showAmounts
-            ? risk.actualLeverage?.toFixed()
-            : undefined,
+          riskLeverage: showAmounts ? risk.riskLeverage?.toFixed() : undefined,
           initialMargin: showAmounts
             ? risk.initialMargin?.toFixed()
             : undefined,

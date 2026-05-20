@@ -167,7 +167,7 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     this.refreshCalls += 1;
     return Promise.resolve({
       risk: {
-        equity: "1",
+        riskEquity: "1",
         receivedAt: Date.now(),
       },
       receivedAt: Date.now(),

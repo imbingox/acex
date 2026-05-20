@@ -38,6 +38,7 @@ interface BinancePapiBalance {
 
 interface BinancePapiAccount {
   accountEquity?: string;
+  actualEquity?: string;
   totalEquity?: string;
   accountInitialMargin?: string;
   totalInitialMargin?: string;
@@ -292,12 +293,14 @@ function mapAccountRisk(
   const riskRatio = uniMmr
     ? new BigNumber(1).dividedBy(uniMmr).toString(10)
     : undefined;
-  const equity = firstString(input.accountEquity, input.totalEquity);
-  const actualLeverage = calculateActualLeverage(equity, positions);
+  const netEquity = firstString(input.actualEquity);
+  const riskEquity = firstString(input.accountEquity, input.totalEquity);
+  const riskLeverage = calculateRiskLeverage(riskEquity, positions);
   const risk: RawRiskUpdate = {
-    equity,
+    netEquity,
+    riskEquity,
     riskRatio,
-    actualLeverage,
+    riskLeverage,
     initialMargin: firstString(
       input.accountInitialMargin,
       input.totalInitialMargin,
@@ -311,9 +314,10 @@ function mapAccountRisk(
   };
 
   if (
-    !risk.equity &&
+    !risk.netEquity &&
+    !risk.riskEquity &&
     !risk.riskRatio &&
-    !risk.actualLeverage &&
+    !risk.riskLeverage &&
     !risk.initialMargin &&
     !risk.maintenanceMargin
   ) {
@@ -323,16 +327,16 @@ function mapAccountRisk(
   return risk;
 }
 
-function calculateActualLeverage(
-  equity: string | undefined,
+function calculateRiskLeverage(
+  riskEquity: string | undefined,
   positions: BinancePapiUmPosition[],
 ): string | undefined {
-  if (!equity) {
+  if (!riskEquity) {
     return undefined;
   }
 
-  const equityValue = new BigNumber(equity);
-  if (!equityValue.isFinite() || equityValue.isZero()) {
+  const riskEquityValue = new BigNumber(riskEquity);
+  if (!riskEquityValue.isFinite() || riskEquityValue.isZero()) {
     return undefined;
   }
 
@@ -348,7 +352,7 @@ function calculateActualLeverage(
 
   return grossExposure.isZero()
     ? undefined
-    : grossExposure.dividedBy(equityValue).toString(10);
+    : grossExposure.dividedBy(riskEquityValue).toString(10);
 }
 
 function mapUmPosition(

@@ -618,7 +618,9 @@ const btcPosition = client.account.getPosition({
 const risk = client.account.getRiskSnapshot("main-binance");
 ```
 
-所有数量字段（`free` / `used` / `total` / `size` / `entryPrice` / `equity` / ...）都是 `BigNumber`。
+所有数量字段（`free` / `used` / `total` / `size` / `entryPrice` / `netEquity` / `riskEquity` / ...）都是 `BigNumber`。
+
+`RiskSnapshot.netEquity` 表示不含风控折算的净资产价值；`riskEquity` 表示抵押系数或清算阈值折算后的风控净权益。Binance 使用 `actualEquity` / `accountEquity` 映射这两个字段；Juplend 使用 `totalCollateralUsd - totalDebtUsd` / `Σ(suppliedValue × liquidationThreshold) - totalDebtUsd`。
 
 > **注意**：`AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，不是数组；需要数组视图用 `getBalances()`。
 
@@ -1222,9 +1224,10 @@ interface PositionSnapshot {
 interface RiskSnapshot {
   accountId: string;
   venue: Venue;
-  equity?: BigNumber;
+  netEquity?: BigNumber;
+  riskEquity?: BigNumber;
   riskRatio?: BigNumber;
-  actualLeverage?: BigNumber;
+  riskLeverage?: BigNumber;
   initialMargin?: BigNumber;
   maintenanceMargin?: BigNumber;
   exchangeTs?: number;

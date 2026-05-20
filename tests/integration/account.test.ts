@@ -101,9 +101,10 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     unrealizedPnl: new BigNumber("10.50"),
   });
   expect(risk).toMatchObject({
-    equity: new BigNumber("1400.75"),
+    netEquity: new BigNumber("1300.50"),
+    riskEquity: new BigNumber("1400.75"),
     riskRatio: new BigNumber(1).dividedBy("31.0"),
-    actualLeverage: new BigNumber("1010.002").dividedBy("1400.75"),
+    riskLeverage: new BigNumber("1010.002").dividedBy("1400.75"),
     initialMargin: new BigNumber("120.10"),
     maintenanceMargin: new BigNumber("45.20"),
   });
@@ -206,6 +207,7 @@ test("Binance account polling refreshes risk and mark-to-market positions", asyn
     accountResponses: [
       {
         accountEquity: "1400.75",
+        actualEquity: "1300.50",
         accountInitialMargin: "120.10",
         accountMaintMargin: "45.20",
         uniMMR: "31.0",
@@ -213,6 +215,7 @@ test("Binance account polling refreshes risk and mark-to-market positions", asyn
       },
       {
         accountEquity: "1600.00",
+        actualEquity: "1500.00",
         accountInitialMargin: "150.00",
         accountMaintMargin: "60.00",
         uniMMR: "20.0",
@@ -303,17 +306,19 @@ test("Binance account polling refreshes risk and mark-to-market positions", asyn
   expect(secondPollEvent).toMatchObject({
     type: "risk.updated",
     snapshot: {
-      equity: new BigNumber("1600.00"),
+      netEquity: new BigNumber("1500.00"),
+      riskEquity: new BigNumber("1600.00"),
       riskRatio: new BigNumber(1).dividedBy("20.0"),
-      actualLeverage: new BigNumber("1200.00").dividedBy("1600.00"),
+      riskLeverage: new BigNumber("1200.00").dividedBy("1600.00"),
       initialMargin: new BigNumber("150.00"),
       maintenanceMargin: new BigNumber("60.00"),
     },
   });
 
   expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
-    equity: new BigNumber("1600.00"),
-    actualLeverage: new BigNumber("0.75"),
+    netEquity: new BigNumber("1500.00"),
+    riskEquity: new BigNumber("1600.00"),
+    riskLeverage: new BigNumber("0.75"),
   });
   expect(
     client.account.getPosition({
@@ -336,6 +341,7 @@ test("Binance account polling does not mask websocket disconnect status", async 
     accountResponses: [
       {
         accountEquity: "1400.75",
+        actualEquity: "1300.50",
         accountInitialMargin: "120.10",
         accountMaintMargin: "45.20",
         uniMMR: "31.0",
@@ -343,6 +349,7 @@ test("Binance account polling does not mask websocket disconnect status", async 
       },
       {
         accountEquity: "1600.00",
+        actualEquity: "1500.00",
         accountInitialMargin: "150.00",
         accountMaintMargin: "60.00",
         uniMMR: "20.0",
@@ -433,11 +440,13 @@ test("Binance account polling does not mask websocket disconnect status", async 
   expect(await nextEvent(iterator, 200)).toMatchObject({
     type: "risk.updated",
     snapshot: {
-      equity: new BigNumber("1600.00"),
+      netEquity: new BigNumber("1500.00"),
+      riskEquity: new BigNumber("1600.00"),
     },
   });
   expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
-    equity: new BigNumber("1600.00"),
+    netEquity: new BigNumber("1500.00"),
+    riskEquity: new BigNumber("1600.00"),
   });
   expect(client.account.getAccountStatus("main-binance")).toMatchObject({
     ready: true,
@@ -718,7 +727,8 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
   const juplendRisk = client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID);
   expect(juplendRisk).toMatchObject({
     riskRatio: new BigNumber("300").dividedBy("1275"),
-    equity: new BigNumber("1200"),
+    netEquity: new BigNumber("1200"),
+    riskEquity: new BigNumber("975"),
     lending: {
       ltv: new BigNumber("0.2"),
       liquidationThreshold: new BigNumber("0.85"),
@@ -800,7 +810,8 @@ test("Juplend account subscribe can filter one lending position", async () => {
   });
   expect(client.account.getRiskSnapshot(accountId)).toMatchObject({
     riskRatio: new BigNumber("250").dividedBy("850"),
-    equity: new BigNumber("750"),
+    netEquity: new BigNumber("750"),
+    riskEquity: new BigNumber("600"),
     lending: {
       ltv: new BigNumber("0.25"),
       liquidationThreshold: new BigNumber("0.85"),

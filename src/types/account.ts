@@ -91,9 +91,10 @@ export interface PositionSnapshot {
 export interface RiskSnapshot {
   accountId: string;
   venue: Venue;
-  equity?: BigNumber;
+  netEquity?: BigNumber;
+  riskEquity?: BigNumber;
   riskRatio?: BigNumber;
-  actualLeverage?: BigNumber;
+  riskLeverage?: BigNumber;
   initialMargin?: BigNumber;
   maintenanceMargin?: BigNumber;
   exchangeTs?: number;

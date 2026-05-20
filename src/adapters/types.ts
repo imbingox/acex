@@ -119,9 +119,10 @@ export interface RawPositionUpdate {
 }
 
 export interface RawRiskUpdate {
-  equity?: string;
+  netEquity?: string;
+  riskEquity?: string;
   riskRatio?: string;
-  actualLeverage?: string;
+  riskLeverage?: string;
   initialMargin?: string;
   maintenanceMargin?: string;
   exchangeTs?: number;

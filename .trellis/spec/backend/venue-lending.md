@@ -61,7 +61,8 @@ interface LendingBalanceFacet {
 interface RiskSnapshot {
   accountId: string;
   venue: Venue;
-  equity?: BigNumber;
+  netEquity?: BigNumber;
+  riskEquity?: BigNumber;
   riskRatio?: BigNumber;
   lending?: LendingRiskFacet;
 }
@@ -84,7 +85,7 @@ interface LendingRiskFacet {
 - Static vault metadata: `GET https://lite-api.jup.ag/lend/v1/borrow/vaults`，缓存 TTL 1h。
 - Position link: 从 `data.link` 抽取 `(vaultId, positionId)`，用 `vaultId` 关联 vault 元数据。
 - Balance aggregation: 多个 matching positions 按 `asset` 聚合成 `AccountSnapshot.balances: Record<asset, BalanceSnapshot>`。
-- Risk aggregation: `riskRatio = totalBorrowedValue / Σ(suppliedValue × liquidationThreshold)`；分母为 0 时返回 `undefined`。
+- Risk aggregation: `netEquity = totalCollateralUsd - totalDebtUsd`；`riskEquity = Σ(suppliedValue × liquidationThreshold) - totalDebtUsd`；`riskRatio = totalBorrowedValue / Σ(suppliedValue × liquidationThreshold)`，分母为 0 时返回 `undefined`。
 - Threshold normalization: `liquidationThreshold = 850` 解释为 `0.85`；小于等于 1 的值按小数原样使用。
 - Polling: 默认 30s，可通过 `AccountRuntimeOptions.juplend.pollIntervalMs` 覆盖。
 - Polling result is a full account snapshot, not a partial update; each successful poll must replace balances/positions/risk so closed positions and vanished assets are cleared.

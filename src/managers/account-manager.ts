@@ -589,18 +589,22 @@ export class AccountManagerImpl
     return {
       accountId,
       venue,
-      equity:
-        input.equity === undefined
-          ? previous?.equity
-          : new BigNumber(input.equity),
+      netEquity:
+        input.netEquity === undefined
+          ? previous?.netEquity
+          : new BigNumber(input.netEquity),
+      riskEquity:
+        input.riskEquity === undefined
+          ? previous?.riskEquity
+          : new BigNumber(input.riskEquity),
       riskRatio:
         input.riskRatio === undefined
           ? previous?.riskRatio
           : new BigNumber(input.riskRatio),
-      actualLeverage:
-        input.actualLeverage === undefined
-          ? previous?.actualLeverage
-          : new BigNumber(input.actualLeverage),
+      riskLeverage:
+        input.riskLeverage === undefined
+          ? previous?.riskLeverage
+          : new BigNumber(input.riskLeverage),
       initialMargin:
         input.initialMargin === undefined
           ? previous?.initialMargin

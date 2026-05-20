@@ -222,7 +222,8 @@ function buildRisk(input: {
     : undefined;
 
   return {
-    equity: totalCollateralUsd.minus(totalDebtUsd).toString(10),
+    netEquity: totalCollateralUsd.minus(totalDebtUsd).toString(10),
+    riskEquity: weightedLiquidationValueUsd.minus(totalDebtUsd).toString(10),
     riskRatio,
     receivedAt: input.receivedAt,
     lending: {

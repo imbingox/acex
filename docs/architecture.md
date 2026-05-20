@@ -301,6 +301,8 @@ Binance refreshAccount ──► /papi/v1/account + /papi/v1/um/positionRisk
                          └► onPrivateAccountUpdate → risk + position mark-to-market 覆盖
 ```
 
+Binance PAPI account risk 同时保留两种权益口径：`actualEquity` 映射为 `RiskSnapshot.netEquity`，表示不含抵押系数折算的净资产美元价值；`accountEquity` / `totalEquity` 映射为 `RiskSnapshot.riskEquity`，表示风控折算权益。`riskLeverage` 使用 `sum(abs(position.notional)) / riskEquity`，和风控口径一致。
+
 重连后先关流再重建；coordinator 的 `resumeRecord` 会在新流 open 后再跑一次 bootstrap，完成 reconcile（`private-subscription-coordinator.ts:177-192`）。
 
 ### 4.5 Juplend polling 生命周期
@@ -499,6 +501,8 @@ Binance 三套市场体系（Spot / USDⓈ-M / COIN-M）分别对应不同的 RE
 | Private WS | `wss://fstream.binance.com/pm/ws/<listenKey>` |
 
 签名：HMAC-SHA256 over `queryString + "timestamp=" + Date.now() + "&recvWindow=" + DEFAULT_RECV_WINDOW`（`private-adapter.ts:170`）。`recvWindow` 默认 5000，可通过 `accountOptions.recvWindow` 覆盖。
+
+账户风险字段映射：`/papi/v1/account.actualEquity` → `risk.netEquity`；`accountEquity` / `totalEquity` → `risk.riskEquity`；`uniMMR` → `risk.riskRatio = 1 / uniMMR`；`risk.riskLeverage` 用 `/papi/v1/um/positionRisk.notional` 的绝对值总和除以 `risk.riskEquity`。
 
 ### 7.4 USDM 结算币推断
 

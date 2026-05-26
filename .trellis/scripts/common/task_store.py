@@ -83,6 +83,30 @@ def ensure_tasks_dir(repo_root: Path) -> Path:
     return tasks_dir
 
 
+def _find_archived_task_by_dir_name(tasks_dir: Path, dir_name: str) -> Path | None:
+    """Find an archived task directory with the exact active-task dir name."""
+    archive_dir = tasks_dir / DIR_ARCHIVE
+    if not archive_dir.is_dir():
+        return None
+
+    for month_dir in sorted(archive_dir.iterdir()):
+        if not month_dir.is_dir():
+            continue
+        candidate = month_dir / dir_name
+        if candidate.is_dir():
+            return candidate
+
+    return None
+
+
+def _repo_relative_path(path: Path, repo_root: Path) -> str:
+    """Format a path relative to the repo root when possible."""
+    try:
+        return path.relative_to(repo_root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 # =============================================================================
 # Sub-agent platform detection + JSONL seeding
 # =============================================================================
@@ -192,6 +216,13 @@ def cmd_create(args: argparse.Namespace) -> int:
     dir_name = f"{date_prefix}-{slug}"
     task_dir = tasks_dir / dir_name
     task_json_path = task_dir / FILE_TASK_JSON
+
+    archived_task_dir = _find_archived_task_by_dir_name(tasks_dir, dir_name)
+    if archived_task_dir:
+        print(colored(f"Error: Task already archived: {dir_name}", Colors.RED), file=sys.stderr)
+        print(f"Archived at: {_repo_relative_path(archived_task_dir, repo_root)}", file=sys.stderr)
+        print("Use a new slug if you intend to create a new task.", file=sys.stderr)
+        return 1
 
     if task_dir.exists():
         print(colored(f"Warning: Task directory already exists: {dir_name}", Colors.YELLOW), file=sys.stderr)
@@ -337,6 +368,9 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
     # Update status before archiving
     today = datetime.now().strftime("%Y-%m-%d")
+    # Names of child task dirs whose task.json gets modified below; passed
+    # into safe_archive_paths_to_add so they're staged in this commit.
+    modified_children: list[str] = []
     if task_json_path.is_file():
         data = read_json(task_json_path)
         if data:
@@ -361,6 +395,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
                             if child_data:
                                 child_data["parent"] = None
                                 write_json(child_json, child_data)
+                                modified_children.append(child_dir_path.name)
 
     # Clear any session that still points at this task before the path moves.
     from .active_task import clear_task_from_sessions
@@ -375,7 +410,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
         # Auto-commit unless --no-commit
         if not getattr(args, "no_commit", False):
-            _auto_commit_archive(dir_name, repo_root)
+            _auto_commit_archive(dir_name, repo_root, modified_children)
 
         # Return the archive path
         print(f"{DIR_WORKFLOW}/{DIR_TASKS}/{DIR_ARCHIVE}/{year_month}/{dir_name}")
@@ -388,18 +423,26 @@ def cmd_archive(args: argparse.Namespace) -> int:
     return 1
 
 
-def _auto_commit_archive(task_name: str, repo_root: Path) -> None:
+def _auto_commit_archive(
+    task_name: str,
+    repo_root: Path,
+    modified_children: list[str] | None = None,
+) -> None:
     """Stage Trellis-owned task paths and commit after archive.
 
-    Only stages specific subpaths (the archive subtree and active task dirs),
-    never the whole ``.trellis/`` tree. If ``.gitignore`` blocks the paths,
-    we warn + skip — we do NOT retry with ``git add -f``. The warning
-    explicitly forbids ``git add -f .trellis/`` (which would fan out to
-    caches/backups) and points users at ``session_auto_commit: false``.
+    Scoped narrowly to the archived task's source + destination paths
+    plus any child task dirs whose ``task.json`` was edited (parent →
+    children relationship update). Dirty changes in OTHER active task
+    dirs are NOT bundled into the archive commit.
 
-    Honors ``session_auto_commit`` in ``.trellis/config.yaml``: when set to
-    ``false``, this function returns immediately without touching git
-    (the archive directory move on disk is unaffected).
+    If ``.gitignore`` blocks the paths, we warn + skip — we do NOT
+    retry with ``git add -f``. The warning explicitly forbids
+    ``git add -f .trellis/`` (which would fan out to caches/backups)
+    and points users at ``session_auto_commit: false``.
+
+    Honors ``session_auto_commit`` in ``.trellis/config.yaml``: when
+    set to ``false``, this function returns immediately without
+    touching git (the archive directory move on disk is unaffected).
     """
     if not get_session_auto_commit(repo_root):
         print(
@@ -408,7 +451,9 @@ def _auto_commit_archive(task_name: str, repo_root: Path) -> None:
         )
         return
 
-    paths = safe_archive_paths_to_add(repo_root)
+    paths = safe_archive_paths_to_add(
+        repo_root, task_name=task_name, modified_children=modified_children
+    )
     if not paths:
         print("[OK] No task changes to commit.", file=sys.stderr)
         return
@@ -424,8 +469,24 @@ def _auto_commit_archive(task_name: str, repo_root: Path) -> None:
             )
         return
 
+    # Belt-and-suspenders for the phantom-delete bug: `safe_git_add` uses
+    # `git add` (no -A) which only stages additions/modifications. The
+    # source task directory was moved away by `shutil.move`, so its files
+    # need an explicit `git rm --cached` to stage the deletions in this
+    # same commit — otherwise they sit as uncommitted "phantom deletes"
+    # against HEAD until something later picks them up.
+    #
+    # `--ignore-unmatch` makes this a no-op when the task was never tracked
+    # (e.g. archiving a task that lived only in working tree).
+    source_rel = f"{DIR_WORKFLOW}/{DIR_TASKS}/{task_name}"
+    run_git(
+        ["rm", "-r", "--cached", "--ignore-unmatch", "--", source_rel],
+        cwd=repo_root,
+    )
+
     rc, _, _ = run_git(
-        ["diff", "--cached", "--quiet", "--", *paths], cwd=repo_root
+        ["diff", "--cached", "--quiet", "--", *paths, source_rel],
+        cwd=repo_root,
     )
     if rc == 0:
         print("[OK] No task changes to commit.", file=sys.stderr)

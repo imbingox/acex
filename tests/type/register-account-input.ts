@@ -16,35 +16,28 @@ const binanceAccount: RegisterAccountInput = {
 const juplendAccount: RegisterAccountInput = {
   accountId: "jup-loop-a",
   venue: "juplend",
-  credentials: {
-    apiKey: "key",
-  },
   options: {
     walletAddress: "wallet",
     positionId: "101",
   },
 };
 
-// @ts-expect-error Juplend must provide walletAddress in options.
-const juplendMissingWallet: RegisterAccountInput = {
-  accountId: "jup-loop-a",
+const juplendDirectPositionAccount: RegisterAccountInput = {
+  accountId: "jup-loop-direct",
   venue: "juplend",
-  credentials: {
-    apiKey: "key",
+  options: {
+    vaultId: "1",
+    positionId: "101",
   },
 };
 
-// @ts-expect-error Juplend credentials require apiKey.
-const juplendMissingApiKey: RegisterAccountInput = {
+// @ts-expect-error Juplend must provide walletAddress or vaultId+positionId.
+const juplendMissingWallet: RegisterAccountInput = {
   accountId: "jup-loop-a",
   venue: "juplend",
-  credentials: {},
-  options: {
-    walletAddress: "wallet",
-  },
 };
 
 void binanceAccount;
 void juplendAccount;
+void juplendDirectPositionAccount;
 void juplendMissingWallet;
-void juplendMissingApiKey;

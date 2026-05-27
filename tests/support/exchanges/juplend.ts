@@ -1,5 +1,12 @@
+import {
+  type JuplendPositionLike,
+  type JuplendReadSdkLike,
+  resetJuplendReadSdkForTests,
+  setJuplendReadSdkForTests,
+} from "../../../src/adapters/juplend/lend-read.ts";
 import { resetJuplendVaultCacheForTests } from "../../../src/adapters/juplend/private-adapter.ts";
 import { stopAllClientsForTests } from "../../../src/client/runtime.ts";
+import { jsonResponse, textResponse } from "../test-utils.ts";
 
 export interface JuplendFetchRecord {
   method: string;
@@ -8,38 +15,111 @@ export interface JuplendFetchRecord {
 }
 
 interface MutableJuplendState {
-  portfolio?: unknown;
+  positions?: JuplendPositionLike[];
   vaults?: unknown;
-  portfolioDelayMs?: number;
-  activePortfolioRequests: number;
-  maxActivePortfolioRequests: number;
+  tokenSearch?: unknown;
+  prices?: unknown;
+  failTokenSearch: boolean;
+  failPrices: boolean;
+  positionsDelayMs?: number;
+  activePositionRequests: number;
+  maxActivePositionRequests: number;
+  rpcUrls: string[];
+  directPositionRequests: Array<{
+    vaultId: number;
+    nftId: number;
+  }>;
 }
 
 export type MutableJuplendFetchRecords = JuplendFetchRecord[] & {
   state: MutableJuplendState;
 };
 
-export const JUPLEND_WALLET = "8xJuplendWallet11111111111111111111111111111";
+export const JUPLEND_WALLET = "11111111111111111111111111111111";
 export const JUPLEND_ACCOUNT_ID = "juplend-main-position-a";
 
 export function installJuplendInfra(options?: {
-  failPortfolio?: boolean;
+  failPositions?: boolean;
   failVaults?: boolean;
-  portfolio?: unknown;
+  failTokenSearch?: boolean;
+  failPrices?: boolean;
+  positions?: JuplendPositionLike[];
   vaults?: unknown;
-  portfolioDelayMs?: number;
+  tokenSearch?: unknown;
+  prices?: unknown;
+  positionsDelayMs?: number;
 }): MutableJuplendFetchRecords {
   const requests = [] as unknown as MutableJuplendFetchRecords;
   const state: MutableJuplendState = {
-    portfolio: options?.portfolio,
+    positions: options?.positions,
     vaults: options?.vaults,
-    portfolioDelayMs: options?.portfolioDelayMs,
-    activePortfolioRequests: 0,
-    maxActivePortfolioRequests: 0,
+    tokenSearch: options?.tokenSearch,
+    prices: options?.prices,
+    failTokenSearch: options?.failTokenSearch ?? false,
+    failPrices: options?.failPrices ?? false,
+    positionsDelayMs: options?.positionsDelayMs,
+    activePositionRequests: 0,
+    maxActivePositionRequests: 0,
+    rpcUrls: [],
+    directPositionRequests: [],
   };
   requests.state = state;
+
   stopAllClientsForTests();
   resetJuplendVaultCacheForTests();
+  resetJuplendReadSdkForTests();
+
+  const sdk: JuplendReadSdkLike = {
+    createVaultReader(rpcUrl) {
+      state.rpcUrls.push(rpcUrl);
+
+      return {
+        async getAllUserPositions() {
+          if (options?.failPositions) {
+            throw new Error("positions unavailable");
+          }
+
+          state.activePositionRequests += 1;
+          state.maxActivePositionRequests = Math.max(
+            state.maxActivePositionRequests,
+            state.activePositionRequests,
+          );
+
+          try {
+            if (state.positionsDelayMs) {
+              await Bun.sleep(state.positionsDelayMs);
+            }
+
+            return (state.positions ??
+              juplendFixtures.positions) as JuplendPositionLike[];
+          } finally {
+            state.activePositionRequests -= 1;
+          }
+        },
+        async getPositionByVaultId(vaultId, nftId) {
+          if (options?.failPositions) {
+            throw new Error("positions unavailable");
+          }
+
+          state.directPositionRequests.push({ vaultId, nftId });
+          const positions = (state.positions ??
+            juplendFixtures.positions) as JuplendPositionLike[];
+          const matched = positions.find(
+            (position) =>
+              position.nftId === nftId &&
+              position.vault.constantViews.vaultId === vaultId,
+          );
+          if (!matched) {
+            throw new Error(`position not found: ${vaultId}/${nftId}`);
+          }
+
+          return matched;
+        },
+      };
+    },
+  };
+
+  setJuplendReadSdkForTests(sdk);
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -63,35 +143,42 @@ export function installJuplendInfra(options?: {
         apiKey: headers.get("X-API-KEY"),
       });
 
-      if (url.hostname === "api.jup.ag") {
-        if (options?.failPortfolio) {
-          return textResponse("portfolio unavailable", {
+      if (
+        url.hostname === "api.jup.ag" &&
+        url.pathname === "/tokens/v2/search"
+      ) {
+        if (state.failTokenSearch) {
+          return textResponse("token search unavailable", {
             status: 503,
             statusText: "Service Unavailable",
           });
         }
-        state.activePortfolioRequests += 1;
-        state.maxActivePortfolioRequests = Math.max(
-          state.maxActivePortfolioRequests,
-          state.activePortfolioRequests,
-        );
-        try {
-          if (state.portfolioDelayMs) {
-            await Bun.sleep(state.portfolioDelayMs);
-          }
-          return jsonResponse(state.portfolio ?? juplendFixtures.portfolio);
-        } finally {
-          state.activePortfolioRequests -= 1;
-        }
+
+        return jsonResponse(state.tokenSearch ?? juplendFixtures.tokenSearch);
       }
 
-      if (url.hostname === "lite-api.jup.ag") {
+      if (url.hostname === "api.jup.ag" && url.pathname === "/price/v3") {
+        if (state.failPrices) {
+          return textResponse("prices unavailable", {
+            status: 503,
+            statusText: "Service Unavailable",
+          });
+        }
+
+        return jsonResponse(state.prices ?? juplendFixtures.prices);
+      }
+
+      if (
+        url.hostname === "lite-api.jup.ag" &&
+        url.pathname === "/lend/v1/borrow/vaults"
+      ) {
         if (options?.failVaults) {
           return textResponse("vaults unavailable", {
             status: 503,
             statusText: "Service Unavailable",
           });
         }
+
         return jsonResponse(state.vaults ?? juplendFixtures.vaults);
       }
 
@@ -102,57 +189,98 @@ export function installJuplendInfra(options?: {
   return requests;
 }
 
-const juplendFixtures = {
-  portfolio: {
-    elements: [
-      {
-        data: {
-          link: "https://jup.ag/lend/borrow/1/nfts/101",
-          suppliedValue: "1000",
-          borrowedValue: "250",
-          value: "750",
+const juplendFixtures: {
+  positions: JuplendPositionLike[];
+  vaults: unknown[];
+  tokenSearch: unknown[];
+  prices: Record<string, unknown>;
+} = {
+  positions: [
+    {
+      nftId: 101,
+      supply: "10000000000",
+      borrow: "250000000000",
+      dustBorrow: "0",
+      vault: {
+        constantViews: {
+          vaultId: 1,
+          supplyToken: "So11111111111111111111111111111111111111112",
+          borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        },
+        configs: {
+          liquidationThreshold: "850",
+        },
+        exchangePricesAndRates: {
+          supplyRateVault: "554",
+          borrowRateVault: "513",
         },
       },
-      {
-        data: {
-          link: "https://jup.ag/lend/borrow/1/nfts/102",
-          suppliedValue: "500",
-          borrowedValue: "50",
-          value: "450",
+    },
+    {
+      nftId: 102,
+      supply: "5000000000",
+      borrow: "50000000000",
+      dustBorrow: "0",
+      vault: {
+        constantViews: {
+          vaultId: 1,
+          supplyToken: "So11111111111111111111111111111111111111112",
+          borrowToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        },
+        configs: {
+          liquidationThreshold: "850",
+        },
+        exchangePricesAndRates: {
+          supplyRateVault: "554",
+          borrowRateVault: "513",
         },
       },
-    ],
-  },
-  vaults: {
-    data: [
-      {
-        id: "1",
-        supplyToken: {
-          symbol: "SOL",
-          oraclePrice: "100",
-        },
-        borrowToken: {
-          symbol: "USDC",
-          oraclePrice: "1",
-        },
-        liquidationThreshold: 850,
-        supplyRate: "0.05",
-        borrowRate: "0.08",
+    },
+  ],
+  vaults: [
+    {
+      id: "1",
+      supplyToken: {
+        address: "So11111111111111111111111111111111111111112",
+        symbol: "WSOL",
+        uiSymbol: "SOL",
+        decimals: 9,
+        price: "100",
       },
-    ],
+      borrowToken: {
+        address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        symbol: "USDC",
+        uiSymbol: "USDC",
+        decimals: 6,
+        price: "1",
+      },
+      liquidationThreshold: "850",
+      supplyRate: "554",
+      borrowRate: "513",
+    },
+  ],
+  tokenSearch: [
+    {
+      id: "So11111111111111111111111111111111111111112",
+      symbol: "SOL",
+      decimals: 9,
+      usdPrice: "100",
+    },
+    {
+      id: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      symbol: "USDC",
+      decimals: 6,
+      usdPrice: "1",
+    },
+  ],
+  prices: {
+    So11111111111111111111111111111111111111112: {
+      usdPrice: "100",
+      decimals: 9,
+    },
+    EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: {
+      usdPrice: "1",
+      decimals: 6,
+    },
   },
 };
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function textResponse(
-  body: string,
-  init: { status: number; statusText: string },
-): Response {
-  return new Response(body, init);
-}

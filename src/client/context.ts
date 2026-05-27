@@ -108,7 +108,7 @@ export function hasPrivateCredentials(
   venue?: Venue,
 ): boolean {
   if (venue === "juplend") {
-    return Boolean(credentials?.apiKey);
+    return true;
   }
 
   return Boolean(credentials?.apiKey && credentials.secret);

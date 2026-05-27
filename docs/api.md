@@ -64,7 +64,7 @@ for await (const event of client.market.events.l1BookUpdates({
 await client.stop();
 ```
 
-同一个 client 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户。`account.binance.riskPollIntervalMs` 只配置 Binance 风险/仓位校准间隔；`account.juplend.pollIntervalMs` 只配置 Juplend polling 间隔，不会把 client 限定为某个 venue：
+同一个 client 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户。`account.binance.riskPollIntervalMs` 只配置 Binance 风险/仓位校准间隔；`account.juplend.pollIntervalMs` / `rpcUrl` / `jupApiKey` 只配置 Juplend polling、RPC 和 Jup API，不会把 client 限定为某个 venue：
 
 ```ts
 const client = createClient({
@@ -74,6 +74,8 @@ const client = createClient({
     },
     juplend: {
       pollIntervalMs: 30_000,
+      rpcUrl: process.env.SOL_HELIUS_RPC,
+      jupApiKey: process.env.JUP_API,
     },
   },
 });
@@ -91,10 +93,18 @@ await client.registerAccount({
 await client.registerAccount({
   accountId: "jup-loop-a",
   venue: "juplend",
-  credentials: { apiKey: process.env.JUPITER_API_KEY! },
   options: {
     walletAddress: "<solana-wallet-address>",
     positionId: "<optional-nft-position-id>",
+  },
+});
+
+await client.registerAccount({
+  accountId: "jup-loop-direct",
+  venue: "juplend",
+  options: {
+    vaultId: "<vault-id>",
+    positionId: "<nft-position-id>",
   },
 });
 
@@ -216,6 +226,7 @@ const client = createClient({
     },
     juplend: {
       pollIntervalMs: 30_000,
+      rpcUrl: process.env.SOL_HELIUS_RPC,
     },
   },
 });
@@ -295,10 +306,18 @@ await client.registerAccount({
 await client.registerAccount({
   accountId: "jup-loop-a",
   venue: "juplend",
-  credentials: { apiKey: jupiterApiKey },
   options: {
     walletAddress,
     positionId: "101", // 可选；不传则聚合该钱包全部 Juplend positions
+  },
+});
+
+await client.registerAccount({
+  accountId: "jup-loop-direct",
+  venue: "juplend",
+  options: {
+    vaultId: "1",
+    positionId: "101", // 直接读取单个 vault 内的 NFT position
   },
 });
 ```
@@ -309,7 +328,8 @@ await client.registerAccount({
 - 凭证校验发生在 `subscribeAccount()` / `subscribeOrders()` 时，不是注册时
 - `updateAccountCredentials()` 可以在私有订阅活跃时调用，SDK 会按需重建私有链路
 - `removeAccount()` 比 `unsubscribeAccount()` 更彻底：账户配置、凭证、账户级缓存都会清理
-- Juplend 的 `accountId` 是自定义逻辑账户名；Solana 钱包地址必须放在 `options.walletAddress`，可用 `options.positionId` 把同钱包下单个 NFT position 映射为独立账户
+- Juplend 的 `accountId` 是自定义逻辑账户名；可传 `options.walletAddress` 聚合钱包全部仓位，或传 `options.vaultId + options.positionId` 直接读取单个仓位
+- Juplend 不要求 `credentials`；原生 read 默认读取 `SOL_HELIUS_RPC`，也可通过 `account.juplend.rpcUrl` 显式覆盖；token metadata / price 优先读取 `account.juplend.jupApiKey` 或环境变量 `JUP_API`
 
 ### 4.5 `getStatus()` / `getHealth()`
 
@@ -940,6 +960,8 @@ interface AccountRuntimeOptions {
   };
   juplend?: {
     pollIntervalMs?: number;
+    rpcUrl?: string;
+    jupApiKey?: string;
   };
 }
 
@@ -963,14 +985,17 @@ interface BinanceAccountOptions {
   recvWindow?: number;
 }
 
-interface JuplendAccountCredentials {
-  apiKey: string;
-}
-
-interface JuplendAccountOptions {
-  walletAddress: string;
-  positionId?: string;
-}
+type JuplendAccountOptions =
+  | {
+      walletAddress: string;
+      vaultId?: string;
+      positionId?: string;
+    }
+  | {
+      walletAddress?: string;
+      vaultId: string;
+      positionId: string;
+    };
 
 type RegisterAccountInput =
   | {
@@ -982,7 +1007,7 @@ type RegisterAccountInput =
   | {
       accountId: string;
       venue: "juplend";
-      credentials: JuplendAccountCredentials;
+      credentials?: AccountCredentials;
       options: JuplendAccountOptions;
     };
 
@@ -1445,7 +1470,7 @@ try {
 | `ACCOUNT_ALREADY_EXISTS` | 重复注册同一个 `accountId` |
 | `ACCOUNT_NOT_FOUND` | `accountId` 未注册或已被移除 |
 | `ACCOUNT_BOOTSTRAP_FAILED` | `subscribeAccount()` 过程中账户快照拉取失败，例如 Juplend HTTP/API 失败或缺 `options.walletAddress` |
-| `CREDENTIALS_MISSING` | 私有订阅 / 下单缺必要凭证，例如 Binance 缺 `apiKey/secret` 或 Juplend 缺 `apiKey` |
+| `CREDENTIALS_MISSING` | 私有订阅 / 下单缺必要凭证，例如 Binance 缺 `apiKey/secret` |
 | `ORDER_BOOTSTRAP_FAILED` | `subscribeOrders()` 过程中 open orders 拉取失败 |
 | `ORDER_INPUT_INVALID` | 下单/撤单本地输入校验失败（如缺 price、缺 id） |
 | `ORDER_CREATE_FAILED` | 交易所拒单 / REST 报错 |
@@ -1458,7 +1483,7 @@ try {
 - **市场数据**：真实落地 Binance L1 Book（Spot + USDⓈ-M + COIN-M）和 Binance 永续 Funding Rate
 - **私有链路**：Binance PAPI UM 使用 listenKey/WebSocket；Juplend 使用 HTTP polling，只提供账户只读视图
 - **Juplend 写操作**：不支持 supply / borrow / repay / withdraw，不支持 `OrderManager` 下单撤单
-- **Juplend 数量精度**：Portfolio API 提供 USD 聚合值，token 数量由 USD / vault oracle price 反算
+- **Juplend 数据源**：账户主数据来自 `@jup-ag/lend-read` 原生 position read；token metadata / spot price 优先来自 Jup 官方 `Tokens V2 + Price V3`，lite vault metadata 只做 fallback
 - **Funding Rate**：仅永续合约支持，来自 mark price websocket；不支持现货和交割合约
 - **下单类型**：`createOrder()` 仅支持 `limit` / `market`；条件单、改单不支持
 - **撤单范围**：`cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤

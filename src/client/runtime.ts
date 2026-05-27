@@ -106,7 +106,10 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
     const privateAdapters = [
       new BinancePrivateAdapter(),
-      new JuplendPrivateAdapter(),
+      new JuplendPrivateAdapter(
+        options.account?.juplend?.rpcUrl,
+        options.account?.juplend?.jupApiKey,
+      ),
     ];
     this.privateAdapters = new Map(
       privateAdapters.map((adapter) => [adapter.venue, adapter]),

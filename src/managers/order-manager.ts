@@ -101,6 +101,13 @@ export class OrderManagerImpl
   async subscribeOrders(input: SubscribeOrdersInput): Promise<void> {
     this.context.assertStarted();
     const account = this.context.getRegisteredAccount(input.accountId);
+    if (account.venue === "juplend") {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support private order subscriptions: ${account.venue}`,
+        { accountId: input.accountId, venue: account.venue },
+      );
+    }
     this.context.ensurePrivateCredentials(input.accountId);
 
     const record = this.getOrCreateRecord(input.accountId, account.venue);
@@ -635,6 +642,7 @@ export class OrderManagerImpl
 
   private createError(
     code:
+      | "VENUE_NOT_SUPPORTED"
       | "ORDER_CANCEL_ALL_FAILED"
       | "ORDER_CANCEL_FAILED"
       | "ORDER_CREATE_FAILED"

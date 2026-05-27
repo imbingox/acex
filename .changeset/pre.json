@@ -8,6 +8,7 @@
     "account-risk-equity-fields",
     "binance-account-risk-polling",
     "funding-aggregators",
+    "juplend-lend-read-native-source",
     "juplend-venue-lending",
     "order-postonly-normalization",
     "publish-api-docs",

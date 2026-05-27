@@ -1469,7 +1469,7 @@ try {
 | `MARKET_STREAM_TIMEOUT` | market stream 首条消息超时 |
 | `ACCOUNT_ALREADY_EXISTS` | 重复注册同一个 `accountId` |
 | `ACCOUNT_NOT_FOUND` | `accountId` 未注册或已被移除 |
-| `ACCOUNT_BOOTSTRAP_FAILED` | `subscribeAccount()` 过程中账户快照拉取失败，例如 Juplend HTTP/API 失败或缺 `options.walletAddress` |
+| `ACCOUNT_BOOTSTRAP_FAILED` | `subscribeAccount()` 过程中账户快照拉取失败，例如 Juplend HTTP/API 失败、缺 `options.walletAddress`，或 direct 模式下缺失/提供了无效的 `options.vaultId`、`options.positionId` |
 | `CREDENTIALS_MISSING` | 私有订阅 / 下单缺必要凭证，例如 Binance 缺 `apiKey/secret` |
 | `ORDER_BOOTSTRAP_FAILED` | `subscribeOrders()` 过程中 open orders 拉取失败 |
 | `ORDER_INPUT_INVALID` | 下单/撤单本地输入校验失败（如缺 price、缺 id） |

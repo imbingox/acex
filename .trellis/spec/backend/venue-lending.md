@@ -27,11 +27,17 @@ type RegisterAccountInput =
       accountId: string;
       venue: "juplend";
       credentials?: AccountCredentials;
-      options: {
-        walletAddress?: string;
-        vaultId?: string;
-        positionId?: string;
-      };
+      options:
+        | {
+            walletAddress: string;
+            vaultId?: string;
+            positionId?: string;
+          }
+        | {
+            walletAddress?: string;
+            vaultId: string;
+            positionId: string;
+          };
     };
 ```
 

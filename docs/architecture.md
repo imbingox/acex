@@ -313,7 +313,9 @@ Juplend adapter 实现同一个 `PrivateUserDataAdapter`，但不创建 WebSocke
 registerAccount({
   accountId: "jup-loop-a",          // SDK 自定义账户名
   venue: "juplend",
-  options: { walletAddress?, vaultId?, positionId? },
+  options:
+    | { walletAddress: string, positionId?: string }
+    | { vaultId: string, positionId: string },
 })
   │
   ▼

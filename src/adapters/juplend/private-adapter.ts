@@ -81,6 +81,7 @@ const TOKENS_SEARCH_PATH = "/tokens/v2/search";
 const PRICE_V3_PATH = "/price/v3";
 const LEND_VAULTS_PATH = "/lend/v1/borrow/vaults";
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 // lend-read returns exchange-price-adjusted amounts on a fixed 1e9 scale,
 // not mint-atomic token amounts.
 const POSITION_AMOUNT_SCALE_DECIMALS = 9;
@@ -260,12 +261,51 @@ function buildRisk(input: {
 }
 
 async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    throw new Error(`Juplend HTTP ${response.status}: ${response.statusText}`);
+  const controller = new AbortController();
+  const upstreamSignal = init?.signal;
+  let timedOut = false;
+  const onUpstreamAbort = () => {
+    controller.abort();
+  };
+
+  if (upstreamSignal?.aborted) {
+    controller.abort();
+  } else if (upstreamSignal) {
+    upstreamSignal.addEventListener("abort", onUpstreamAbort, { once: true });
   }
 
-  return (await response.json()) as T;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DEFAULT_HTTP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Juplend HTTP ${response.status}: ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        timedOut
+          ? `Juplend fetch timeout after ${DEFAULT_HTTP_TIMEOUT_MS}ms`
+          : "Juplend fetch aborted",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (upstreamSignal) {
+      upstreamSignal.removeEventListener("abort", onUpstreamAbort);
+    }
+  }
 }
 
 function getJupApiKey(explicitApiKey?: string): string | undefined {

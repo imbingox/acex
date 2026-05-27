@@ -674,6 +674,7 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
     account: {
       juplend: {
         pollIntervalMs: 60_000,
+        jupApiKey: "test-key",
       },
     },
   });
@@ -1130,7 +1131,13 @@ test("Juplend account subscribe falls back to lite vault metadata when Jup API f
       },
     ],
   });
-  const client = createClient();
+  const client = createClient({
+    account: {
+      juplend: {
+        jupApiKey: "test-key",
+      },
+    },
+  });
 
   await client.registerAccount({
     accountId: JUPLEND_ACCOUNT_ID,

@@ -60,7 +60,7 @@ await client.stop();
 
 ### 同一个 client 同时使用 Binance + Juplend
 
-`createClient({ account: { binance: { riskPollIntervalMs }, juplend: { pollIntervalMs } } })` 只是分别配置 Binance 风险/仓位校准间隔和 Juplend 账户 polling 间隔，不代表这个 client 只能注册某个 venue。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。
+`createClient({ account: { binance: { riskPollIntervalMs }, juplend: { pollIntervalMs, rpcUrl, jupApiKey } } })` 只是分别配置 Binance 风险/仓位校准间隔和 Juplend 账户 polling / RPC / Jup API，不代表这个 client 只能注册某个 venue。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。
 
 ```ts
 const client = createClient({
@@ -70,6 +70,8 @@ const client = createClient({
     },
     juplend: {
       pollIntervalMs: 30_000,
+      rpcUrl: process.env.SOL_HELIUS_RPC,
+      jupApiKey: process.env.JUP_API,
     },
   },
 });
@@ -87,12 +89,18 @@ await client.registerAccount({
 await client.registerAccount({
   accountId: "jup-loop-a",
   venue: "juplend",
-  credentials: {
-    apiKey: process.env.JUPITER_API_KEY!,
-  },
   options: {
     walletAddress: "<solana-wallet-address>",
     positionId: "<optional-nft-position-id>",
+  },
+});
+
+await client.registerAccount({
+  accountId: "jup-loop-direct",
+  venue: "juplend",
+  options: {
+    vaultId: "<vault-id>",
+    positionId: "<nft-position-id>",
   },
 });
 
@@ -115,7 +123,7 @@ console.log({
 await client.stop();
 ```
 
-Juplend 使用 Jupiter Portfolio API 读取 Solana 钱包的借贷仓位，不需要私钥，也不支持 supply / borrow / repay / withdraw 等写操作。`accountId` 是你自定义的 SDK 账户名；Solana 钱包地址放在 `options.walletAddress`。如果只想观察某个 Juplend NFT position，可传 `options.positionId`。
+Juplend 使用 `@jup-ag/lend-read` 通过 Solana RPC 读取原生借贷仓位，不需要私钥，也不支持 supply / borrow / repay / withdraw 等写操作。`accountId` 是你自定义的 SDK 账户名。聚合钱包全部仓位时传 `options.walletAddress`；只想观察单个仓位时，可直接传 `options.vaultId + options.positionId`，这样不会先扫整个钱包。`account.juplend.rpcUrl` 可显式指定 RPC；未指定时默认读取 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。token metadata / price 优先走 Jup 官方 `Tokens V2 + Price V3`，可通过 `account.juplend.jupApiKey` 或环境变量 `JUP_API` 注入；拿不到时退回 lite vault metadata。
 
 ### 查询 venue 能力
 
@@ -151,7 +159,7 @@ const capabilities = client.listVenueCapabilities();
 
 - 运行时 market/order 能力只支持 `binance`；`okx` / `bybit` / `gate` 仅类型定义
 - 账户视图支持 Binance PAPI UM 与 Juplend 只读借贷账户
-- Juplend 只读，不支持订单和链上写操作；token 数量来自 USD / oracle price 反算
+- Juplend 只读，不支持订单和链上写操作；仓位数量来自 `@jup-ag/lend-read` 原生 position 数据
 - Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；不支持现货和交割合约
 - `createOrder()` 只支持 `limit` / `market`；条件单、改单、账户级全撤不支持
 - 双向持仓账户下单时必须显式传 `positionSide`
@@ -209,14 +217,15 @@ bun run test:live:order:soak
 
 - `market`：`loadMarkets()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
 - `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
-- `juplend`：Jupiter Portfolio API / vault 元数据连通性、lending balance facet、账户级 `riskRatio`、可选 `--position-id` 过滤单个 NFT position
+- `juplend`：`@jup-ag/lend-read` + Jup Tokens/Price API 连通性、lending balance facet、账户级 `riskRatio`、支持 `--wallet-address` 聚合或 `--vault-id + --position-id` 单仓直读
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连
 
 Juplend live smoke 示例：
 
 ```bash
-JUPITER_API_KEY=... JUPLEND_WALLET_ADDRESS=<wallet> bun run test:live:juplend -- --show-amounts
-JUPITER_API_KEY=... bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --show-amounts
+SOL_HELIUS_RPC=... JUPLEND_WALLET_ADDRESS=<wallet> bun run test:live:juplend -- --show-amounts
+bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --rpc-url <rpc> --show-amounts
+bun run test:live:juplend -- --account-id jup-loop-a --vault-id <vaultId> --position-id <nftId> --rpc-url <rpc> --show-amounts
 ```
 
 ### 发布流程

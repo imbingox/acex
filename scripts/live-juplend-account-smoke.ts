@@ -4,7 +4,6 @@ import {
   collectEventsUntil,
   nextEvent,
   parseNumber,
-  requireEnv,
   summarizeError,
   waitForCondition,
   writeStderr,
@@ -13,8 +12,10 @@ import {
 
 interface CliOptions {
   accountId: string;
-  walletAddress: string;
+  walletAddress?: string;
+  vaultId?: string;
   positionId?: string;
+  rpcUrl?: string;
   durationSec: number;
   pollIntervalMs: number;
   showAmounts: boolean;
@@ -22,8 +23,10 @@ interface CliOptions {
 
 interface SmokeResult {
   accountId: string;
-  walletAddress: string;
+  walletAddress?: string;
+  vaultId?: string;
   positionId?: string;
+  rpcUrl?: string;
   subscribeLatencyMs: number;
   statusAfterSubscribe: Record<string, unknown>;
   snapshot: Record<string, unknown>;
@@ -40,27 +43,32 @@ function printHelp(): void {
   bun run test:live:juplend -- [options]
 
 Environment:
-  JUPITER_API_KEY           Required Jupiter API key for Portfolio API
-  JUPLEND_WALLET_ADDRESS    Required Solana wallet address to inspect
+  JUPLEND_WALLET_ADDRESS    Optional Solana wallet address to inspect
+  SOL_HELIUS_RPC            Optional Solana RPC URL for @jup-ag/lend-read
+  JUP_API                   Optional Jup API key for Tokens V2 / Price V3
 
 Options:
   --account-id <id>          SDK account id (default: ${DEFAULT_ACCOUNT_ID})
   --wallet-address <addr>    Solana wallet address (overrides JUPLEND_WALLET_ADDRESS)
-  --position-id <id>         Optional Juplend NFT position id to include
+  --vault-id <id>            Juplend vault id for direct single-position read
+  --position-id <id>         Juplend NFT position id
+  --rpc-url <url>            Optional Solana RPC URL (overrides SOL_HELIUS_RPC)
   --duration <seconds>       Total observation duration (default: ${DEFAULT_DURATION_SEC})
   --poll-interval-ms <ms>    Juplend polling interval (default: ${DEFAULT_POLL_INTERVAL_MS})
   --show-amounts             Include lending balance/risk amounts in output
   --help                     Show this help
 
 Examples:
-  JUPITER_API_KEY=... JUPLEND_WALLET_ADDRESS=... bun run test:live:juplend -- --show-amounts
-  bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --poll-interval-ms 10000 --duration 25`);
+  SOL_HELIUS_RPC=... JUPLEND_WALLET_ADDRESS=... bun run test:live:juplend -- --show-amounts
+  bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --rpc-url <rpc> --poll-interval-ms 10000 --duration 25
+  bun run test:live:juplend -- --account-id jup-loop-a --vault-id <vaultId> --position-id <nftId> --rpc-url <rpc> --show-amounts`);
 }
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     accountId: DEFAULT_ACCOUNT_ID,
-    walletAddress: process.env.JUPLEND_WALLET_ADDRESS ?? "",
+    walletAddress: process.env.JUPLEND_WALLET_ADDRESS || undefined,
+    rpcUrl: process.env.SOL_HELIUS_RPC,
     durationSec: DEFAULT_DURATION_SEC,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     showAmounts: false,
@@ -83,8 +91,14 @@ function parseArgs(argv: string[]): CliOptions {
       case "--wallet-address":
         options.walletAddress = argv[++index] ?? "";
         break;
+      case "--vault-id":
+        options.vaultId = argv[++index] ?? "";
+        break;
       case "--position-id":
         options.positionId = argv[++index] ?? "";
+        break;
+      case "--rpc-url":
+        options.rpcUrl = argv[++index] ?? "";
         break;
       case "--duration":
         options.durationSec = parseNumber(argv[++index] ?? "", "--duration");
@@ -107,8 +121,10 @@ function parseArgs(argv: string[]): CliOptions {
     throw new Error("--account-id cannot be empty");
   }
 
-  if (!options.walletAddress) {
-    throw new Error("JUPLEND_WALLET_ADDRESS or --wallet-address is required");
+  if (!options.walletAddress && !(options.vaultId && options.positionId)) {
+    throw new Error(
+      "JUPLEND_WALLET_ADDRESS/--wallet-address or --vault-id + --position-id is required",
+    );
   }
 
   if (options.pollIntervalMs <= 0) {
@@ -186,10 +202,11 @@ function summarizeEvent(event: AccountEvent): Record<string, unknown> {
 }
 
 async function smokeJuplend(options: {
-  apiKey: string;
   accountId: string;
-  walletAddress: string;
+  walletAddress?: string;
+  vaultId?: string;
   positionId?: string;
+  rpcUrl?: string;
   durationMs: number;
   pollIntervalMs: number;
   showAmounts: boolean;
@@ -198,6 +215,7 @@ async function smokeJuplend(options: {
     account: {
       juplend: {
         pollIntervalMs: options.pollIntervalMs,
+        rpcUrl: options.rpcUrl,
       },
     },
   });
@@ -208,16 +226,20 @@ async function smokeJuplend(options: {
   const errorIterator = client.events.errors()[Symbol.asyncIterator]();
 
   try {
+    const accountOptions = options.walletAddress
+      ? {
+          walletAddress: options.walletAddress,
+          positionId: options.positionId,
+        }
+      : {
+          vaultId: options.vaultId as string,
+          positionId: options.positionId as string,
+        };
+
     await client.registerAccount({
       accountId: options.accountId,
       venue: "juplend",
-      credentials: {
-        apiKey: options.apiKey,
-      },
-      options: {
-        walletAddress: options.walletAddress,
-        positionId: options.positionId,
-      },
+      options: accountOptions,
     });
     await client.start();
 
@@ -251,7 +273,9 @@ async function smokeJuplend(options: {
     const result: SmokeResult = {
       accountId: options.accountId,
       walletAddress: options.walletAddress,
+      vaultId: options.vaultId,
       positionId: options.positionId,
+      rpcUrl: options.rpcUrl,
       subscribeLatencyMs,
       statusAfterSubscribe,
       snapshot: summarizeSnapshot(
@@ -283,12 +307,12 @@ async function smokeJuplend(options: {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const apiKey = requireEnv("JUPITER_API_KEY");
   const result = await smokeJuplend({
-    apiKey,
     accountId: options.accountId,
     walletAddress: options.walletAddress,
+    vaultId: options.vaultId,
     positionId: options.positionId,
+    rpcUrl: options.rpcUrl,
     durationMs: options.durationSec * 1_000,
     pollIntervalMs: options.pollIntervalMs,
     showAmounts: options.showAmounts,

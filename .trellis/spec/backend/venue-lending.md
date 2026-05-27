@@ -26,13 +26,18 @@ type RegisterAccountInput =
   | {
       accountId: string;
       venue: "juplend";
-      credentials: {
-        apiKey: string;
-      };
-      options: {
-        walletAddress: string;
-        positionId?: string;
-      };
+      credentials?: AccountCredentials;
+      options:
+        | {
+            walletAddress: string;
+            vaultId?: string;
+            positionId?: string;
+          }
+        | {
+            walletAddress?: string;
+            vaultId: string;
+            positionId: string;
+          };
     };
 ```
 
@@ -79,14 +84,18 @@ interface LendingRiskFacet {
 ### 3. Contracts
 
 - `accountId`: SDK 内部自定义账户名，在单个 client 内唯一；不是 Solana 钱包地址。
-- `options.walletAddress`: Juplend Portfolio API 查询用 Solana 钱包地址，必填。
-- `options.positionId`: 可选 Juplend NFT position id；提供时只纳入 `data.link` 中 `/nfts/{positionId}` 匹配的仓位。
-- Dynamic data: `GET https://api.jup.ag/portfolio/v1/positions/{walletAddress}?platforms=jupiter-exchange`，需要 `credentials.apiKey`。
-- Static vault metadata: `GET https://lite-api.jup.ag/lend/v1/borrow/vaults`，缓存 TTL 1h。
-- Position link: 从 `data.link` 抽取 `(vaultId, positionId)`，用 `vaultId` 关联 vault 元数据。
+- `options.walletAddress`: Juplend on-chain read 查询用 Solana 钱包地址；用于聚合该钱包下全部仓位。
+- `options.vaultId + options.positionId`: 单仓直读模式；已知 vault + NFT position 时直接走 `getPositionByVaultId()`，不扫全钱包。
+- `options.positionId`: 在 `walletAddress` 模式下可选，用于只纳入匹配 `nftId === positionId` 的仓位；在 direct read 模式下必填。
+- Dynamic data: `@jup-ag/lend-read` 的 `Client.vault.getAllUserPositions(walletAddress)` 或 `Client.vault.getPositionByVaultId(vaultId, positionId)`。
+- Vault metadata / price / symbol: 优先使用 Jup 官方 `Tokens V2 + Price V3` 补 token symbol / price；`GET https://lite-api.jup.ag/lend/v1/borrow/vaults` 仅作 vault fallback 信息。缓存 TTL 1h。
+- RPC config: `AccountRuntimeOptions.juplend.rpcUrl` 可选；未显式配置时默认读取环境变量 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。
+- Jup API config: `AccountRuntimeOptions.juplend.jupApiKey` 可选；未显式配置时默认读取环境变量 `JUP_API`，用于请求 Jup 官方 `Tokens V2 + Price V3`。
 - Balance aggregation: 多个 matching positions 按 `asset` 聚合成 `AccountSnapshot.balances: Record<asset, BalanceSnapshot>`。
-- Risk aggregation: `netEquity = totalCollateralUsd - totalDebtUsd`；`riskEquity = Σ(suppliedValue × liquidationThreshold) - totalDebtUsd`；`riskRatio = totalBorrowedValue / Σ(suppliedValue × liquidationThreshold)`，分母为 0 时返回 `undefined`。
+- Quantity mapping: `lend-read` 返回的是 exchange-price-adjusted amount，不是 mint atomic amount。当前 ACEX 按固定 `1e9` scale 还原用户可见数量：`supplied = supply / 1e9`；`borrowed = borrow / 1e9`。`dustBorrow` 作为单独字段保留在 SDK 原始语义里，不重复并入公开 debt 数量。
+- Risk aggregation: `netEquity = totalCollateralUsd - totalDebtUsd`；`riskEquity = Σ(collateralUsd × liquidationThreshold) - totalDebtUsd`；`riskRatio = totalDebtUsd / Σ(collateralUsd × liquidationThreshold)`，分母为 0 时返回 `undefined`。
 - Threshold normalization: `liquidationThreshold = 850` 解释为 `0.85`；小于等于 1 的值按小数原样使用。
+- APY normalization: `supplyRate = 554` / `borrowRate = 513` 解释为 `0.0554` / `0.0513`。
 - Polling: 默认 30s，可通过 `AccountRuntimeOptions.juplend.pollIntervalMs` 覆盖。
 - Polling result is a full account snapshot, not a partial update; each successful poll must replace balances/positions/risk so closed positions and vanished assets are cleared.
 - Polling must be serialized; schedule the next poll only after the previous poll settles to avoid overlapping requests and stale out-of-order responses.
@@ -95,10 +104,10 @@ interface LendingRiskFacet {
 
 | Condition | Error / Status |
 |---|---|
-| `venue: "juplend"` 缺 `credentials.apiKey` | TypeScript 报错；JS 绕过时 `subscribeAccount()` 抛 `CREDENTIALS_MISSING` |
-| `venue: "juplend"` 缺 `options.walletAddress` | TypeScript 报错；JS 绕过时 bootstrap 抛 `ACCOUNT_BOOTSTRAP_FAILED`，message 包含 `options.walletAddress required` |
+| `venue: "juplend"` 缺 `options.walletAddress` 且缺 `options.vaultId + options.positionId` | TypeScript 报错；JS 绕过时 bootstrap 抛 `ACCOUNT_BOOTSTRAP_FAILED`，message 包含 `options.walletAddress or options.vaultId + options.positionId required` |
+| `options.vaultId` 非 string | bootstrap 抛 `ACCOUNT_BOOTSTRAP_FAILED`，message 包含 `options.vaultId must be a string` |
 | `options.positionId` 非 string | bootstrap 抛 `ACCOUNT_BOOTSTRAP_FAILED`，message 包含 `options.positionId must be a string` |
-| Portfolio API HTTP 失败 | account status 进入 `degraded`，`reason = "http_failed"` |
+| lend-read RPC 失败 | account status 进入 `degraded`，`reason = "http_failed"` |
 | Vault API HTTP 失败且有旧缓存 | 沿用旧缓存，继续输出账户视图 |
 | Vault API HTTP 失败且无旧缓存 | bootstrap 失败，`ACCOUNT_BOOTSTRAP_FAILED` |
 | `positionId` 没匹配任何 position | 返回空 balances，`risk` 为 `undefined` |
@@ -107,19 +116,21 @@ interface LendingRiskFacet {
 
 ### 5. Good / Base / Bad Cases
 
-- Good: 同一 `walletAddress` 注册多个 `accountId`，每个账户传不同 `positionId`，策略可把单个 Juplend position 当作独立账户消费。
+- Good: 同一 `walletAddress` 注册多个 `accountId`，每个账户传不同 `positionId`；或已知 `vaultId + positionId` 时直接注册单仓账户。
 - Base: 只传 `walletAddress` 不传 `positionId`，SDK 聚合钱包下全部 Juplend positions。
-- Bad: 把钱包地址塞进 `accountId` 并省略 `options.walletAddress`；这会破坏同钱包多账户分账能力，且应被类型和 runtime 拦截。
+- Bad: 把钱包地址塞进 `accountId` 并省略 `options.walletAddress`，同时又不给 `vaultId + positionId`；这会破坏账户语义，且应被类型和 runtime 拦截。
 
 ### 6. Tests Required
 
-- Type-level: `RegisterAccountInput` 对 Juplend 缺 `credentials.apiKey` / `options.walletAddress` 使用 `@ts-expect-error`。
-- Integration happy path: fake Portfolio + vaults，断言 `BalanceSnapshot.lending` 按 asset 聚合，`RiskSnapshot.riskRatio` 公式正确。
-- Integration position filter: 传 `options.positionId`，断言只聚合匹配 `/nfts/{positionId}` 的单个仓位。
-- Integration replacement: 先返回非空 portfolio，再返回空 portfolio，断言 stale balances / risk 被清空。
-- Integration polling scheduler: 设置 `pollIntervalMs` 小于 fake Portfolio 延迟，断言最大并发请求数为 1。
-- Integration error: 缺 API key、缺 walletAddress、HTTP 失败分别映射到稳定错误 / status。
-- Live smoke: `scripts/live-juplend-account-smoke.ts` 支持 `--wallet-address`、`--position-id`、`--show-amounts`。
+- Type-level: `RegisterAccountInput` 对 Juplend 缺 `options.walletAddress` 且缺 `options.vaultId + options.positionId` 使用 `@ts-expect-error`，`credentials` 可省略。
+- Integration happy path: fake lend-read positions + vaults，断言 `BalanceSnapshot.lending` 按 asset 聚合，`RiskSnapshot.riskRatio` 公式正确，APY 按 1e4 归一化。
+- Integration position filter: 传 `options.positionId`，断言只聚合匹配 `nftId` 的单个仓位。
+- Integration direct read: 传 `options.vaultId + options.positionId`，断言走 `getPositionByVaultId()`，不触发全钱包扫描。
+- Integration replacement: 先返回非空 positions，再返回空 positions，断言 stale balances / risk 被清空。
+- Integration polling scheduler: 设置 `pollIntervalMs` 小于 fake position read 延迟，断言最大并发请求数为 1。
+- Integration RPC config: 覆盖 `account.juplend.rpcUrl` 和 `SOL_HELIUS_RPC` 默认值。
+- Integration error: 缺 walletAddress、RPC/HTTP 失败分别映射到稳定错误 / status。
+- Live smoke: `scripts/live-juplend-account-smoke.ts` 支持 `--wallet-address`、`--position-id`、`--rpc-url`、`--show-amounts`。
 
 ### 7. Wrong vs Correct
 
@@ -129,7 +140,6 @@ interface LendingRiskFacet {
 await client.registerAccount({
   accountId: walletAddress,
   venue: "juplend",
-  credentials: { apiKey },
 });
 ```
 
@@ -141,7 +151,6 @@ await client.registerAccount({
 await client.registerAccount({
   accountId: "jup-loop-a",
   venue: "juplend",
-  credentials: { apiKey },
   options: {
     walletAddress,
     positionId: "101",

@@ -674,6 +674,7 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
     account: {
       juplend: {
         pollIntervalMs: 60_000,
+        jupApiKey: "test-key",
       },
     },
   });
@@ -687,9 +688,6 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
   await client.registerAccount({
     accountId: JUPLEND_ACCOUNT_ID,
     venue: "juplend",
-    credentials: {
-      apiKey: "jup-key",
-    },
     options: {
       walletAddress: JUPLEND_WALLET,
     },
@@ -711,7 +709,7 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
       supplied: new BigNumber("15"),
       borrowed: new BigNumber("0"),
       netAsset: new BigNumber("15"),
-      supplyAPY: new BigNumber("0.05"),
+      supplyAPY: new BigNumber("0.0554"),
     },
   });
   expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "USDC")).toMatchObject({
@@ -721,7 +719,7 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
       supplied: new BigNumber("0"),
       borrowed: new BigNumber("300"),
       netAsset: new BigNumber("-300"),
-      borrowAPY: new BigNumber("0.08"),
+      borrowAPY: new BigNumber("0.0513"),
     },
   });
   const juplendRisk = client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID);
@@ -746,16 +744,20 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
   });
   expect(
     requests.filter((request) => request.url.hostname === "api.jup.ag"),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
   expect(
-    requests.filter((request) => request.url.hostname === "lite-api.jup.ag"),
+    requests.filter(
+      (request) =>
+        request.url.hostname === "lite-api.jup.ag" &&
+        request.url.pathname === "/lend/v1/borrow/vaults",
+    ),
   ).toHaveLength(1);
-  expect(requests[0]?.apiKey).toBe("jup-key");
+  expect(requests.state.rpcUrls).toHaveLength(1);
 
   await iterator.return?.();
 });
 
-test("Juplend account subscribe validates api key", async () => {
+test("Juplend account subscribe does not require credentials", async () => {
   const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
     await import("../support/exchanges/juplend.ts");
   installJuplendInfra();
@@ -767,12 +769,14 @@ test("Juplend account subscribe validates api key", async () => {
     options: {
       walletAddress: JUPLEND_WALLET,
     },
-  } as RegisterAccountInput);
+  });
   await client.start();
+  await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
 
-  await expect(
-    client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID }),
-  ).rejects.toBeInstanceOf(AcexError);
+  expect(client.account.getAccountStatus(JUPLEND_ACCOUNT_ID)).toMatchObject({
+    ready: true,
+    runtimeStatus: "healthy",
+  });
 });
 
 test("Juplend account subscribe can filter one lending position", async () => {
@@ -785,7 +789,6 @@ test("Juplend account subscribe can filter one lending position", async () => {
   await client.registerAccount({
     accountId,
     venue: "juplend",
-    credentials: { apiKey: "jup-key" },
     options: {
       walletAddress: JUPLEND_WALLET,
       positionId: "101",
@@ -821,16 +824,134 @@ test("Juplend account subscribe can filter one lending position", async () => {
   });
 });
 
+test("Juplend account subscribe can direct-read one position by vaultId and positionId", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID } = await import(
+    "../support/exchanges/juplend.ts"
+  );
+  const requests = installJuplendInfra();
+  const client = createClient();
+  const accountId = `${JUPLEND_ACCOUNT_ID}-direct-101`;
+
+  await client.registerAccount({
+    accountId,
+    venue: "juplend",
+    options: {
+      vaultId: "1",
+      positionId: "101",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId });
+
+  expect(client.account.getBalance(accountId, "SOL")).toMatchObject({
+    total: new BigNumber("10"),
+  });
+  expect(client.account.getBalance(accountId, "USDC")).toMatchObject({
+    total: new BigNumber("-250"),
+  });
+  expect(requests.state.maxActivePositionRequests).toBe(0);
+  expect(requests.state.directPositionRequests).toEqual([
+    {
+      vaultId: 1,
+      nftId: 101,
+    },
+  ]);
+});
+
+test("Juplend account subscribe maps lend-read amounts on fixed 1e9 scale", async () => {
+  const { installJuplendInfra } = await import(
+    "../support/exchanges/juplend.ts"
+  );
+  const client = createClient();
+  const accountId = "juplend-jlp-jupusd";
+
+  installJuplendInfra({
+    positions: [
+      {
+        nftId: 201,
+        supply: "5660693627000000",
+        borrow: "16271447562893326",
+        dustBorrow: "844674",
+        vault: {
+          constantViews: {
+            vaultId: 58,
+            supplyToken: "JLP1111111111111111111111111111111111111111",
+            borrowToken: "JupUSD1111111111111111111111111111111111111",
+          },
+          configs: {
+            liquidationThreshold: "850",
+          },
+          exchangePricesAndRates: {
+            supplyRateVault: "0",
+            borrowRateVault: "447",
+          },
+        },
+      },
+    ],
+    vaults: [
+      {
+        id: "58",
+        supplyToken: {
+          address: "JLP1111111111111111111111111111111111111111",
+          symbol: "JLP",
+          uiSymbol: "JLP",
+          decimals: 6,
+          price: "1",
+        },
+        borrowToken: {
+          address: "JupUSD1111111111111111111111111111111111111",
+          symbol: "JupUSD",
+          uiSymbol: "JupUSD",
+          decimals: 6,
+          price: "1",
+        },
+        liquidationThreshold: "850",
+        supplyRate: "0",
+        borrowRate: "447",
+      },
+    ],
+  });
+
+  await client.registerAccount({
+    accountId,
+    venue: "juplend",
+    options: {
+      vaultId: "58",
+      positionId: "201",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId });
+
+  expect(client.account.getBalance(accountId, "JLP")).toMatchObject({
+    total: new BigNumber("5660693.627"),
+    lending: {
+      supplied: new BigNumber("5660693.627"),
+      borrowed: new BigNumber("0"),
+      netAsset: new BigNumber("5660693.627"),
+      supplyAPY: new BigNumber("0"),
+    },
+  });
+  expect(client.account.getBalance(accountId, "JupUSD")).toMatchObject({
+    total: new BigNumber("-16271447.562893326"),
+    lending: {
+      supplied: new BigNumber("0"),
+      borrowed: new BigNumber("16271447.562893326"),
+      netAsset: new BigNumber("-16271447.562893326"),
+      borrowAPY: new BigNumber("0.0447"),
+    },
+  });
+});
+
 test("Juplend account subscribe maps HTTP failures to degraded status", async () => {
   const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
     await import("../support/exchanges/juplend.ts");
-  installJuplendInfra({ failPortfolio: true });
+  installJuplendInfra({ failPositions: true });
   const client = createClient();
 
   await client.registerAccount({
     accountId: JUPLEND_ACCOUNT_ID,
     venue: "juplend",
-    credentials: { apiKey: "jup-key" },
     options: {
       walletAddress: JUPLEND_WALLET,
     },
@@ -847,7 +968,7 @@ test("Juplend account subscribe maps HTTP failures to degraded status", async ()
   });
 });
 
-test("Juplend account subscribe requires walletAddress option", async () => {
+test("Juplend account subscribe requires walletAddress or vaultId+positionId", async () => {
   const { installJuplendInfra, JUPLEND_ACCOUNT_ID } = await import(
     "../support/exchanges/juplend.ts"
   );
@@ -857,7 +978,6 @@ test("Juplend account subscribe requires walletAddress option", async () => {
   await client.registerAccount({
     accountId: JUPLEND_ACCOUNT_ID,
     venue: "juplend",
-    credentials: { apiKey: "jup-key" },
   } as RegisterAccountInput);
   await client.start();
 
@@ -886,7 +1006,6 @@ test("Juplend polling replaces snapshots when positions disappear", async () => 
   await client.registerAccount({
     accountId: JUPLEND_ACCOUNT_ID,
     venue: "juplend",
-    credentials: { apiKey: "jup-key" },
     options: { walletAddress: JUPLEND_WALLET },
   });
   await client.start();
@@ -895,7 +1014,7 @@ test("Juplend polling replaces snapshots when positions disappear", async () => 
   expect(client.account.getBalances(JUPLEND_ACCOUNT_ID)).toHaveLength(2);
   expect(client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID)).toBeDefined();
 
-  requests.state.portfolio = { elements: [] };
+  requests.state.positions = [];
 
   await waitForCondition(
     () =>
@@ -908,10 +1027,10 @@ test("Juplend polling replaces snapshots when positions disappear", async () => 
   );
 });
 
-test("Juplend polling does not overlap slow portfolio requests", async () => {
+test("Juplend polling does not overlap slow position reads", async () => {
   const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
     await import("../support/exchanges/juplend.ts");
-  const requests = installJuplendInfra({ portfolioDelayMs: 30 });
+  const requests = installJuplendInfra({ positionsDelayMs: 30 });
   const client = createClient({
     account: {
       juplend: {
@@ -923,12 +1042,216 @@ test("Juplend polling does not overlap slow portfolio requests", async () => {
   await client.registerAccount({
     accountId: JUPLEND_ACCOUNT_ID,
     venue: "juplend",
-    credentials: { apiKey: "jup-key" },
     options: { walletAddress: JUPLEND_WALLET },
   });
   await client.start();
   await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
   await Bun.sleep(90);
 
-  expect(requests.state.maxActivePortfolioRequests).toBe(1);
+  expect(requests.state.maxActivePositionRequests).toBe(1);
+});
+
+test("Juplend account subscribe forwards explicit rpcUrl to lend-read", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  const requests = installJuplendInfra();
+  const client = createClient({
+    account: {
+      juplend: {
+        rpcUrl: "https://rpc.example",
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    options: { walletAddress: JUPLEND_WALLET },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
+
+  expect(requests.state.rpcUrls).toEqual(["https://rpc.example"]);
+});
+
+test("Juplend account subscribe defaults rpcUrl from SOL_HELIUS_RPC", async () => {
+  const previousRpcUrl = process.env.SOL_HELIUS_RPC;
+  process.env.SOL_HELIUS_RPC = "https://env-rpc.example";
+
+  try {
+    const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+      await import("../support/exchanges/juplend.ts");
+    const requests = installJuplendInfra();
+    const client = createClient();
+
+    await client.registerAccount({
+      accountId: JUPLEND_ACCOUNT_ID,
+      venue: "juplend",
+      options: { walletAddress: JUPLEND_WALLET },
+    });
+    await client.start();
+    await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
+
+    expect(requests.state.rpcUrls).toEqual(["https://env-rpc.example"]);
+  } finally {
+    if (previousRpcUrl === undefined) {
+      delete process.env.SOL_HELIUS_RPC;
+    } else {
+      process.env.SOL_HELIUS_RPC = previousRpcUrl;
+    }
+  }
+});
+
+test("Juplend account subscribe falls back to lite vault metadata when Jup API fails", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  const requests = installJuplendInfra({
+    failTokenSearch: true,
+    failPrices: true,
+    vaults: [
+      {
+        id: "1",
+        supplyToken: {
+          address: "So11111111111111111111111111111111111111112",
+          symbol: "WSOL",
+          uiSymbol: "SOL",
+          decimals: 9,
+          oraclePrice: "100",
+        },
+        borrowToken: {
+          address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          symbol: "USDC",
+          uiSymbol: "USDC",
+          decimals: 6,
+          oraclePrice: "1",
+        },
+        liquidationThreshold: "850",
+        supplyRate: "554",
+        borrowRate: "513",
+      },
+    ],
+  });
+  const client = createClient({
+    account: {
+      juplend: {
+        jupApiKey: "test-key",
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: JUPLEND_ACCOUNT_ID,
+    venue: "juplend",
+    options: { walletAddress: JUPLEND_WALLET },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
+
+  expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "SOL")).toMatchObject({
+    total: new BigNumber("15"),
+  });
+  expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "USDC")).toMatchObject({
+    total: new BigNumber("-300"),
+  });
+  expect(client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID)).toMatchObject({
+    riskRatio: new BigNumber("300").dividedBy("1275"),
+    netEquity: new BigNumber("1200"),
+    riskEquity: new BigNumber("975"),
+    lending: {
+      ltv: new BigNumber("0.2"),
+      liquidationThreshold: new BigNumber("0.85"),
+      totalCollateralUSD: new BigNumber("1500"),
+      totalDebtUSD: new BigNumber("300"),
+    },
+  });
+  expect(
+    requests.filter((request) => request.url.hostname === "api.jup.ag"),
+  ).toHaveLength(2);
+  expect(
+    requests.filter(
+      (request) =>
+        request.url.hostname === "lite-api.jup.ag" &&
+        request.url.pathname === "/lend/v1/borrow/vaults",
+    ),
+  ).toHaveLength(1);
+});
+
+test("Juplend retries Jup enrichment after an earlier degraded fallback", async () => {
+  const { installJuplendInfra, JUPLEND_ACCOUNT_ID, JUPLEND_WALLET } =
+    await import("../support/exchanges/juplend.ts");
+  const degradedRequests = installJuplendInfra({
+    failTokenSearch: true,
+    failPrices: true,
+    vaults: [
+      {
+        id: "1",
+        supplyToken: {
+          address: "So11111111111111111111111111111111111111112",
+          symbol: "WSOL",
+          decimals: 9,
+          oraclePrice: "100",
+        },
+        borrowToken: {
+          address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          symbol: "USDC",
+          decimals: 6,
+          oraclePrice: "1",
+        },
+        liquidationThreshold: "850",
+        supplyRate: "554",
+        borrowRate: "513",
+      },
+    ],
+  });
+  const firstClient = createClient({
+    account: {
+      juplend: {
+        jupApiKey: "key-a",
+      },
+    },
+  });
+
+  await firstClient.registerAccount({
+    accountId: `${JUPLEND_ACCOUNT_ID}-degraded`,
+    venue: "juplend",
+    options: { walletAddress: JUPLEND_WALLET },
+  });
+  await firstClient.start();
+  await firstClient.account.subscribeAccount({
+    accountId: `${JUPLEND_ACCOUNT_ID}-degraded`,
+  });
+
+  expect(
+    degradedRequests.filter((request) => request.url.hostname === "api.jup.ag"),
+  ).toHaveLength(2);
+
+  degradedRequests.state.failTokenSearch = false;
+  degradedRequests.state.failPrices = false;
+
+  const secondClient = createClient({
+    account: {
+      juplend: {
+        jupApiKey: "key-a",
+      },
+    },
+  });
+
+  await secondClient.registerAccount({
+    accountId: `${JUPLEND_ACCOUNT_ID}-recovered`,
+    venue: "juplend",
+    options: { walletAddress: JUPLEND_WALLET },
+  });
+  await secondClient.start();
+  await secondClient.account.subscribeAccount({
+    accountId: `${JUPLEND_ACCOUNT_ID}-recovered`,
+  });
+
+  expect(
+    degradedRequests.filter((request) => request.url.hostname === "api.jup.ag"),
+  ).toHaveLength(4);
+  expect(
+    secondClient.account.getBalance(`${JUPLEND_ACCOUNT_ID}-recovered`, "SOL"),
+  ).toMatchObject({
+    asset: "SOL",
+  });
 });

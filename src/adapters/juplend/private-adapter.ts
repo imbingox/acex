@@ -18,40 +18,27 @@ import type {
   RawRiskUpdate,
   StreamHandle,
 } from "../types.ts";
+import { readJuplendPositions } from "./lend-read.ts";
 
-interface JuplendPortfolioResponse {
-  elements?: JuplendPortfolioElement[];
+interface JuplendTokenMetadata {
+  address?: string;
+  id?: string;
+  symbol?: string;
+  uiSymbol?: string;
+  decimals?: number | string;
+  price?: number | string;
+  usdPrice?: number | string;
+  oraclePrice?: number | string;
 }
 
-interface JuplendPortfolioElement {
-  data?: {
-    link?: string;
-    suppliedValue?: number | string;
-    borrowedValue?: number | string;
-    value?: number | string;
-  };
-}
-
-interface JuplendVaultResponse {
-  data?: JuplendVault[];
-}
-
-interface JuplendVault {
+interface JuplendVaultMetadata {
   id?: number | string;
   vaultId?: number | string;
-  supplyToken?: JuplendToken;
-  borrowToken?: JuplendToken;
+  supplyToken?: JuplendTokenMetadata;
+  borrowToken?: JuplendTokenMetadata;
   liquidationThreshold?: number | string;
-  loanToValue?: number | string;
   supplyRate?: number | string;
   borrowRate?: number | string;
-}
-
-interface JuplendToken {
-  symbol?: string;
-  asset?: string;
-  oraclePrice?: number | string;
-  price?: number | string;
 }
 
 interface JuplendMappedAccount {
@@ -68,88 +55,125 @@ interface BalanceAccumulator {
 }
 
 interface JuplendAccountOptions {
-  walletAddress: string;
+  walletAddress?: string;
+  vaultId?: string;
   positionId?: string;
 }
 
-const PORTFOLIO_BASE_URL = "https://api.jup.ag/portfolio/v1";
-const VAULTS_URL = "https://lite-api.jup.ag/lend/v1/borrow/vaults";
-const DEFAULT_POLL_INTERVAL_MS = 30_000;
-const VAULT_CACHE_TTL_MS = 60 * 60 * 1_000;
-const LINK_PATTERN = /\/borrow\/([^/]+)\/nfts\/([^/?#]+)/;
-
-let vaultCache:
-  | {
-      loadedAt: number;
-      vaults: Map<string, JuplendVault>;
-    }
-  | undefined;
-let vaultCachePromise: Promise<Map<string, JuplendVault>> | undefined;
-
-function requireApiKey(credentials: AccountCredentials): string {
-  if (!credentials.apiKey) {
-    throw new Error("credentials.apiKey required");
-  }
-
-  return credentials.apiKey;
+interface JuplendPriceApiEntry {
+  usdPrice?: number | string;
+  price?: number | string;
+  decimals?: number | string;
 }
+
+interface JuplendTokenSearchEntry {
+  id?: string;
+  address?: string;
+  symbol?: string;
+  name?: string;
+  decimals?: number | string;
+  usdPrice?: number | string;
+}
+
+const JUP_API_BASE_URL = "https://api.jup.ag";
+const JUP_LITE_API_BASE_URL = "https://lite-api.jup.ag";
+const TOKENS_SEARCH_PATH = "/tokens/v2/search";
+const PRICE_V3_PATH = "/price/v3";
+const LEND_VAULTS_PATH = "/lend/v1/borrow/vaults";
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
+// lend-read returns exchange-price-adjusted amounts on a fixed 1e9 scale,
+// not mint-atomic token amounts.
+const POSITION_AMOUNT_SCALE_DECIMALS = 9;
+const VAULT_CACHE_TTL_MS = 60 * 60 * 1_000;
+
+interface JuplendVaultEnrichmentCacheEntry {
+  loadedAt: number;
+  vaults: Map<string, JuplendVaultMetadata>;
+  enriched: boolean;
+}
+
+let enrichmentCache = new Map<string, JuplendVaultEnrichmentCacheEntry>();
+let enrichmentCachePromise = new Map<
+  string,
+  Promise<Map<string, JuplendVaultMetadata>>
+>();
 
 function getJuplendAccountOptions(
   accountOptions?: Record<string, unknown>,
 ): JuplendAccountOptions {
   const walletAddress = accountOptions?.walletAddress;
-  if (typeof walletAddress !== "string" || !walletAddress) {
-    throw new Error("options.walletAddress required");
+  if (walletAddress !== undefined && typeof walletAddress !== "string") {
+    throw new Error("options.walletAddress must be a string");
   }
 
-  const positionId = accountOptions.positionId;
+  const vaultId = accountOptions?.vaultId;
+  if (vaultId !== undefined && typeof vaultId !== "string") {
+    throw new Error("options.vaultId must be a string");
+  }
+  const positionId = accountOptions?.positionId;
   if (positionId !== undefined && typeof positionId !== "string") {
     throw new Error("options.positionId must be a string");
   }
 
+  const hasWalletAddress = Boolean(walletAddress);
+  const hasDirectPosition = Boolean(vaultId && positionId);
+  if (!hasWalletAddress && !hasDirectPosition) {
+    throw new Error(
+      "options.walletAddress or options.vaultId + options.positionId required",
+    );
+  }
+
   return {
-    walletAddress,
+    walletAddress: walletAddress || undefined,
+    vaultId: vaultId || undefined,
     positionId: positionId || undefined,
   };
 }
 
-function toBigNumber(value: number | string | undefined): BigNumber {
-  return value === undefined ? new BigNumber(0) : new BigNumber(value);
+function toBigNumber(
+  value: BigNumber.Value | undefined,
+  fallback = new BigNumber(0),
+): BigNumber {
+  return value === undefined ? fallback : new BigNumber(value);
 }
 
-function normalizeThreshold(value: number | string | undefined): BigNumber {
+function normalizeThreshold(value: BigNumber.Value | undefined): BigNumber {
   const threshold = toBigNumber(value);
   return threshold.gt(1) ? threshold.dividedBy(1000) : threshold;
 }
 
-function tokenAsset(token: JuplendToken | undefined): string | undefined {
-  return token?.symbol ?? token?.asset;
+function normalizeRate(
+  value: BigNumber.Value | undefined,
+): BigNumber | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const rate = new BigNumber(value);
+  if (!rate.isFinite()) {
+    return undefined;
+  }
+
+  return rate.gt(1) ? rate.dividedBy(10_000) : rate;
 }
 
-function tokenPrice(token: JuplendToken | undefined): BigNumber | undefined {
-  const price = toBigNumber(token?.oraclePrice ?? token?.price);
+function tokenAsset(
+  token: JuplendTokenMetadata | undefined,
+): string | undefined {
+  return token?.uiSymbol ?? token?.symbol;
+}
+
+function tokenPrice(
+  token: JuplendTokenMetadata | undefined,
+): BigNumber | undefined {
+  const price = toBigNumber(
+    token?.usdPrice ?? token?.price ?? token?.oraclePrice,
+  );
   return price.gt(0) ? price : undefined;
 }
 
-function extractPositionLink(
-  link: string | undefined,
-): { vaultId: string; positionId: string } | undefined {
-  if (!link) {
-    return undefined;
-  }
-
-  const match = LINK_PATTERN.exec(link);
-  if (!match?.[1] || !match[2]) {
-    return undefined;
-  }
-
-  return {
-    vaultId: match[1],
-    positionId: match[2],
-  };
-}
-
-function getVaultId(vault: JuplendVault): string | undefined {
+function getVaultId(vault: JuplendVaultMetadata): string | undefined {
   const id = vault.id ?? vault.vaultId;
   return id === undefined ? undefined : `${id}`;
 }
@@ -237,119 +261,361 @@ function buildRisk(input: {
 }
 
 async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    throw new Error(`Juplend HTTP ${response.status}: ${response.statusText}`);
+  const controller = new AbortController();
+  const upstreamSignal = init?.signal;
+  let timedOut = false;
+  const onUpstreamAbort = () => {
+    controller.abort();
+  };
+
+  if (upstreamSignal?.aborted) {
+    controller.abort();
+  } else if (upstreamSignal) {
+    upstreamSignal.addEventListener("abort", onUpstreamAbort, { once: true });
   }
 
-  return (await response.json()) as T;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, DEFAULT_HTTP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Juplend HTTP ${response.status}: ${response.statusText}`,
+      );
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(
+        timedOut
+          ? `Juplend fetch timeout after ${DEFAULT_HTTP_TIMEOUT_MS}ms`
+          : "Juplend fetch aborted",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (upstreamSignal) {
+      upstreamSignal.removeEventListener("abort", onUpstreamAbort);
+    }
+  }
 }
 
-async function loadVaults(now: number): Promise<Map<string, JuplendVault>> {
-  if (vaultCache && now - vaultCache.loadedAt < VAULT_CACHE_TTL_MS) {
-    return vaultCache.vaults;
+function getJupApiKey(explicitApiKey?: string): string | undefined {
+  return explicitApiKey || process.env.JUP_API || undefined;
+}
+
+function getEnrichmentCacheKey(apiKey?: string): string {
+  return apiKey || "__no_jup_api_key__";
+}
+
+function buildApiHeaders(apiKey?: string): Record<string, string> | undefined {
+  return apiKey ? { "x-api-key": apiKey } : undefined;
+}
+
+function withBaseUrl(baseUrl: string, path: string): string {
+  return new URL(path, `${baseUrl}/`).toString();
+}
+
+async function loadVaultMetadataFromLiteApi(
+  apiKey?: string,
+): Promise<Map<string, JuplendVaultMetadata>> {
+  const response = await readJson<
+    JuplendVaultMetadata[] | { data?: JuplendVaultMetadata[] }
+  >(withBaseUrl(JUP_LITE_API_BASE_URL, LEND_VAULTS_PATH), {
+    headers: buildApiHeaders(apiKey),
+  });
+  const rawVaults = Array.isArray(response) ? response : response.data;
+  const vaults = new Map<string, JuplendVaultMetadata>();
+
+  for (const vault of rawVaults ?? []) {
+    const id = getVaultId(vault);
+    if (id) {
+      vaults.set(id, vault);
+    }
   }
 
-  if (!vaultCachePromise) {
-    vaultCachePromise = readJson<JuplendVaultResponse | JuplendVault[]>(
-      VAULTS_URL,
-    )
-      .then((response) => {
-        const rawVaults = Array.isArray(response) ? response : response.data;
-        const vaults = new Map<string, JuplendVault>();
-        for (const vault of rawVaults ?? []) {
-          const id = getVaultId(vault);
-          if (id) {
-            vaults.set(id, vault);
-          }
-        }
-        vaultCache = { loadedAt: now, vaults };
-        return vaults;
-      })
-      .finally(() => {
-        vaultCachePromise = undefined;
-      });
+  return vaults;
+}
+
+async function loadTokenSearchMap(
+  mintAddresses: string[],
+  apiKey?: string,
+): Promise<Map<string, JuplendTokenMetadata>> {
+  if (mintAddresses.length === 0) {
+    return new Map();
+  }
+
+  const query = encodeURIComponent(mintAddresses.join(","));
+  const response = await readJson<JuplendTokenSearchEntry[]>(
+    `${withBaseUrl(JUP_API_BASE_URL, TOKENS_SEARCH_PATH)}?query=${query}`,
+    {
+      headers: buildApiHeaders(apiKey),
+    },
+  );
+
+  const tokens = new Map<string, JuplendTokenMetadata>();
+  for (const token of response ?? []) {
+    const mint = token.id ?? token.address;
+    if (!mint) {
+      continue;
+    }
+
+    tokens.set(mint, {
+      address: mint,
+      id: mint,
+      symbol: token.symbol,
+      uiSymbol: token.symbol,
+      decimals: token.decimals,
+      usdPrice: token.usdPrice,
+      oraclePrice: token.usdPrice,
+    });
+  }
+
+  return tokens;
+}
+
+async function loadPriceMap(
+  mintAddresses: string[],
+  apiKey?: string,
+): Promise<Map<string, JuplendPriceApiEntry>> {
+  if (mintAddresses.length === 0) {
+    return new Map();
+  }
+
+  const ids = encodeURIComponent(mintAddresses.join(","));
+  const response = await readJson<Record<string, JuplendPriceApiEntry>>(
+    `${withBaseUrl(JUP_API_BASE_URL, PRICE_V3_PATH)}?ids=${ids}`,
+    {
+      headers: buildApiHeaders(apiKey),
+    },
+  );
+
+  return new Map(Object.entries(response ?? {}));
+}
+
+function mergeTokenMetadata(
+  baseToken: JuplendTokenMetadata | undefined,
+  searchedToken: JuplendTokenMetadata | undefined,
+  pricedToken: JuplendPriceApiEntry | undefined,
+): JuplendTokenMetadata | undefined {
+  if (!baseToken && !searchedToken && !pricedToken) {
+    return undefined;
+  }
+
+  return {
+    ...baseToken,
+    ...searchedToken,
+    price:
+      pricedToken?.usdPrice ??
+      pricedToken?.price ??
+      searchedToken?.usdPrice ??
+      baseToken?.usdPrice ??
+      baseToken?.price ??
+      baseToken?.oraclePrice,
+    usdPrice:
+      pricedToken?.usdPrice ??
+      pricedToken?.price ??
+      searchedToken?.usdPrice ??
+      baseToken?.usdPrice ??
+      baseToken?.price ??
+      baseToken?.oraclePrice,
+    oraclePrice: baseToken?.oraclePrice,
+    decimals:
+      searchedToken?.decimals ?? pricedToken?.decimals ?? baseToken?.decimals,
+  };
+}
+
+async function enrichVaultsWithJupApi(input: {
+  apiKey?: string;
+  baseVaults: Map<string, JuplendVaultMetadata>;
+}): Promise<Map<string, JuplendVaultMetadata>> {
+  const mintAddresses = new Set<string>();
+  for (const vault of input.baseVaults.values()) {
+    const supplyMint = vault.supplyToken?.address;
+    const borrowMint = vault.borrowToken?.address;
+    if (supplyMint) {
+      mintAddresses.add(supplyMint);
+    }
+    if (borrowMint) {
+      mintAddresses.add(borrowMint);
+    }
+  }
+
+  const [tokenMap, priceMap] = await Promise.all([
+    loadTokenSearchMap([...mintAddresses], input.apiKey),
+    loadPriceMap([...mintAddresses], input.apiKey),
+  ]);
+
+  const enriched = new Map<string, JuplendVaultMetadata>();
+  for (const [vaultId, vault] of input.baseVaults.entries()) {
+    const supplyMint = vault.supplyToken?.address;
+    const borrowMint = vault.borrowToken?.address;
+
+    enriched.set(vaultId, {
+      ...vault,
+      supplyToken: mergeTokenMetadata(
+        vault.supplyToken,
+        supplyMint ? tokenMap.get(supplyMint) : undefined,
+        supplyMint ? priceMap.get(supplyMint) : undefined,
+      ),
+      borrowToken: mergeTokenMetadata(
+        vault.borrowToken,
+        borrowMint ? tokenMap.get(borrowMint) : undefined,
+        borrowMint ? priceMap.get(borrowMint) : undefined,
+      ),
+    });
+  }
+
+  return enriched;
+}
+
+async function loadVaults(
+  now: number,
+  apiKey?: string,
+): Promise<Map<string, JuplendVaultMetadata>> {
+  const cacheKey = getEnrichmentCacheKey(apiKey);
+  const cached = enrichmentCache.get(cacheKey);
+  const cacheFresh =
+    cached !== undefined && now - cached.loadedAt < VAULT_CACHE_TTL_MS;
+  if (cacheFresh && (cached.enriched || !apiKey)) {
+    return cached.vaults;
+  }
+
+  const inflight = enrichmentCachePromise.get(cacheKey);
+  if (!inflight) {
+    const nextPromise = (async () => {
+      const baseVaults = await loadVaultMetadataFromLiteApi(apiKey);
+      if (!apiKey) {
+        enrichmentCache.set(cacheKey, {
+          loadedAt: now,
+          vaults: baseVaults,
+          enriched: false,
+        });
+        return baseVaults;
+      }
+
+      try {
+        const enrichedVaults = await enrichVaultsWithJupApi({
+          apiKey,
+          baseVaults,
+        });
+        enrichmentCache.set(cacheKey, {
+          loadedAt: now,
+          vaults: enrichedVaults,
+          enriched: true,
+        });
+        return enrichedVaults;
+      } catch {
+        return baseVaults;
+      }
+    })().finally(() => {
+      enrichmentCachePromise.delete(cacheKey);
+    });
+
+    enrichmentCachePromise.set(cacheKey, nextPromise);
   }
 
   try {
-    return await vaultCachePromise;
+    return await (enrichmentCachePromise.get(cacheKey) as Promise<
+      Map<string, JuplendVaultMetadata>
+    >);
   } catch (error) {
-    if (vaultCache) {
-      return vaultCache.vaults;
+    const fallbackCached = enrichmentCache.get(cacheKey);
+    if (fallbackCached) {
+      return fallbackCached.vaults;
     }
     throw error;
   }
 }
 
-async function loadPortfolio(
-  walletAddress: string,
-  apiKey: string,
-): Promise<JuplendPortfolioResponse> {
-  return readJson<JuplendPortfolioResponse>(
-    `${PORTFOLIO_BASE_URL}/positions/${walletAddress}?platforms=jupiter-exchange`,
-    {
-      headers: {
-        "X-API-KEY": apiKey,
-      },
-    },
-  );
+function dividePositionAmount(value: BigNumber): BigNumber {
+  return value.dividedBy(new BigNumber(10).pow(POSITION_AMOUNT_SCALE_DECIMALS));
 }
 
-function mapAccount(
-  portfolio: JuplendPortfolioResponse,
-  vaults: Map<string, JuplendVault>,
+async function mapAccount(
+  accountOptions: JuplendAccountOptions,
   receivedAt: number,
-  positionId?: string,
-): JuplendMappedAccount {
+  rpcUrl: string | undefined,
+  jupApiKey: string | undefined,
+): Promise<JuplendMappedAccount> {
+  const [vaults, positionResult] = await Promise.all([
+    loadVaults(receivedAt, jupApiKey),
+    readJuplendPositions({
+      walletAddress: accountOptions.walletAddress,
+      vaultId: accountOptions.vaultId,
+      positionId: accountOptions.positionId,
+      explicitRpcUrl: rpcUrl,
+    }),
+  ]);
+
   const balances = new Map<string, BalanceAccumulator>();
   let totalCollateralUsd = new BigNumber(0);
   let totalDebtUsd = new BigNumber(0);
   let weightedLiquidationValueUsd = new BigNumber(0);
 
-  for (const element of portfolio.elements ?? []) {
-    const positionLink = extractPositionLink(element.data?.link);
-    if (!positionLink) {
+  for (const position of positionResult.positions) {
+    if (
+      accountOptions.walletAddress &&
+      accountOptions.positionId &&
+      position.nftId !== accountOptions.positionId
+    ) {
       continue;
     }
 
-    if (positionId && positionLink.positionId !== positionId) {
-      continue;
-    }
+    const vault = vaults.get(position.vaultId);
+    const suppliedQuantity = dividePositionAmount(
+      toBigNumber(position.supplyAmount),
+    );
+    const borrowedQuantity = dividePositionAmount(
+      toBigNumber(position.borrowAmount),
+    );
 
-    const vault = vaults.get(positionLink.vaultId);
-    if (!vault) {
-      continue;
-    }
-
-    const suppliedValue = toBigNumber(element.data?.suppliedValue);
-    const borrowedValue = toBigNumber(element.data?.borrowedValue);
     const liquidationThreshold = normalizeThreshold(
-      vault.liquidationThreshold ?? vault.loanToValue,
-    );
-    totalCollateralUsd = totalCollateralUsd.plus(suppliedValue);
-    totalDebtUsd = totalDebtUsd.plus(borrowedValue);
-    weightedLiquidationValueUsd = weightedLiquidationValueUsd.plus(
-      suppliedValue.multipliedBy(liquidationThreshold),
+      position.liquidationThresholdRaw ?? vault?.liquidationThreshold,
     );
 
-    const supplyAsset = tokenAsset(vault.supplyToken);
-    const supplyPrice = tokenPrice(vault.supplyToken);
-    if (supplyAsset && supplyPrice) {
+    const supplyAsset =
+      tokenAsset(vault?.supplyToken) ?? vault?.supplyToken?.address;
+    if (supplyAsset) {
       const accumulator = setAccumulator(balances, supplyAsset);
-      accumulator.supplied = accumulator.supplied.plus(
-        suppliedValue.dividedBy(supplyPrice),
-      );
-      accumulator.supplyAPY = toBigNumber(vault.supplyRate);
+      accumulator.supplied = accumulator.supplied.plus(suppliedQuantity);
+      accumulator.supplyAPY =
+        normalizeRate(vault?.supplyRate ?? position.supplyRateRaw) ??
+        accumulator.supplyAPY;
     }
 
-    const borrowAsset = tokenAsset(vault.borrowToken);
-    const borrowPrice = tokenPrice(vault.borrowToken);
-    if (borrowAsset && borrowPrice) {
+    const borrowAsset =
+      tokenAsset(vault?.borrowToken) ?? vault?.borrowToken?.address;
+    if (borrowAsset) {
       const accumulator = setAccumulator(balances, borrowAsset);
-      accumulator.borrowed = accumulator.borrowed.plus(
-        borrowedValue.dividedBy(borrowPrice),
+      accumulator.borrowed = accumulator.borrowed.plus(borrowedQuantity);
+      accumulator.borrowAPY =
+        normalizeRate(vault?.borrowRate ?? position.borrowRateRaw) ??
+        accumulator.borrowAPY;
+    }
+
+    const supplyPrice = tokenPrice(vault?.supplyToken);
+    if (supplyPrice) {
+      const collateralUsd = suppliedQuantity.multipliedBy(supplyPrice);
+      totalCollateralUsd = totalCollateralUsd.plus(collateralUsd);
+      weightedLiquidationValueUsd = weightedLiquidationValueUsd.plus(
+        collateralUsd.multipliedBy(liquidationThreshold),
       );
-      accumulator.borrowAPY = toBigNumber(vault.borrowRate);
+    }
+
+    const borrowPrice = tokenPrice(vault?.borrowToken);
+    if (borrowPrice) {
+      totalDebtUsd = totalDebtUsd.plus(
+        borrowedQuantity.multipliedBy(borrowPrice),
+      );
     }
   }
 
@@ -379,7 +645,7 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
     positions: "unsupported",
     risk: "supported",
     lending: "supported",
-    credentialsRequired: true,
+    credentialsRequired: false,
   };
   readonly orderCapabilities: VenueOrderCapabilities = {
     supported: false,
@@ -397,22 +663,22 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
     reason: "read_only",
   };
 
+  constructor(
+    private readonly rpcUrl?: string,
+    private readonly jupApiKey?: string,
+  ) {}
+
   async bootstrapAccount(
-    credentials: AccountCredentials,
+    _credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawAccountBootstrap> {
     const receivedAt = Date.now();
-    const apiKey = requireApiKey(credentials);
     const juplendOptions = getJuplendAccountOptions(accountOptions);
-    const [portfolio, vaults] = await Promise.all([
-      loadPortfolio(juplendOptions.walletAddress, apiKey),
-      loadVaults(receivedAt),
-    ]);
-    const mapped = mapAccount(
-      portfolio,
-      vaults,
+    const mapped = await mapAccount(
+      juplendOptions,
       receivedAt,
-      juplendOptions.positionId,
+      this.rpcUrl,
+      getJupApiKey(this.jupApiKey),
     );
 
     return {
@@ -477,6 +743,7 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
         if (closed) {
           return;
         }
+
         callbacks.onAccountSnapshot(bootstrap);
       } catch (error) {
         callbacks.onError(
@@ -513,6 +780,9 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
 }
 
 export function resetJuplendVaultCacheForTests(): void {
-  vaultCache = undefined;
-  vaultCachePromise = undefined;
+  enrichmentCache = new Map<string, JuplendVaultEnrichmentCacheEntry>();
+  enrichmentCachePromise = new Map<
+    string,
+    Promise<Map<string, JuplendVaultMetadata>>
+  >();
 }

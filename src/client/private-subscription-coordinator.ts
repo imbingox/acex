@@ -467,7 +467,7 @@ export class PrivateSubscriptionCoordinator {
     account: RegisteredAccountRecord,
   ): Promise<void> {
     const credentials = account.credentials;
-    if (!credentials) {
+    if (!credentials && record.venue !== "juplend") {
       throw new AcexError(
         "CREDENTIALS_MISSING",
         `Account credentials are required for private subscriptions: ${account.accountId}`,
@@ -476,7 +476,7 @@ export class PrivateSubscriptionCoordinator {
 
     const adapter = this.getAdapter(record.venue);
     const stream = adapter.createPrivateStream(
-      credentials,
+      credentials ?? {},
       {
         onAccountSnapshot: (snapshot) => {
           if (!record.accountSubscribed) {

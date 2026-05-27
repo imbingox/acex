@@ -583,3 +583,24 @@ test("order public status stream and unsubscribe expose stopped semantics", asyn
 
   await statusIterator.return?.();
 });
+
+test("Juplend order subscriptions are rejected as unsupported", async () => {
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "jup-loop-a",
+    venue: "juplend",
+    options: {
+      walletAddress: "wallet",
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.order.subscribeOrders({
+      accountId: "jup-loop-a",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
+});

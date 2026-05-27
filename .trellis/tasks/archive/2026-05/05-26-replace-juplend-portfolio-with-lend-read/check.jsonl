@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"验证 backend 变更是否落在既有层次与目录约束内"}
+{"file":".trellis/spec/backend/adapter-contract.md","reason":"验证 Juplend adapter 的 bootstrap、polling、错误传播与只读能力保持契约"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"验证 public types/runtime options 变更未破坏类型边界"}
+{"file":".trellis/spec/backend/venue-lending.md","reason":"验证 Juplend lending contract、risk 语义、过滤与测试覆盖"}

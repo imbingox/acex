@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"backend 结构与修改范围总索引，涉及 adapter、types、docs、tests 的统一约束"}
+{"file":".trellis/spec/backend/adapter-contract.md","reason":"Juplend private adapter 将改数据源与 bootstrap/polling 映射，必须符合 adapter contract"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"需要调整 Juplend 注册类型与 runtime 配置类型，保持 public type contract 稳定"}
+{"file":".trellis/spec/backend/venue-lending.md","reason":"Juplend lending account 的注册参数、risk/balance 语义与 polling contract 都在这里"}

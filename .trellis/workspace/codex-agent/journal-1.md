@@ -473,3 +473,38 @@ Added top-level venue capability queries, moved capability truth closer to adapt
 ### Next Steps
 
 - None - task complete
+
+
+## Session 14: 完成 Juplend lend-read 替换与收尾
+
+**Date**: 2026-05-27
+**Task**: 完成 Juplend lend-read 替换与收尾
+**Branch**: `dev`
+
+### Summary
+
+用 @jup-ag/lend-read 替换 Juplend portfolio hack，补齐 wallet/direct read、RPC/Jup API 配置、风险与数量映射、CI/review 修复，以及 changeset 文案更新。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e47874a` | (see git log) |
+| `99fb840` | (see git log) |
+| `f997750` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

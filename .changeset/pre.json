@@ -1,0 +1,8 @@
+{
+  "mode": "pre",
+  "tag": "beta",
+  "initialVersions": {
+    "@imbingox/acex": "0.3.0"
+  },
+  "changesets": []
+}

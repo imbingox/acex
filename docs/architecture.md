@@ -112,7 +112,7 @@ Layer 0  基础设施       src/internal/{async-event-bus,managed-websocket,subs
           consumer.onPrivateAccountBootstrap (AccountManagerImpl)
             │
             └── Binance: scheduleAccountRefreshPoll → refreshAccount(/account + /um/positionRisk)
-            ├── 写入 record.balances/positions/risk（转 BigNumber）
+            ├── 写入 record.balances/positions/risk（转 canonical decimal string）
             ├── accountBus.publish(AccountSnapshotReplacedEvent)
             └── status.ready=true, runtimeStatus='healthy'
 ```
@@ -142,7 +142,7 @@ Layer 0  基础设施       src/internal/{async-event-bus,managed-websocket,subs
     OrderManagerImpl.applyCommandResult
       ├── 本地 record.orders 插入 / 更新 snapshot
       ├── orderBus.publish(OrderUpdatedEvent)
-      └── return OrderSnapshot（转 BigNumber）
+      └── return OrderSnapshot（转 canonical decimal string）
 ```
 
 后续 `events.updates()` 继续推送 `order.updated` / `order.filled` / `order.canceled`，源头是 private WS 的 `ORDER_TRADE_UPDATE`。命令 resolve 与 WS 事件两条路径都会写本地 cache，manager 做幂等合并。

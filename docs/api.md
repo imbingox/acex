@@ -51,13 +51,13 @@ const book = client.market.getL1Book({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
-console.log(`bid=${book?.bidPrice.toFixed()} ask=${book?.askPrice.toFixed()}`);
+console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
 
 for await (const event of client.market.events.l1BookUpdates({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 })) {
-  console.log(event.snapshot.bidPrice.toFixed());
+  console.log(event.snapshot.bidPrice);
   break;
 }
 
@@ -114,8 +114,8 @@ await client.account.subscribeAccount({ accountId: "jup-loop-a" });
 const binanceRisk = client.account.getRiskSnapshot("main-binance");
 const juplendRisk = client.account.getRiskSnapshot("jup-loop-a");
 
-console.log(binanceRisk?.riskRatio?.toFixed());
-console.log(juplendRisk?.riskRatio?.toFixed());
+console.log(binanceRisk?.riskRatio);
+console.log(juplendRisk?.riskRatio);
 ```
 
 需要账户或订单能力时，在 `start()` 前后任意时刻 `registerAccount()`：
@@ -182,19 +182,19 @@ await client.market.subscribeL1Book({ venue, symbol });
 
 退订后 `activity` 变为 `"inactive"`，但最后一份快照仍可读——不要把它当实时值。
 
-### 3.5 BigNumber 约定
+### 3.5 Decimal string 约定
 
-输出侧的价格、数量、金额统一是 `BigNumber`（来自 [bignumber.js](https://github.com/MikeMcl/bignumber.js)，SDK 已 re-export）：
+输出侧的价格、数量、金额统一是 canonical 十进制 string：无损、无科学计数法、不补尾零。SDK 仍 re-export `BigNumber`（来自 [bignumber.js](https://github.com/MikeMcl/bignumber.js)）作为可选工具；需要运算时由调用方显式解析：
 
 ```ts
 import { BigNumber } from "@imbingox/acex";
 
 const book = client.market.getL1Book({ venue, symbol });
-const spread = book!.askPrice.minus(book!.bidPrice); // BigNumber
+const spread = new BigNumber(book!.askPrice).minus(new BigNumber(book!.bidPrice));
 console.log(spread.toFixed());
 ```
 
-**输入侧不对称**：`createOrder()` 的 `price` / `amount` 仍接受 decimal string。这是为了让调用方直接从交易所精度（`MarketDefinition.priceStep` / `amountStep`）做字符串格式化，不必先转 BigNumber 再转字符串。
+不要用 `parseFloat()` 解析输出字段，否则会退回 JS 浮点精度。输入侧保持宽进严出：`createOrder()` 的 `price` / `amount` 是 decimal string，`normalizeOrderInput()` 的 `DecimalInput` 仍接受 string / number / `BigNumber`，但公共输出一律是 canonical decimal string。
 
 ## 4. Client 生命周期
 
@@ -378,7 +378,7 @@ const allBtcPerp = client.market.getMarkets("BTC/USDT:USDT");
 
 `getMarkets(symbol)` 严格按完整统一 symbol 匹配。
 
-`MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 `BigNumber`。
+`MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 canonical decimal string；需要运算时用 `new BigNumber(field)` 自行解析。
 
 归一化下单价格和数量：
 
@@ -459,7 +459,7 @@ const book = client.market.getL1Book({
 });
 
 if (book) {
-  const spread = book.askPrice.minus(book.bidPrice);
+  const spread = new BigNumber(book.askPrice).minus(new BigNumber(book.bidPrice));
   console.log(`spread=${spread.toFixed()}`);
 }
 ```
@@ -471,7 +471,7 @@ for await (const event of client.market.events.l1BookUpdates({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 })) {
-  console.log(event.snapshot.bidPrice.toFixed());
+  console.log(event.snapshot.bidPrice);
 }
 ```
 
@@ -529,9 +529,9 @@ const funding = client.market.getFundingRate({
 });
 
 if (funding) {
-  console.log(funding.fundingRate.toFixed());
-  console.log(funding.markPrice?.toFixed());
-  console.log(funding.indexPrice?.toFixed());
+  console.log(funding.fundingRate);
+  console.log(funding.markPrice);
+  console.log(funding.indexPrice);
   console.log(funding.nextFundingTime);
   console.log(funding.status.freshness);
 }
@@ -544,7 +544,7 @@ for await (const event of client.market.events.fundingRateUpdates({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 })) {
-  console.log(event.snapshot.fundingRate.toFixed());
+  console.log(event.snapshot.fundingRate);
 }
 ```
 
@@ -638,7 +638,7 @@ const btcPosition = client.account.getPosition({
 const risk = client.account.getRiskSnapshot("main-binance");
 ```
 
-所有数量字段（`free` / `used` / `total` / `size` / `entryPrice` / `netEquity` / `riskEquity` / ...）都是 `BigNumber`。
+所有数量字段（`free` / `used` / `total` / `size` / `entryPrice` / `netEquity` / `riskEquity` / ...）都是 canonical decimal string；需要运算时用 `new BigNumber(field)` 自行解析。
 
 `RiskSnapshot.netEquity` 表示不含风控折算的净资产价值；`riskEquity` 表示抵押系数或清算阈值折算后的风控净权益。Binance 使用 `actualEquity` / `accountEquity` 映射这两个字段；Juplend 使用 `totalCollateralUsd - totalDebtUsd` / `Σ(suppliedValue × liquidationThreshold) - totalDebtUsd`。
 
@@ -652,13 +652,13 @@ for await (const event of client.account.events.updates({
 })) {
   switch (event.type) {
     case "balance.updated":
-      console.log(event.asset, event.snapshot.free.toFixed());
+      console.log(event.asset, event.snapshot.free);
       break;
     case "position.updated":
-      console.log(event.symbol, event.snapshot.size.toFixed());
+      console.log(event.symbol, event.snapshot.size);
       break;
     case "risk.updated":
-      console.log(event.snapshot.riskRatio?.toFixed());
+      console.log(event.snapshot.riskRatio);
       break;
     case "account.snapshot_replaced":
       // 私有链路重连/重对账后的全量替换
@@ -801,10 +801,10 @@ for await (const event of client.order.events.updates({
 })) {
   switch (event.type) {
     case "order.updated":
-      console.log("更新", event.snapshot.status, event.snapshot.filled.toFixed());
+      console.log("更新", event.snapshot.status, event.snapshot.filled);
       break;
     case "order.filled":
-      console.log("全部成交", event.snapshot.avgFillPrice?.toFixed());
+      console.log("全部成交", event.snapshot.avgFillPrice);
       break;
     case "order.canceled":
       console.log("已撤单");
@@ -1100,13 +1100,13 @@ interface MarketDefinition {
   contract: boolean;
   linear?: boolean;
   inverse?: boolean;
-  contractSize?: BigNumber;
+  contractSize?: string;
   pricePrecision: number;
   amountPrecision: number;
-  priceStep: BigNumber;
-  amountStep: BigNumber;
-  minAmount?: BigNumber;
-  minNotional?: BigNumber;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
   expiry?: number;
   raw: Record<string, unknown>;
 }
@@ -1155,10 +1155,10 @@ interface MarketEventFilter {
 interface L1Book {
   venue: Venue;
   symbol: string;
-  bidPrice: BigNumber;
-  bidSize: BigNumber;
-  askPrice: BigNumber;
-  askSize: BigNumber;
+  bidPrice: string;
+  bidSize: string;
+  askPrice: string;
+  askSize: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -1169,10 +1169,10 @@ interface L1Book {
 interface FundingRateSnapshot {
   venue: Venue;
   symbol: string;
-  fundingRate: BigNumber;
+  fundingRate: string;
   nextFundingTime?: number;
-  markPrice?: BigNumber;
-  indexPrice?: BigNumber;
+  markPrice?: string;
+  indexPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -1210,9 +1210,9 @@ interface BalanceSnapshot {
   accountId: string;
   venue: Venue;
   asset: string;
-  free: BigNumber;
-  used: BigNumber;
-  total: BigNumber;
+  free: string;
+  used: string;
+  total: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -1221,12 +1221,12 @@ interface BalanceSnapshot {
 }
 
 interface LendingBalanceFacet {
-  supplied: BigNumber;
-  borrowed: BigNumber;
-  interest: BigNumber;
-  netAsset: BigNumber;
-  supplyAPY?: BigNumber;
-  borrowAPY?: BigNumber;
+  supplied: string;
+  borrowed: string;
+  interest: string;
+  netAsset: string;
+  supplyAPY?: string;
+  borrowAPY?: string;
 }
 
 interface PositionSnapshot {
@@ -1234,12 +1234,12 @@ interface PositionSnapshot {
   venue: Venue;
   symbol: string;
   side: PositionSide;
-  size: BigNumber;
-  entryPrice?: BigNumber;
-  markPrice?: BigNumber;
-  unrealizedPnl?: BigNumber;
-  leverage?: BigNumber;
-  liquidationPrice?: BigNumber;
+  size: string;
+  entryPrice?: string;
+  markPrice?: string;
+  unrealizedPnl?: string;
+  leverage?: string;
+  liquidationPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -1249,12 +1249,12 @@ interface PositionSnapshot {
 interface RiskSnapshot {
   accountId: string;
   venue: Venue;
-  netEquity?: BigNumber;
-  riskEquity?: BigNumber;
-  riskRatio?: BigNumber;
-  riskLeverage?: BigNumber;
-  initialMargin?: BigNumber;
-  maintenanceMargin?: BigNumber;
+  netEquity?: string;
+  riskEquity?: string;
+  riskRatio?: string;
+  riskLeverage?: string;
+  initialMargin?: string;
+  maintenanceMargin?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -1263,12 +1263,12 @@ interface RiskSnapshot {
 }
 
 interface LendingRiskFacet {
-  marginLevel?: BigNumber;
-  healthFactor?: BigNumber;
-  ltv?: BigNumber;
-  liquidationThreshold?: BigNumber;
-  totalCollateralUSD?: BigNumber;
-  totalDebtUSD?: BigNumber;
+  marginLevel?: string;
+  healthFactor?: string;
+  ltv?: string;
+  liquidationThreshold?: string;
+  totalCollateralUSD?: string;
+  totalDebtUSD?: string;
 }
 
 interface AccountSnapshot {
@@ -1350,14 +1350,14 @@ interface OrderSnapshot {
   side: OrderSide;
   type: string;              // 交易所原始 type 字符串
   status: OrderStatus;
-  price?: BigNumber;
-  triggerPrice?: BigNumber;
-  amount: BigNumber;
-  filled: BigNumber;
-  remaining?: BigNumber;
+  price?: string;
+  triggerPrice?: string;
+  amount: string;
+  filled: string;
+  remaining?: string;
   reduceOnly?: boolean;
   positionSide?: PositionSide;
-  avgFillPrice?: BigNumber;
+  avgFillPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;

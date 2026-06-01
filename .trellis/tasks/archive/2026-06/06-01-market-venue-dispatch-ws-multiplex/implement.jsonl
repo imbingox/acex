@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"backend 5 层结构与各层职责总索引，本任务横跨 internal/managers/adapters，需先对齐边界"}
+{"file":".trellis/spec/backend/code-organization.md","reason":"多路复用器放 src/internal/、MarketManager registry 改造、层级依赖方向（internal 不得依赖上层）、测试目录结构都受此约束"}
+{"file":".trellis/spec/backend/adapter-contract.md","reason":"核心契约：StreamHandle ready/close 语义、回调顺序、错误传播、§3.9 所有 WS 必须走 createManagedWebSocket、freshness/stale 规则——本任务正是改这些"}
+{"file":".trellis/spec/backend/type-safety.md","reason":"新增 venue 协议策略接口、MarketAdapter registry、ManagedWebSocket.send 等公共类型需保持显式返回类型与契约稳定"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"多路复用层是可复用原语 + 注入式 venue 策略，需按复用思维设计通用核与策略边界"}
+{"file":"docs/multi-venue-roadmap.md","reason":"本任务的范围边界（steps 1+2）、已核实代码锚点、step 3/4/5 的 out-of-scope 划分都在这里"}
+{"file":"docs/architecture.md","reason":"现有 WS/事件总线/分层架构上下文，避免改动破坏既有数据流与背压假设"}

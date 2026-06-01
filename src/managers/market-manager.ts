@@ -110,13 +110,14 @@ export class MarketManagerImpl
   readonly events: MarketEventStreams;
 
   private readonly context: ClientContext;
-  private readonly adapter: MarketAdapter;
+  private readonly adapters: Map<Venue, MarketAdapter>;
   private readonly marketBus = new AsyncEventBus<MarketEvent>();
   private readonly marketStatusBus =
     new AsyncEventBus<MarketStatusChangedEvent>();
   private readonly definitions = new Map<string, MarketDefinition>();
   private readonly records = new Map<string, MarketRecord>();
-  private catalogPromise: Promise<void> | undefined;
+  private readonly loadedCatalogVenues = new Set<Venue>();
+  private readonly catalogPromises = new Map<Venue, Promise<void>>();
   private readonly initialL1TimeoutMs: number;
   private readonly l1StaleAfterMs: number;
   private readonly l1ReconnectDelayMs: number;
@@ -124,11 +125,11 @@ export class MarketManagerImpl
 
   constructor(
     context: ClientContext,
-    adapter: MarketAdapter,
+    adapters: Map<Venue, MarketAdapter>,
     options: MarketManagerOptions = {},
   ) {
     this.context = context;
-    this.adapter = adapter;
+    this.adapters = new Map(adapters);
     this.initialL1TimeoutMs =
       options.initialL1TimeoutMs ?? DEFAULT_INITIAL_L1_TIMEOUT_MS;
     this.l1StaleAfterMs = options.l1StaleAfterMs ?? DEFAULT_L1_STALE_AFTER_MS;
@@ -162,7 +163,9 @@ export class MarketManagerImpl
   // --- MarketManager public API ---
 
   async loadMarkets(): Promise<void> {
-    await this.loadMarketCatalog();
+    await Promise.all(
+      [...this.adapters.keys()].map((venue) => this.loadMarketCatalog(venue)),
+    );
   }
 
   async subscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
@@ -414,43 +417,55 @@ export class MarketManagerImpl
 
   // --- Internal helpers ---
 
-  private async loadMarketCatalog(): Promise<void> {
-    if (this.definitions.size > 0) {
+  private async loadMarketCatalog(venue: Venue): Promise<void> {
+    this.assertSupportedVenue(venue);
+
+    if (this.loadedCatalogVenues.has(venue)) {
       return;
     }
 
-    if (!this.catalogPromise) {
-      this.catalogPromise = this.fetchAndStoreMarketCatalog();
+    let catalogPromise = this.catalogPromises.get(venue);
+    if (!catalogPromise) {
+      catalogPromise = this.fetchAndStoreMarketCatalog(venue);
+      this.catalogPromises.set(venue, catalogPromise);
     }
 
     try {
-      await this.catalogPromise;
-    } finally {
-      if (this.definitions.size === 0) {
-        this.catalogPromise = undefined;
-      }
+      await catalogPromise;
+    } catch (error) {
+      this.catalogPromises.delete(venue);
+      throw error;
     }
   }
 
-  private async fetchAndStoreMarketCatalog(): Promise<void> {
+  private async fetchAndStoreMarketCatalog(venue: Venue): Promise<void> {
+    const adapter = this.getMarketAdapter(venue);
+
     try {
-      const markets = await this.adapter.loadMarkets();
-      this.definitions.clear();
+      const markets = await adapter.loadMarkets();
+
+      for (const [key, market] of this.definitions) {
+        if (market.venue === venue) {
+          this.definitions.delete(key);
+        }
+      }
 
       for (const market of markets) {
         this.definitions.set(marketKey(market), market);
       }
+
+      this.loadedCatalogVenues.add(venue);
     } catch (error) {
       const wrapped = new AcexError(
         "MARKET_CATALOG_LOAD_FAILED",
-        "Failed to load market catalog from Binance",
+        `Failed to load market catalog from ${venue}`,
       );
       this.context.publishRuntimeError(
         "adapter",
         error instanceof Error
           ? error
           : new Error("Unknown catalog load failure"),
-        { venue: this.adapter.venue },
+        { venue },
       );
       throw wrapped;
     }
@@ -461,7 +476,7 @@ export class MarketManagerImpl
     symbol: string;
   }): Promise<MarketDefinition> {
     this.assertSupportedVenue(input.venue);
-    await this.loadMarketCatalog();
+    await this.loadMarketCatalog(input.venue);
 
     const market = this.definitions.get(marketKey(input));
     if (!market) {
@@ -500,7 +515,7 @@ export class MarketManagerImpl
   }
 
   private assertSupportedVenue(venue: Venue): void {
-    if (venue === this.adapter.venue) {
+    if (this.adapters.has(venue)) {
       return;
     }
 
@@ -510,6 +525,20 @@ export class MarketManagerImpl
       { venue },
       "client",
     );
+  }
+
+  private getMarketAdapter(venue: Venue): MarketAdapter {
+    const adapter = this.adapters.get(venue);
+    if (!adapter) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue is not supported yet: ${venue}`,
+        { venue },
+        "client",
+      );
+    }
+
+    return adapter;
   }
 
   private assertFundingRateSupported(market: MarketDefinition): void {
@@ -667,7 +696,11 @@ export class MarketManagerImpl
       now: () => this.context.now(),
     };
 
-    return this.adapter.createL1BookStream(market, callbacks, options);
+    return this.getMarketAdapter(market.venue).createL1BookStream(
+      market,
+      callbacks,
+      options,
+    );
   }
 
   private createFundingRateStream(
@@ -724,7 +757,11 @@ export class MarketManagerImpl
       now: () => this.context.now(),
     };
 
-    return this.adapter.createFundingRateStream(market, callbacks, options);
+    return this.getMarketAdapter(market.venue).createFundingRateStream(
+      market,
+      callbacks,
+      options,
+    );
   }
 
   private createL1Book(

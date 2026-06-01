@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 import { AcexError, BigNumber, createClient } from "../../index.ts";
 import {
+  BINANCE_USDM_MARKET_WS_BASE_URL,
+  BINANCE_USDM_WS_BASE_URL,
   installBinanceMarketInfra,
   installBinancePrivateAccountInfra,
   PAPI_ACCOUNT_WS_URL,
+  waitForBinanceControlFrame,
 } from "../support/exchanges/binance.ts";
 import {
   expectPending,
@@ -135,10 +138,10 @@ test("client stop keeps lifecycle and market health semantics observable", async
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const socket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
-  );
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
   socket.emitJson({
+    s: "BTCUSDT",
     b: "100001.10",
     B: "0.2500",
     a: "100001.20",
@@ -152,9 +155,10 @@ test("client stop keeps lifecycle and market health semantics observable", async
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const fundingSocket = await waitForSocket(
-    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
-  );
+  const fundingSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL);
+  await waitForBinanceControlFrame(fundingSocket, "SUBSCRIBE", [
+    "btcusdt@markPrice",
+  ]);
   fundingSocket.emitJson({
     e: "markPriceUpdate",
     E: 1710000000004,
@@ -208,11 +212,12 @@ test("client stop keeps lifecycle and market health semantics observable", async
 
   await client.start();
 
-  const restoredBookSocket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
-    1,
-  );
+  const restoredBookSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 1);
+  await waitForBinanceControlFrame(restoredBookSocket, "SUBSCRIBE", [
+    "btcusdt@bookTicker",
+  ]);
   restoredBookSocket.emitJson({
+    s: "BTCUSDT",
     b: "100002.10",
     B: "0.2500",
     a: "100002.20",
@@ -220,9 +225,12 @@ test("client stop keeps lifecycle and market health semantics observable", async
     T: 1710000000005,
   });
   const restoredFundingSocket = await waitForSocket(
-    "wss://fstream.binance.com/market/ws/btcusdt@markPrice",
+    BINANCE_USDM_MARKET_WS_BASE_URL,
     1,
   );
+  await waitForBinanceControlFrame(restoredFundingSocket, "SUBSCRIBE", [
+    "btcusdt@markPrice",
+  ]);
   restoredFundingSocket.emitJson({
     e: "markPriceUpdate",
     E: 1710000000006,
@@ -292,11 +300,10 @@ test("health venue filters only emit matching market events", async () => {
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const socket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
-    0,
-  );
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
   socket.emitJson({
+    s: "BTCUSDT",
     b: "102100.10",
     B: "1.000",
     a: "102100.20",
@@ -320,7 +327,16 @@ test("health venue filters only emit matching market events", async () => {
       activity: "active",
     },
   });
-  expect(await nextEvent(binanceHealth)).toMatchObject({
+  let readyBinanceEvent: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const event = await nextEvent(binanceHealth);
+    if (event.type === "market.status_changed" && event.status.ready) {
+      readyBinanceEvent = event;
+      break;
+    }
+  }
+
+  expect(readyBinanceEvent).toMatchObject({
     type: "market.status_changed",
     venue: "binance",
     symbol: "BTC/USDT:USDT",

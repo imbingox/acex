@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 14
-- **Last Active**: 2026-05-27
+- **Total Sessions**: 15
+- **Last Active**: 2026-06-01
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~510 | Active |
+| `journal-1.md` | ~546 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 15 | 2026-06-01 | 行情多 venue 分派与 WS 连接复用 | `d99ac9a`, `343ac4b`, `19f60bc`, `a8328f6` | `feat/market-venue-ws-multiplex` |
 | 14 | 2026-05-27 | 完成 Juplend lend-read 替换与收尾 | `e47874a`, `99fb840`, `f997750` | `dev` |
 | 13 | 2026-05-11 | Refresh Binance Account Risk | `50e4e09`, `9ee60cf`, `628cefe` | `docs/account-realtime-refresh-spec` |
 | 12 | 2026-05-06 | Venue capability queries and npm docs packaging | `ea9a4a7`, `46d1291` | `feat/new_account` |

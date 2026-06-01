@@ -115,7 +115,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       privateAdapters.map((adapter) => [adapter.venue, adapter]),
     );
 
-    this.marketManager = new MarketManagerImpl(this, marketAdapter, {
+    this.marketManager = new MarketManagerImpl(this, this.marketAdapters, {
       initialL1TimeoutMs: options.market?.l1InitialMessageTimeoutMs,
       l1StaleAfterMs: options.market?.l1StaleAfterMs,
       l1ReconnectDelayMs: options.market?.l1ReconnectDelayMs,

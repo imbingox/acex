@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { type BigNumber, createClient } from "../../index.ts";
-import { installBinanceMarketInfra } from "../support/exchanges/binance.ts";
+import {
+  BINANCE_USDM_WS_BASE_URL,
+  installBinanceMarketInfra,
+  waitForBinanceControlFrame,
+} from "../support/exchanges/binance.ts";
 import {
   type FakeWebSocket,
   nextEvent,
@@ -54,6 +58,7 @@ function startContinuousBookTickerFeed(
     ticks += 1;
     const price = options.startPrice + ticks;
     socket.emitJson({
+      s: "BTCUSDT",
       b: `${price}.10`,
       B: `1.${`${ticks}`.padStart(3, "0")}`,
       a: `${price}.20`,
@@ -96,11 +101,8 @@ test("caller can observe l1 book keep changing for one minute", async () => {
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const socket = await waitForSocket(
-    "wss://fstream.binance.com/ws/btcusdt@bookTicker",
-    0,
-    1_000,
-  );
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0, 1_000);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
   const feed = startContinuousBookTickerFeed(socket, {
     durationMs: 60_000,
     intervalMs: 1_000,

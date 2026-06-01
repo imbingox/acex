@@ -508,3 +508,39 @@ Added top-level venue capability queries, moved capability truth closer to adapt
 ### Next Steps
 
 - None - task complete
+
+
+## Session 15: 行情多 venue 分派与 WS 连接复用
+
+**Date**: 2026-06-01
+**Task**: 行情多 venue 分派与 WS 连接复用
+**Branch**: `feat/market-venue-ws-multiplex`
+
+### Summary
+
+完成 MarketManager 多 venue 分派、Binance 行情 WebSocket 订阅多路复用、文档与 review 修复；PR #32 已更新并通过 lint/type-check/test。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d99ac9a` | (see git log) |
+| `343ac4b` | (see git log) |
+| `19f60bc` | (see git log) |
+| `a8328f6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

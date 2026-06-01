@@ -33,6 +33,7 @@ export interface ManagedWebSocketOptions<TMessage> {
 
 export interface ManagedWebSocketSession {
   readonly ready: Promise<void>;
+  send(data: string): void;
   close(): void;
 }
 
@@ -265,6 +266,13 @@ export function createManagedWebSocket<TMessage>(
 
   return {
     ready,
+    send(data: string): void {
+      if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      activeSocket.send(data);
+    },
     close() {
       if (closed) {
         return;

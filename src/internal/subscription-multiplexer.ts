@@ -54,15 +54,19 @@ interface Deferred {
   reject(error: Error): void;
 }
 
-interface SubState<TDescriptor, TPayload> {
-  readonly descriptor: TDescriptor;
+interface LocalSubscriber<TPayload> {
   readonly callbacks: MultiplexedStreamCallbacks<TPayload>;
   readonly ready: Promise<void>;
   readonly deferred: Deferred;
   readySettled: boolean;
   freshness: Freshness;
-  lastMessageAt: number | undefined;
   initialTimer: TimerHandle | undefined;
+}
+
+interface SubState<TDescriptor, TPayload> {
+  readonly descriptor: TDescriptor;
+  readonly subscribers: Set<LocalSubscriber<TPayload>>;
+  lastMessageAt: number | undefined;
   staleTimer: TimerHandle | undefined;
 }
 
@@ -155,27 +159,47 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     const connection =
       existingConnection ?? this.getOrCreateConnection(connectionKey);
     const { promise, deferred } = createDeferred();
-    const sub: SubState<TDescriptor, TPayload> = {
-      descriptor,
+    const localSubscriber: LocalSubscriber<TPayload> = {
       callbacks,
       ready: promise,
       deferred,
       readySettled: false,
       freshness: "stale",
-      lastMessageAt: undefined,
       initialTimer: undefined,
-      staleTimer: undefined,
     };
 
     const existing = connection.subs.get(subscriptionKey);
     if (existing) {
-      this.clearSubTimers(existing);
-      this.rejectSubReady(existing, new Error("subscription replaced"));
-      this.removeQueuedDescriptor(connection, "subscribe", subscriptionKey);
+      existing.subscribers.add(localSubscriber);
+      this.scheduleInitialTimeout(
+        connection,
+        subscriptionKey,
+        existing,
+        localSubscriber,
+      );
+
+      return this.createHandle(
+        connection,
+        subscriptionKey,
+        promise,
+        localSubscriber,
+      );
     }
 
+    const sub: SubState<TDescriptor, TPayload> = {
+      descriptor,
+      subscribers: new Set([localSubscriber]),
+      lastMessageAt: undefined,
+      staleTimer: undefined,
+    };
+
     connection.subs.set(subscriptionKey, sub);
-    this.scheduleInitialTimeout(connection, subscriptionKey, sub);
+    this.scheduleInitialTimeout(
+      connection,
+      subscriptionKey,
+      sub,
+      localSubscriber,
+    );
     this.scheduleSubStaleTimeout(connection, sub);
 
     if (connection.isOpen) {
@@ -184,9 +208,23 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       ]);
     }
 
+    return this.createHandle(
+      connection,
+      subscriptionKey,
+      promise,
+      localSubscriber,
+    );
+  }
+
+  private createHandle(
+    connection: ConnectionState<TDescriptor, TPayload>,
+    subscriptionKey: string,
+    ready: Promise<void>,
+    localSubscriber: LocalSubscriber<TPayload>,
+  ): MultiplexerSubscriptionHandle {
     let closed = false;
     return {
-      ready: promise,
+      ready,
       close: (): void => {
         if (closed) {
           return;
@@ -197,7 +235,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
           connection,
           subscriptionKey,
           connection.isOpen,
-          sub,
+          localSubscriber,
         );
       },
     };
@@ -365,7 +403,9 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
 
     this.markAllStaleSilently(connection);
     for (const sub of connection.subs.values()) {
-      sub.callbacks.onDisconnected();
+      for (const localSubscriber of sub.subscribers) {
+        localSubscriber.callbacks.onDisconnected();
+      }
     }
   }
 
@@ -385,30 +425,45 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }
 
     sub.lastMessageAt = receivedAt;
-    this.clearInitialTimer(sub);
-    this.resolveSubReady(sub);
     this.scheduleSubStaleTimeout(connection, sub);
 
-    if (sub.freshness !== "fresh") {
-      sub.freshness = "fresh";
-      sub.callbacks.onFreshnessChange("fresh");
-    }
+    for (const localSubscriber of [...sub.subscribers]) {
+      if (!sub.subscribers.has(localSubscriber)) {
+        continue;
+      }
 
-    sub.callbacks.onPayload(routed.payload, receivedAt);
+      this.clearInitialTimer(localSubscriber);
+      this.resolveSubReady(localSubscriber);
+
+      if (localSubscriber.freshness !== "fresh") {
+        localSubscriber.freshness = "fresh";
+        localSubscriber.callbacks.onFreshnessChange("fresh");
+      }
+
+      if (sub.subscribers.has(localSubscriber)) {
+        localSubscriber.callbacks.onPayload(routed.payload, receivedAt);
+      }
+    }
   }
 
   private scheduleInitialTimeout(
     connection: ConnectionState<TDescriptor, TPayload>,
     subscriptionKey: string,
     sub: SubState<TDescriptor, TPayload>,
+    localSubscriber: LocalSubscriber<TPayload>,
   ): void {
-    sub.initialTimer = this.setTimer(() => {
-      if (connection.subs.get(subscriptionKey) !== sub || sub.readySettled) {
+    localSubscriber.initialTimer = this.setTimer(() => {
+      localSubscriber.initialTimer = undefined;
+      if (
+        connection.subs.get(subscriptionKey) !== sub ||
+        !sub.subscribers.has(localSubscriber) ||
+        localSubscriber.readySettled
+      ) {
         return;
       }
 
-      sub.readySettled = true;
-      sub.deferred.reject(
+      localSubscriber.readySettled = true;
+      localSubscriber.deferred.reject(
         new Error(
           `Timed out waiting for first data message for ${subscriptionKey}`,
         ),
@@ -417,7 +472,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
         connection,
         subscriptionKey,
         connection.isOpen,
-        sub,
+        localSubscriber,
       );
     }, this.options.initialMessageTimeoutMs);
   }
@@ -440,56 +495,55 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }, this.options.staleAfterMs);
   }
 
-  private clearInitialTimer(sub: SubState<TDescriptor, TPayload>): void {
-    if (!sub.initialTimer) {
+  private clearInitialTimer(localSubscriber: LocalSubscriber<TPayload>): void {
+    if (!localSubscriber.initialTimer) {
       return;
     }
 
-    this.clearTimer(sub.initialTimer);
-    sub.initialTimer = undefined;
+    this.clearTimer(localSubscriber.initialTimer);
+    localSubscriber.initialTimer = undefined;
   }
 
   private clearSubTimers(sub: SubState<TDescriptor, TPayload>): void {
-    this.clearInitialTimer(sub);
+    for (const localSubscriber of sub.subscribers) {
+      this.clearInitialTimer(localSubscriber);
+    }
     if (sub.staleTimer) {
       this.clearTimer(sub.staleTimer);
       sub.staleTimer = undefined;
     }
   }
 
-  private resolveSubReady(sub: SubState<TDescriptor, TPayload>): void {
-    if (sub.readySettled) {
+  private resolveSubReady(localSubscriber: LocalSubscriber<TPayload>): void {
+    if (localSubscriber.readySettled) {
       return;
     }
 
-    sub.readySettled = true;
-    sub.deferred.resolve();
-  }
-
-  private rejectSubReady(
-    sub: SubState<TDescriptor, TPayload>,
-    error: Error,
-  ): void {
-    if (sub.readySettled) {
-      return;
-    }
-
-    sub.readySettled = true;
-    sub.deferred.reject(error);
+    localSubscriber.readySettled = true;
+    localSubscriber.deferred.resolve();
   }
 
   private removeSubscription(
     connection: ConnectionState<TDescriptor, TPayload>,
     subscriptionKey: string,
     sendUnsubscribe: boolean,
-    expectedSub?: SubState<TDescriptor, TPayload>,
+    localSubscriber?: LocalSubscriber<TPayload>,
   ): void {
     const sub = connection.subs.get(subscriptionKey);
     if (!sub) {
       return;
     }
 
-    if (expectedSub && sub !== expectedSub) {
+    if (localSubscriber && !sub.subscribers.has(localSubscriber)) {
+      return;
+    }
+
+    if (localSubscriber) {
+      this.clearInitialTimer(localSubscriber);
+      sub.subscribers.delete(localSubscriber);
+    }
+
+    if (sub.subscribers.size > 0) {
       return;
     }
 
@@ -546,7 +600,9 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     connection: ConnectionState<TDescriptor, TPayload>,
   ): void {
     for (const sub of connection.subs.values()) {
-      sub.freshness = "stale";
+      for (const localSubscriber of sub.subscribers) {
+        localSubscriber.freshness = "stale";
+      }
     }
   }
 
@@ -554,12 +610,14 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     sub: SubState<TDescriptor, TPayload>,
     reason: StaleReason,
   ): void {
-    if (sub.freshness === "stale") {
-      return;
-    }
+    for (const localSubscriber of sub.subscribers) {
+      if (localSubscriber.freshness === "stale") {
+        continue;
+      }
 
-    sub.freshness = "stale";
-    sub.callbacks.onFreshnessChange("stale", reason);
+      localSubscriber.freshness = "stale";
+      localSubscriber.callbacks.onFreshnessChange("stale", reason);
+    }
   }
 
   private notifyConnectionError(
@@ -567,7 +625,9 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     error: Error,
   ): void {
     for (const sub of connection.subs.values()) {
-      sub.callbacks.onError(error);
+      for (const localSubscriber of sub.subscribers) {
+        localSubscriber.callbacks.onError(error);
+      }
     }
   }
 

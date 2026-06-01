@@ -344,19 +344,15 @@ test("unsubscribe frees capacity for the next subscription without opening a new
   expect(d.log.payloads.map((entry) => entry.payload.value)).toEqual(["D1"]);
 });
 
-test("re-subscribing an existing key in a pool replaces it on the original connection", async () => {
+test("re-subscribing an existing key in a pool shares the original connection", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock, 5, 2);
-  const original = createCallbacks();
-  const replacement = createCallbacks();
+  const first = createCallbacks();
+  const second = createCallbacks();
 
   multiplexer.subscribe(descriptor("a"), createCallbacks().callbacks);
   multiplexer.subscribe(descriptor("b"), createCallbacks().callbacks);
-  const originalHandle = multiplexer.subscribe(
-    descriptor("c"),
-    original.callbacks,
-  );
-  const originalReady = originalHandle.ready.catch((error: unknown) => error);
+  const firstHandle = multiplexer.subscribe(descriptor("c"), first.callbacks);
 
   const firstSocket = await waitForSocket("wss://fake.test/alpha", 0);
   const secondSocket = await waitForSocket("wss://fake.test/alpha", 1);
@@ -365,24 +361,21 @@ test("re-subscribing an existing key in a pool replaces it on the original conne
   firstSocket.emitJson({ key: "a", value: "A1" });
   firstSocket.emitJson({ key: "b", value: "B1" });
 
-  const replacementHandle = multiplexer.subscribe(
-    descriptor("c"),
-    replacement.callbacks,
-  );
+  const secondHandle = multiplexer.subscribe(descriptor("c"), second.callbacks);
 
   expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(2);
   expect(secondSocket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(secondSocket.sentFrames).toHaveLength(1);
 
-  secondSocket.emitJson({ key: "c", value: "replacement" });
+  secondSocket.emitJson({ key: "c", value: "shared" });
 
-  await replacementHandle.ready;
-  const originalReadyResult = await originalReady;
-  expect(originalReadyResult).toBeInstanceOf(Error);
-  expect((originalReadyResult as Error).message).toBe("subscription replaced");
-  expect(replacement.log.payloads.map((entry) => entry.payload.value)).toEqual([
-    "replacement",
+  await Promise.all([firstHandle.ready, secondHandle.ready]);
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
   ]);
-  expect(original.log.payloads).toHaveLength(0);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
+  ]);
 
   clock.advance(5_000);
   expect(secondSocket.readyState).toBe(FakeWebSocket.OPEN);
@@ -469,25 +462,18 @@ test("subscription ready resolves only after its first data message", async () =
   await handle.ready;
 });
 
-test("re-subscribing the only key replaces callbacks without rebuilding the socket", async () => {
+test("re-subscribing the only key shares callbacks without rebuilding the socket", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
-  const original = createCallbacks();
-  const replacement = createCallbacks();
+  const first = createCallbacks();
+  const second = createCallbacks();
 
-  const originalHandle = multiplexer.subscribe(
-    descriptor("a"),
-    original.callbacks,
-  );
-  const originalReady = originalHandle.ready.catch((error: unknown) => error);
+  const firstHandle = multiplexer.subscribe(descriptor("a"), first.callbacks);
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
 
-  const replacementHandle = multiplexer.subscribe(
-    descriptor("a"),
-    replacement.callbacks,
-  );
+  const secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
 
   expect(
     FakeWebSocket.instances.filter(
@@ -495,68 +481,71 @@ test("re-subscribing the only key replaces callbacks without rebuilding the sock
     ),
   ).toHaveLength(1);
   expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(socket.sentFrames).toHaveLength(1);
 
-  socket.emitJson({ key: "a", value: "replacement" });
+  socket.emitJson({ key: "a", value: "shared" });
 
-  await replacementHandle.ready;
-  const originalReadyResult = await originalReady;
-  expect(originalReadyResult).toBeInstanceOf(Error);
-  expect((originalReadyResult as Error).message).toBe("subscription replaced");
-  expect(replacement.log.payloads.map((entry) => entry.payload.value)).toEqual([
-    "replacement",
+  await Promise.all([firstHandle.ready, secondHandle.ready]);
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
   ]);
-  expect(original.log.payloads).toHaveLength(0);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
+  ]);
 
   clock.advance(5_000);
   expect(socket.readyState).toBe(FakeWebSocket.OPEN);
 
   socket.emitJson({ key: "a", value: "after-timeout" });
 
-  expect(replacement.log.payloads.map((entry) => entry.payload.value)).toEqual([
-    "replacement",
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
     "after-timeout",
   ]);
-  expect(original.log.payloads).toHaveLength(0);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
+    "after-timeout",
+  ]);
 });
 
-test("closing a replaced handle leaves the active replacement subscribed", async () => {
+test("closing one shared handle leaves the remote subscription active", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
-  const original = createCallbacks();
-  const replacement = createCallbacks();
-  const originalHandle = multiplexer.subscribe(
-    descriptor("a"),
-    original.callbacks,
-  );
-  const originalReady = originalHandle.ready.catch((error: unknown) => error);
+  const first = createCallbacks();
+  const second = createCallbacks();
+  const firstHandle = multiplexer.subscribe(descriptor("a"), first.callbacks);
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
 
-  const replacementHandle = multiplexer.subscribe(
-    descriptor("a"),
-    replacement.callbacks,
-  );
+  const secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
 
-  socket.emitJson({ key: "a", value: "replacement" });
+  socket.emitJson({ key: "a", value: "shared" });
 
-  await replacementHandle.ready;
-  const originalReadyResult = await originalReady;
-  expect(originalReadyResult).toBeInstanceOf(Error);
-  expect((originalReadyResult as Error).message).toBe("subscription replaced");
+  await Promise.all([firstHandle.ready, secondHandle.ready]);
 
-  originalHandle.close();
+  firstHandle.close();
 
   expect(socket.readyState).toBe(FakeWebSocket.OPEN);
   expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(1);
+  clock.advance(200);
+  expect(socket.sentFrames).toHaveLength(1);
 
   socket.emitJson({ key: "a", value: "after-old-close" });
 
-  expect(replacement.log.payloads.map((entry) => entry.payload.value)).toEqual([
-    "replacement",
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
+  ]);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "shared",
     "after-old-close",
   ]);
-  expect(original.log.payloads).toHaveLength(0);
+
+  secondHandle.close();
+  clock.advance(200);
+
+  expect(sentFrame(socket, 1)).toEqual({ op: "unsub", keys: ["a"] });
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
 });
 
 test("data messages route only to the matching subscription", async () => {

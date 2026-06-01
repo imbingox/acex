@@ -32,6 +32,14 @@ type BinanceMarketMultiplexer = SubscriptionMultiplexer<
   BinanceStreamPayload
 >;
 
+interface BinanceMultiplexerConfig {
+  readonly initialMessageTimeoutMs: number;
+  readonly staleAfterMs: number;
+  readonly reconnectDelayMs: number;
+  readonly reconnectMaxDelayMs: number;
+  readonly now?: () => number;
+}
+
 export class BinanceMarketAdapter implements MarketAdapter {
   readonly venue = "binance" as const;
   readonly marketCapabilities: VenueMarketCapabilities = {
@@ -43,6 +51,7 @@ export class BinanceMarketAdapter implements MarketAdapter {
 
   private readonly definitions = new Map<string, BinanceMarketDefinition>();
   private multiplexer: BinanceMarketMultiplexer | undefined;
+  private multiplexerConfig: BinanceMultiplexerConfig | undefined;
 
   async loadMarkets(): Promise<MarketDefinition[]> {
     const markets = await loadBinanceMarkets();
@@ -146,23 +155,54 @@ export class BinanceMarketAdapter implements MarketAdapter {
   private getMultiplexer(
     options: L1BookStreamOptions | FundingRateStreamOptions,
   ): BinanceMarketMultiplexer {
+    const config: BinanceMultiplexerConfig = {
+      initialMessageTimeoutMs: options.initialMessageTimeoutMs,
+      staleAfterMs: options.staleAfterMs,
+      reconnectDelayMs: options.reconnectDelayMs,
+      reconnectMaxDelayMs: options.reconnectMaxDelayMs,
+      now: options.now,
+    };
+
     if (!this.multiplexer) {
-      // First stream options win; MarketManager passes matching L1/funding timing values.
       this.multiplexer = new SubscriptionMultiplexer(
         new BinanceStreamProtocol(),
         {
-          initialMessageTimeoutMs: options.initialMessageTimeoutMs,
-          staleAfterMs: options.staleAfterMs,
-          reconnectDelayMs: options.reconnectDelayMs,
-          reconnectMaxDelayMs: options.reconnectMaxDelayMs,
+          initialMessageTimeoutMs: config.initialMessageTimeoutMs,
+          staleAfterMs: config.staleAfterMs,
+          reconnectDelayMs: config.reconnectDelayMs,
+          reconnectMaxDelayMs: config.reconnectMaxDelayMs,
           controlFrameMaxPerSec: BINANCE_CONTROL_FRAME_MAX_PER_SEC,
           maxSubscriptionsPerConnection:
             BINANCE_MAX_SUBSCRIPTIONS_PER_CONNECTION,
-          now: options.now,
+          now: config.now,
         },
+      );
+      this.multiplexerConfig = config;
+      return this.multiplexer;
+    }
+
+    if (
+      !this.multiplexerConfig ||
+      !sameMultiplexerConfig(config, this.multiplexerConfig)
+    ) {
+      throw new Error(
+        "Binance market stream options differ from the active multiplexer; create a new adapter instance for different stream timing options",
       );
     }
 
     return this.multiplexer;
   }
+}
+
+function sameMultiplexerConfig(
+  left: BinanceMultiplexerConfig,
+  right: BinanceMultiplexerConfig,
+): boolean {
+  return (
+    left.initialMessageTimeoutMs === right.initialMessageTimeoutMs &&
+    left.staleAfterMs === right.staleAfterMs &&
+    left.reconnectDelayMs === right.reconnectDelayMs &&
+    left.reconnectMaxDelayMs === right.reconnectMaxDelayMs &&
+    left.now === right.now
+  );
 }

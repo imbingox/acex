@@ -38,7 +38,11 @@ async function expectNoEvent<T>(
     Bun.sleep(timeoutMs).then(() => ({ kind: "timeout" as const })),
   ]);
 
-  if (result.kind === "event" && !result.value.done) {
+  if (result.kind === "event") {
+    if (result.value.done) {
+      throw new Error("Expected no event, iterator closed unexpectedly");
+    }
+
     throw new Error(
       `Expected no event, received ${JSON.stringify(result.value.value)}`,
     );

@@ -136,7 +136,7 @@ export class BinanceStreamProtocol
     if (
       typeof message.s === "string" &&
       typeof message.r === "string" &&
-      (message.e === "markPriceUpdate" || message.r !== undefined)
+      message.e === "markPriceUpdate"
     ) {
       return {
         kind: "data",

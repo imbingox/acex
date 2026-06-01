@@ -122,6 +122,7 @@ export class MarketManagerImpl
   private readonly l1StaleAfterMs: number;
   private readonly l1ReconnectDelayMs: number;
   private readonly l1ReconnectMaxDelayMs: number;
+  private readonly streamNow = (): number => this.context.now();
 
   constructor(
     context: ClientContext,
@@ -693,7 +694,7 @@ export class MarketManagerImpl
       staleAfterMs: this.l1StaleAfterMs,
       reconnectDelayMs: this.l1ReconnectDelayMs,
       reconnectMaxDelayMs: this.l1ReconnectMaxDelayMs,
-      now: () => this.context.now(),
+      now: this.streamNow,
     };
 
     return this.getMarketAdapter(market.venue).createL1BookStream(
@@ -754,7 +755,7 @@ export class MarketManagerImpl
       staleAfterMs: this.l1StaleAfterMs,
       reconnectDelayMs: this.l1ReconnectDelayMs,
       reconnectMaxDelayMs: this.l1ReconnectMaxDelayMs,
-      now: () => this.context.now(),
+      now: this.streamNow,
     };
 
     return this.getMarketAdapter(market.venue).createFundingRateStream(

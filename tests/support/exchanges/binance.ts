@@ -6,8 +6,18 @@ const USDM_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
 const COINM_EXCHANGE_INFO_URL = "https://dapi.binance.com/dapi/v1/exchangeInfo";
 const PAPI_REST_BASE_URL = "https://papi.binance.com";
 
+export const BINANCE_SPOT_WS_BASE_URL = "wss://stream.binance.com:9443/ws";
+export const BINANCE_USDM_WS_BASE_URL = "wss://fstream.binance.com/ws";
+export const BINANCE_USDM_MARKET_WS_BASE_URL =
+  "wss://fstream.binance.com/market/ws";
+export const BINANCE_COINM_WS_BASE_URL = "wss://dstream.binance.com/ws";
 export const PAPI_LISTEN_KEY = "test-listen-key";
 export const PAPI_ACCOUNT_WS_URL = `wss://fstream.binance.com/pm/ws/${PAPI_LISTEN_KEY}`;
+
+interface BinanceControlFrame {
+  readonly method?: string;
+  readonly params?: string[];
+}
 
 const binanceFixtures = {
   spot: {
@@ -60,6 +70,32 @@ const binanceFixtures = {
         contractType: "PERPETUAL",
         deliveryDate: 0,
         baseAsset: "BTC",
+        quoteAsset: "USDT",
+        marginAsset: "USDT",
+        pricePrecision: 2,
+        quantityPrecision: 3,
+        filters: [
+          {
+            filterType: "PRICE_FILTER",
+            tickSize: "0.10",
+          },
+          {
+            filterType: "LOT_SIZE",
+            minQty: "0.001",
+            stepSize: "0.001",
+          },
+          {
+            filterType: "MIN_NOTIONAL",
+            minNotional: "5",
+          },
+        ],
+      },
+      {
+        symbol: "ETHUSDT",
+        status: "TRADING",
+        contractType: "PERPETUAL",
+        deliveryDate: 0,
+        baseAsset: "ETH",
         quoteAsset: "USDT",
         marginAsset: "USDT",
         pricePrecision: 2,
@@ -184,6 +220,56 @@ const binanceFixtures = {
     ],
   },
 };
+
+function parseControlFrame(frame: string): BinanceControlFrame | undefined {
+  try {
+    const parsed = JSON.parse(frame) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const params = Array.isArray(record.params)
+      ? record.params.filter(
+          (param): param is string => typeof param === "string",
+        )
+      : undefined;
+
+    return {
+      method: typeof record.method === "string" ? record.method : undefined,
+      params,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function waitForBinanceControlFrame(
+  socket: FakeWebSocket,
+  method: "SUBSCRIBE" | "UNSUBSCRIBE",
+  streams: string[],
+  timeoutMs = 300,
+): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    for (const frame of socket.sentFrames) {
+      const parsed = parseControlFrame(frame);
+      if (
+        parsed?.method === method &&
+        streams.every((stream) => parsed.params?.includes(stream))
+      ) {
+        return;
+      }
+    }
+
+    await Bun.sleep(1);
+  }
+
+  throw new Error(
+    `Timed out waiting for Binance ${method} frame containing ${streams.join(", ")}`,
+  );
+}
 
 export function installBinanceMarketInfra(): void {
   stopAllClientsForTests();

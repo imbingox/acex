@@ -28,6 +28,7 @@ export class FakeWebSocket extends EventTarget {
 
   static instances: FakeWebSocket[] = [];
 
+  readonly sentFrames: string[] = [];
   readyState = FakeWebSocket.CONNECTING;
 
   constructor(readonly url: string) {
@@ -47,7 +48,9 @@ export class FakeWebSocket extends EventTarget {
     FakeWebSocket.instances = [];
   }
 
-  send(): void {}
+  send(data?: string): void {
+    this.sentFrames.push(data ?? "");
+  }
 
   emitJson(payload: unknown): void {
     this.dispatchEvent(

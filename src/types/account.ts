@@ -1,4 +1,3 @@
-import type BigNumber from "bignumber.js";
 import type {
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
@@ -52,9 +51,9 @@ export interface BalanceSnapshot {
   accountId: string;
   venue: Venue;
   asset: string;
-  free: BigNumber;
-  used: BigNumber;
-  total: BigNumber;
+  free: string;
+  used: string;
+  total: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -63,12 +62,12 @@ export interface BalanceSnapshot {
 }
 
 export interface LendingBalanceFacet {
-  supplied: BigNumber;
-  borrowed: BigNumber;
-  interest: BigNumber;
-  netAsset: BigNumber;
-  supplyAPY?: BigNumber;
-  borrowAPY?: BigNumber;
+  supplied: string;
+  borrowed: string;
+  interest: string;
+  netAsset: string;
+  supplyAPY?: string;
+  borrowAPY?: string;
 }
 
 export interface PositionSnapshot {
@@ -76,12 +75,12 @@ export interface PositionSnapshot {
   venue: Venue;
   symbol: string;
   side: PositionSide;
-  size: BigNumber;
-  entryPrice?: BigNumber;
-  markPrice?: BigNumber;
-  unrealizedPnl?: BigNumber;
-  leverage?: BigNumber;
-  liquidationPrice?: BigNumber;
+  size: string;
+  entryPrice?: string;
+  markPrice?: string;
+  unrealizedPnl?: string;
+  leverage?: string;
+  liquidationPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -91,12 +90,12 @@ export interface PositionSnapshot {
 export interface RiskSnapshot {
   accountId: string;
   venue: Venue;
-  netEquity?: BigNumber;
-  riskEquity?: BigNumber;
-  riskRatio?: BigNumber;
-  riskLeverage?: BigNumber;
-  initialMargin?: BigNumber;
-  maintenanceMargin?: BigNumber;
+  netEquity?: string;
+  riskEquity?: string;
+  riskRatio?: string;
+  riskLeverage?: string;
+  initialMargin?: string;
+  maintenanceMargin?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -105,12 +104,12 @@ export interface RiskSnapshot {
 }
 
 export interface LendingRiskFacet {
-  marginLevel?: BigNumber;
-  healthFactor?: BigNumber;
-  ltv?: BigNumber;
-  liquidationThreshold?: BigNumber;
-  totalCollateralUSD?: BigNumber;
-  totalDebtUSD?: BigNumber;
+  marginLevel?: string;
+  healthFactor?: string;
+  ltv?: string;
+  liquidationThreshold?: string;
+  totalCollateralUSD?: string;
+  totalDebtUSD?: string;
 }
 
 export interface AccountSnapshot {

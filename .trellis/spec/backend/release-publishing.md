@@ -131,9 +131,10 @@ Changeset bump 选择矩阵：
 | 新增 public API、新能力、新可观察字段 | `minor` | 新增真实资金费率数据流、给 public snapshot 增加 `status` 字段 |
 | 向后兼容的行为修复 | `patch` | 修复 stop 后 snapshot status 与聚合 status 不一致 |
 | 文档、测试、Trellis 任务归档、journal | 无需 changeset | 只更新 `docs/*` 或 `.trellis/workspace/*` |
+| pre-1.0（0.x）阶段的破坏性 public contract 变更 | `minor` | beta 阶段改变 public snapshot 返回值语义；`major` 保留给 1.0 里程碑 |
 | 破坏性 public contract 变更 | `major` | 删除/重命名 public API、改变返回值语义导致现有调用方必须改代码 |
 
-当同一个 PR 同时包含多类用户可见变更时，选择最高级别 bump：`major > minor > patch`。
+当同一个 PR 同时包含多类用户可见变更时，选择最高级别 bump：`major > minor > patch`。例外：仓库仍处于 pre-1.0（0.x）beta 阶段时，破坏性 public contract 变更使用 `minor`，避免提前把版本推进到 1.0。
 
 ### 4. Validation & Error Matrix
 
@@ -154,6 +155,7 @@ Changeset bump 选择矩阵：
 | PR 新增 public API / public type 字段但没有 `.changeset/*.md` | 视为 release contract 缺失，合并前必须补 changeset |
 | PR 同时包含 feature 和 bug fix | changeset bump 选最高级别，例如 `minor` 覆盖 feature + fix |
 | PR 只有文档、测试或 Trellis 归档 | 可不写 changeset |
+| 0.x beta 阶段的破坏性 public contract 变更写成 `major` | 视为版本策略偏离；应改为 `minor`，`major` 留给 1.0 里程碑 |
 
 ### 5. Good / Base / Bad Cases
 
@@ -251,7 +253,7 @@ bun run test
 - workflow YAML 语法正确，路径固定在 `.github/workflows/`
 - 仓库现有质量命令在本地可执行
 - 用户可见代码变更必须有 `.changeset/*.md`
-- changeset bump 级别必须与 public contract 变化匹配
+- changeset bump 级别必须与 public contract 变化匹配；0.x beta 阶段的破坏性 public contract 变更使用 `minor`
 - changeset summary 必须描述用户可见行为变化
 - workflow 中引用的 script 名称与 `package.json` 保持一致
 - `.changeset/config.json`、`.changeset/pre.json`、workflow 的 prerelease/stable 策略一致

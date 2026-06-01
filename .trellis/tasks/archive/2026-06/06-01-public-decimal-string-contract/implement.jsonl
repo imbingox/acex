@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "5 层架构与目录边界；确认 toCanonical 落 src/internal/decimal.ts（领域无关原语、只依赖 src/types），src/types 只放契约不放实现"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "类型定义位置、显式返回类型、避免宽化/循环引用；BigNumber→string 改型与 toCanonical(value: DecimalInput): string 的显式签名"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "MarketAdapter.loadMarkets() 契约与交易所特定类型不外泄；binance market-catalog 去 new BigNumber 改 toCanonical 时不得破坏 BinanceMarketDefinition 契约"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "破坏性变更必带 .changeset/*.md（bump=minor），summary 写迁移姿势；本任务需同 PR 给 bump 矩阵补 0.x carve-out"}
+{"file": ".trellis/spec/backend/venue-lending.md", "reason": "LendingBalanceFacet/LendingRiskFacet/riskRatio 语义；这些 facet 的可选数值字段在改型范围内，缺失保持 undefined 不写空串"}

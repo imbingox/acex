@@ -15,6 +15,7 @@ import type {
   PrivateSubscriptionState,
 } from "../client/context.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
+import { toCanonical } from "../internal/decimal.ts";
 import { matchesAccountFilter } from "../internal/filters.ts";
 import type {
   AccountDataStatus,
@@ -54,6 +55,10 @@ function getBigNumber(
   fallback: BigNumber,
 ): BigNumber {
   return value === undefined ? fallback : new BigNumber(value);
+}
+
+function isZeroDecimal(value: string): boolean {
+  return new BigNumber(value).isZero();
 }
 
 export class AccountManagerImpl
@@ -322,7 +327,7 @@ export class AccountManagerImpl
         positions.get(key),
       );
 
-      if (nextPosition.size.isZero()) {
+      if (isZeroDecimal(nextPosition.size)) {
         positions.delete(key);
       } else {
         positions.set(key, nextPosition);
@@ -461,7 +466,7 @@ export class AccountManagerImpl
     );
     const positions = bootstrap.positions
       .map((position) => this.createPosition(accountId, venue, position))
-      .filter((position) => !position.size.isZero());
+      .filter((position) => !isZeroDecimal(position.size));
     const risk = bootstrap.risk
       ? this.createRisk(accountId, venue, bootstrap.risk)
       : undefined;
@@ -499,9 +504,12 @@ export class AccountManagerImpl
     input: RawBalanceUpdate,
     previous?: BalanceSnapshot,
   ): BalanceSnapshot {
-    const previousFree = previous?.free ?? new BigNumber(0);
-    const previousUsed = previous?.used ?? new BigNumber(0);
-    const previousTotal = previous?.total ?? previousFree.plus(previousUsed);
+    const previousFree = new BigNumber(previous?.free ?? 0);
+    const previousUsed = new BigNumber(previous?.used ?? 0);
+    const previousTotal =
+      previous?.total === undefined
+        ? previousFree.plus(previousUsed)
+        : new BigNumber(previous.total);
     const free = getBigNumber(input.free, previousFree);
     const total = getBigNumber(input.total, previousTotal);
     const used =
@@ -515,27 +523,27 @@ export class AccountManagerImpl
       accountId,
       venue,
       asset: input.asset,
-      free,
-      used,
-      total,
+      free: toCanonical(free),
+      used: toCanonical(used),
+      total: toCanonical(total),
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       seq: (previous?.seq ?? 0) + 1,
       lending: input.lending
         ? {
-            supplied: new BigNumber(input.lending.supplied),
-            borrowed: new BigNumber(input.lending.borrowed),
-            interest: new BigNumber(input.lending.interest),
-            netAsset: new BigNumber(input.lending.netAsset),
+            supplied: toCanonical(input.lending.supplied),
+            borrowed: toCanonical(input.lending.borrowed),
+            interest: toCanonical(input.lending.interest),
+            netAsset: toCanonical(input.lending.netAsset),
             supplyAPY:
               input.lending.supplyAPY === undefined
                 ? undefined
-                : new BigNumber(input.lending.supplyAPY),
+                : toCanonical(input.lending.supplyAPY),
             borrowAPY:
               input.lending.borrowAPY === undefined
                 ? undefined
-                : new BigNumber(input.lending.borrowAPY),
+                : toCanonical(input.lending.borrowAPY),
           }
         : previous?.lending,
     };
@@ -552,27 +560,27 @@ export class AccountManagerImpl
       venue,
       symbol: input.symbol,
       side: input.side,
-      size: new BigNumber(input.size),
+      size: toCanonical(input.size),
       entryPrice:
         input.entryPrice === undefined
           ? previous?.entryPrice
-          : new BigNumber(input.entryPrice),
+          : toCanonical(input.entryPrice),
       markPrice:
         input.markPrice === undefined
           ? previous?.markPrice
-          : new BigNumber(input.markPrice),
+          : toCanonical(input.markPrice),
       unrealizedPnl:
         input.unrealizedPnl === undefined
           ? previous?.unrealizedPnl
-          : new BigNumber(input.unrealizedPnl),
+          : toCanonical(input.unrealizedPnl),
       leverage:
         input.leverage === undefined
           ? previous?.leverage
-          : new BigNumber(input.leverage),
+          : toCanonical(input.leverage),
       liquidationPrice:
         input.liquidationPrice === undefined
           ? previous?.liquidationPrice
-          : new BigNumber(input.liquidationPrice),
+          : toCanonical(input.liquidationPrice),
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
@@ -592,27 +600,27 @@ export class AccountManagerImpl
       netEquity:
         input.netEquity === undefined
           ? previous?.netEquity
-          : new BigNumber(input.netEquity),
+          : toCanonical(input.netEquity),
       riskEquity:
         input.riskEquity === undefined
           ? previous?.riskEquity
-          : new BigNumber(input.riskEquity),
+          : toCanonical(input.riskEquity),
       riskRatio:
         input.riskRatio === undefined
           ? previous?.riskRatio
-          : new BigNumber(input.riskRatio),
+          : toCanonical(input.riskRatio),
       riskLeverage:
         input.riskLeverage === undefined
           ? previous?.riskLeverage
-          : new BigNumber(input.riskLeverage),
+          : toCanonical(input.riskLeverage),
       initialMargin:
         input.initialMargin === undefined
           ? previous?.initialMargin
-          : new BigNumber(input.initialMargin),
+          : toCanonical(input.initialMargin),
       maintenanceMargin:
         input.maintenanceMargin === undefined
           ? previous?.maintenanceMargin
-          : new BigNumber(input.maintenanceMargin),
+          : toCanonical(input.maintenanceMargin),
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
@@ -622,27 +630,27 @@ export class AccountManagerImpl
             marginLevel:
               input.lending.marginLevel === undefined
                 ? undefined
-                : new BigNumber(input.lending.marginLevel),
+                : toCanonical(input.lending.marginLevel),
             healthFactor:
               input.lending.healthFactor === undefined
                 ? undefined
-                : new BigNumber(input.lending.healthFactor),
+                : toCanonical(input.lending.healthFactor),
             ltv:
               input.lending.ltv === undefined
                 ? undefined
-                : new BigNumber(input.lending.ltv),
+                : toCanonical(input.lending.ltv),
             liquidationThreshold:
               input.lending.liquidationThreshold === undefined
                 ? undefined
-                : new BigNumber(input.lending.liquidationThreshold),
+                : toCanonical(input.lending.liquidationThreshold),
             totalCollateralUSD:
               input.lending.totalCollateralUSD === undefined
                 ? undefined
-                : new BigNumber(input.lending.totalCollateralUSD),
+                : toCanonical(input.lending.totalCollateralUSD),
             totalDebtUSD:
               input.lending.totalDebtUSD === undefined
                 ? undefined
-                : new BigNumber(input.lending.totalDebtUSD),
+                : toCanonical(input.lending.totalDebtUSD),
           }
         : previous?.lending,
     };

@@ -76,9 +76,9 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
       orderId: "1001",
     }),
   ).toMatchObject({
-    price: new BigNumber("100500.00"),
-    amount: new BigNumber("0.020"),
-    filled: new BigNumber("0.005"),
+    price: new BigNumber("100500.00").toFixed(),
+    amount: new BigNumber("0.020").toFixed(),
+    filled: new BigNumber("0.005").toFixed(),
   });
   expect(client.order.getOpenOrders("main-binance")).toHaveLength(1);
 
@@ -108,8 +108,8 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
     symbol: "BTC/USDT:USDT",
     snapshot: {
       status: "partially_filled",
-      filled: new BigNumber("0.010"),
-      avgFillPrice: new BigNumber("100450.00"),
+      filled: new BigNumber("0.010").toFixed(),
+      avgFillPrice: new BigNumber("100450.00").toFixed(),
     },
   });
 
@@ -119,8 +119,8 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
       clientOrderId: "cid-1001",
     }),
   ).toMatchObject({
-    filled: new BigNumber("0.010"),
-    remaining: new BigNumber("0.010"),
+    filled: new BigNumber("0.010").toFixed(),
+    remaining: new BigNumber("0.010").toFixed(),
   });
 
   await iterator.return?.();
@@ -215,10 +215,10 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
     side: "buy",
     type: "LIMIT",
     status: "open",
-    price: new BigNumber("101000.00"),
-    amount: new BigNumber("0.010"),
-    filled: new BigNumber("0"),
-    remaining: new BigNumber("0.010"),
+    price: new BigNumber("101000.00").toFixed(),
+    amount: new BigNumber("0.010").toFixed(),
+    filled: new BigNumber("0").toFixed(),
+    remaining: new BigNumber("0.010").toFixed(),
   });
   expect(
     client.order.getOrder({
@@ -227,7 +227,7 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
     }),
   ).toMatchObject({
     clientOrderId: "cid-2001",
-    remaining: new BigNumber("0.010"),
+    remaining: new BigNumber("0.010").toFixed(),
   });
 
   const request = requests.find(
@@ -323,7 +323,7 @@ test("cancelOrder accepts clientOrderId and updates the cached snapshot", async 
     clientOrderId: "cid-1001",
     symbol: "BTC/USDT:USDT",
     status: "canceled",
-    filled: new BigNumber("0.005"),
+    filled: new BigNumber("0.005").toFixed(),
   });
   expect(
     client.order.getOrder({

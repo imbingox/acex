@@ -84,8 +84,8 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     settle: "USDT",
     linear: true,
     contract: true,
-    contractSize: new BigNumber("1"),
-    minNotional: new BigNumber("5"),
+    contractSize: new BigNumber("1").toFixed(),
+    minNotional: new BigNumber("5").toFixed(),
   });
   expect(client.market.getMarkets("BTC/USDT:USDT")).toEqual([btcUsdtSwap]);
 
@@ -93,7 +93,7 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     type: "swap",
     settle: "BTC",
     inverse: true,
-    contractSize: new BigNumber("100"),
+    contractSize: new BigNumber("100").toFixed(),
   });
 
   expect(
@@ -150,6 +150,25 @@ test("normalizeOrderInput reports min-notional rejection after normalization", a
     adjusted: true,
     accepted: false,
     rejectReason: "notional_below_min",
+  });
+});
+
+test("normalizeOrderInput rejects non-finite input without throwing", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  await client.market.loadMarkets();
+
+  expect(
+    client.market.normalizeOrderInput({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      price: "NaN",
+      amount: "0.01",
+    }),
+  ).toMatchObject({
+    accepted: false,
+    rejectReason: "price_not_positive",
   });
 });
 
@@ -230,8 +249,8 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
 
   expect(book).toMatchObject({
     symbol: "BTC/USDT:USDT",
-    bidPrice: new BigNumber("102000.10"),
-    askPrice: new BigNumber("102000.20"),
+    bidPrice: new BigNumber("102000.10").toFixed(),
+    askPrice: new BigNumber("102000.20").toFixed(),
     version: 1,
     status: {
       activity: "active",
@@ -248,7 +267,7 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   });
 
   const event = await nextEvent(iterator);
-  expect(event.snapshot.bidSize).toEqual(new BigNumber("1.500"));
+  expect(event.snapshot.bidSize).toEqual(new BigNumber("1.500").toFixed());
 
   await client.market.unsubscribeL1Book({
     venue: "binance",
@@ -265,6 +284,52 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   });
 
   await iterator.return?.();
+});
+
+test("l1 book snapshots canonicalize decimal string output", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1StaleAfterMs: 50,
+    },
+  });
+
+  await client.start();
+  const subscribePromise = client.market.subscribeL1Book({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
+  socket.emitJson({
+    s: "BTCUSDT",
+    b: "1e-7",
+    B: "0.1234567890123456789000",
+    a: "1e21",
+    A: "-0.0100",
+    T: 1710000000000,
+  });
+
+  await subscribePromise;
+
+  expect(
+    client.market.getL1Book({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    bidPrice: "0.0000001",
+    bidSize: "0.1234567890123456789",
+    askPrice: "1000000000000000000000",
+    askSize: "-0.01",
+  });
+
+  await client.market.unsubscribeL1Book({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
 });
 
 test("funding rate subscribe emits standardized binance mark price updates", async () => {
@@ -318,9 +383,9 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
 
   expect(fundingRate).toMatchObject({
     symbol: "BTC/USDT:USDT",
-    fundingRate: new BigNumber("0.00010000"),
-    markPrice: new BigNumber("102100.12345678"),
-    indexPrice: new BigNumber("102000.00000000"),
+    fundingRate: new BigNumber("0.00010000").toFixed(),
+    markPrice: new BigNumber("102100.12345678").toFixed(),
+    indexPrice: new BigNumber("102000.00000000").toFixed(),
     nextFundingTime: 1710028800000,
     exchangeTs: 1710000000000,
     version: 1,
@@ -339,7 +404,9 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
   });
 
   const event = await nextEvent(iterator);
-  expect(event.snapshot.fundingRate).toEqual(new BigNumber("0.00010000"));
+  expect(event.snapshot.fundingRate).toEqual(
+    new BigNumber("0.00010000").toFixed(),
+  );
 
   await client.market.unsubscribeFundingRate({
     venue: "binance",
@@ -400,7 +467,7 @@ test("binance l1 multiplexes multiple symbols onto one websocket", async () => {
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("102000.10"),
+    bidPrice: new BigNumber("102000.10").toFixed(),
     version: 1,
   });
   expect(
@@ -409,7 +476,7 @@ test("binance l1 multiplexes multiple symbols onto one websocket", async () => {
       symbol: "ETH/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("3000.10"),
+    bidPrice: new BigNumber("3000.10").toFixed(),
     version: 1,
   });
 });
@@ -462,7 +529,7 @@ test("binance l1 unsubscribe removes one logical stream and keeps others active"
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("102000.10"),
+    bidPrice: new BigNumber("102000.10").toFixed(),
     version: 1,
     status: {
       activity: "inactive",
@@ -474,7 +541,7 @@ test("binance l1 unsubscribe removes one logical stream and keeps others active"
       symbol: "ETH/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("3001.10"),
+    bidPrice: new BigNumber("3001.10").toFixed(),
     version: 2,
     status: {
       activity: "active",
@@ -533,7 +600,7 @@ test("binance l1 replay active subscriptions after reconnect", async () => {
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("102100.10"),
+    bidPrice: new BigNumber("102100.10").toFixed(),
     version: 2,
   });
   expect(
@@ -542,7 +609,7 @@ test("binance l1 replay active subscriptions after reconnect", async () => {
       symbol: "ETH/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("3001.10"),
+    bidPrice: new BigNumber("3001.10").toFixed(),
     version: 2,
   });
 });
@@ -630,7 +697,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    fundingRate: new BigNumber("0.00020000"),
+    fundingRate: new BigNumber("0.00020000").toFixed(),
     version: 2,
     status: {
       freshness: "fresh",
@@ -1042,8 +1109,8 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("101500.10"),
-    askPrice: new BigNumber("101500.20"),
+    bidPrice: new BigNumber("101500.10").toFixed(),
+    askPrice: new BigNumber("101500.20").toFixed(),
     version: 2,
   });
   expect(
@@ -1142,7 +1209,7 @@ test("market all and status streams expose public event filtering", async () => 
     venue: "binance",
     symbol: "BTC/USDT:USDT",
     snapshot: {
-      bidPrice: new BigNumber("102000.10"),
+      bidPrice: new BigNumber("102000.10").toFixed(),
       version: 1,
     },
   });

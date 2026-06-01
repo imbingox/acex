@@ -30,7 +30,7 @@ const book = client.market.getL1Book({
   symbol: "BTC/USDT:USDT",
 });
 const books = client.market.getL1Books("BTC/USDT:USDT");
-console.log(`bid=${book?.bidPrice.toFixed()} ask=${book?.askPrice.toFixed()}`);
+console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
 console.log(`venues=${books.length}`);
 console.log(`book freshness=${book?.status.freshness}`);
 
@@ -44,14 +44,14 @@ const funding = client.market.getFundingRate({
   symbol: "BTC/USDT:USDT",
 });
 const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
-console.log(`funding=${funding?.fundingRate.toFixed()}`);
+console.log(`funding=${funding?.fundingRate}`);
 console.log(`funding venues=${fundingRates.length}`);
 
 for await (const event of client.market.events.l1BookUpdates({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 })) {
-  console.log(event.snapshot.bidPrice.toFixed());
+  console.log(event.snapshot.bidPrice);
   break;
 }
 
@@ -113,11 +113,11 @@ const juplendRisk = client.account.getRiskSnapshot("jup-loop-a");
 const juplendBalances = client.account.getBalances("jup-loop-a");
 
 for (const balance of juplendBalances) {
-  console.log(balance.asset, balance.lending?.netAsset.toFixed());
+  console.log(balance.asset, balance.lending?.netAsset);
 }
 console.log({
-  binanceRiskRatio: binanceRisk?.riskRatio?.toFixed(),
-  juplendRiskRatio: juplendRisk?.riskRatio?.toFixed(),
+  binanceRiskRatio: binanceRisk?.riskRatio,
+  juplendRiskRatio: juplendRisk?.riskRatio,
 });
 
 await client.stop();
@@ -141,7 +141,7 @@ console.log(juplend.order.reason); // "read_only"
 const capabilities = client.listVenueCapabilities();
 ```
 
-价格、数量等输出字段统一是 `BigNumber`；`createOrder()` 的 `price` / `amount` 输入仍接受 decimal string。详见手册 [§3 核心概念](./docs/api.md#3-核心概念)。
+价格、数量等公共输出字段统一是 canonical decimal string（无科学计数法、不补尾零）；输入侧保持宽进严出，`createOrder()` 的 `price` / `amount` 是 decimal string，`DecimalInput` 仍接受 string / number / `BigNumber`。如需运算，使用 SDK re-export 的 `BigNumber`：`new BigNumber(field)`。详见手册 [§3 核心概念](./docs/api.md#3-核心概念)。
 
 ## 核心能力
 

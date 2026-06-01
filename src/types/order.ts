@@ -1,4 +1,3 @@
-import type BigNumber from "bignumber.js";
 import type { PositionSide } from "./account.ts";
 import type {
   PrivateRuntimeReason,
@@ -102,14 +101,14 @@ export interface OrderSnapshot {
   side: OrderSide;
   type: string;
   status: OrderStatus;
-  price?: BigNumber;
-  triggerPrice?: BigNumber;
-  amount: BigNumber;
-  filled: BigNumber;
-  remaining?: BigNumber;
+  price?: string;
+  triggerPrice?: string;
+  amount: string;
+  filled: string;
+  remaining?: string;
   reduceOnly?: boolean;
   positionSide?: PositionSide;
-  avgFillPrice?: BigNumber;
+  avgFillPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;

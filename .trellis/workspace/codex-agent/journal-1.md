@@ -544,3 +544,38 @@ Added top-level venue capability queries, moved capability truth closer to adapt
 ### Next Steps
 
 - None - task complete
+
+
+## Session 16: 公共数值契约：对外 BigNumber 改 canonical decimal string
+
+**Date**: 2026-06-01
+**Task**: 公共数值契约：对外 BigNumber 改 canonical decimal string
+**Branch**: `feat/public-decimal-string-contract`
+
+### Summary
+
+将 9 个公共输出类型的数值字段由 BigNumber 改为 canonical 十进制 string，新增 src/internal/decimal.ts 的 toCanonical 统一出口、alias-safe 静态守卫测试；输入侧 DecimalInput 不变（宽进严出）。发布 bump=minor 并给 release-publishing spec 补 0.x carve-out。codex 分三阶段实现（核心 src→测试/脚本→文档/发布），Claude 审核规划并逐阶段验证（含发现 type-check≠测试 worklist、补全 PositionSnapshot.size 内部消费点）。PR review 收紧：toCanonical 对非有限值抛 RangeError 而非吐 NaN/Infinity sentinel，normalizeOrderInput 保留优雅拒绝。lint/type-check/test 全绿（85 pass），PR #34。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `adc9274` | (see git log) |
+| `eb9a1a2` | (see git log) |
+| `6219bee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

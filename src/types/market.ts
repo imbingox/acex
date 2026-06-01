@@ -15,13 +15,13 @@ export interface MarketDefinition {
   contract: boolean;
   linear?: boolean;
   inverse?: boolean;
-  contractSize?: BigNumber;
+  contractSize?: string;
   pricePrecision: number;
   amountPrecision: number;
-  priceStep: BigNumber;
-  amountStep: BigNumber;
-  minAmount?: BigNumber;
-  minNotional?: BigNumber;
+  priceStep: string;
+  amountStep: string;
+  minAmount?: string;
+  minNotional?: string;
   expiry?: number;
   raw: Record<string, unknown>;
 }
@@ -92,10 +92,10 @@ export interface MarketEventFilter {
 export interface L1Book {
   venue: Venue;
   symbol: string;
-  bidPrice: BigNumber;
-  bidSize: BigNumber;
-  askPrice: BigNumber;
-  askSize: BigNumber;
+  bidPrice: string;
+  bidSize: string;
+  askPrice: string;
+  askSize: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -106,10 +106,10 @@ export interface L1Book {
 export interface FundingRateSnapshot {
   venue: Venue;
   symbol: string;
-  fundingRate: BigNumber;
+  fundingRate: string;
   nextFundingTime?: number;
-  markPrice?: BigNumber;
-  indexPrice?: BigNumber;
+  markPrice?: string;
+  indexPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;

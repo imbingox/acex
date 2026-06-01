@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁基线；审核 lint/type-check/test、一致性与测试断言完整性（含 tests/integration ~131 处 string 化）"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核对类型改型无宽化/循环引用、显式返回类型；静态守卫断言 src/types 无非法 bignumber.js 引用"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "核对 toCanonical 落点与层边界、src/internal 只依赖 src/types、src/types 仅契约"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "核对 changeset 存在、bump=minor、0.x carve-out 已补、summary 写破坏性 + 迁移姿势"}

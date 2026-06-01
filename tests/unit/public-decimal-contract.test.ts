@@ -206,6 +206,15 @@ test("toCanonical emits plain decimal strings without trailing zeros", () => {
   expect(toCanonical("0.1234567890123456789000")).toBe("0.1234567890123456789");
 });
 
+test("toCanonical throws on non-finite input instead of emitting sentinels", () => {
+  // These construct without throwing (only un-parseable strings throw in the
+  // BigNumber ctor), so they exercise toCanonical's own finiteness guard.
+  expect(() => toCanonical("NaN")).toThrow(/non-finite/);
+  expect(() => toCanonical(Number.NaN)).toThrow(/non-finite/);
+  expect(() => toCanonical(Number.POSITIVE_INFINITY)).toThrow(/non-finite/);
+  expect(() => toCanonical(Number.NEGATIVE_INFINITY)).toThrow(/non-finite/);
+});
+
 test("root entrypoint keeps the BigNumber utility re-export", async () => {
   const sourceText = await readFile(INDEX_FILE, "utf8");
   const sourceFile = ts.createSourceFile(

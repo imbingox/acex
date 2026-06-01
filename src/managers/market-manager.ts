@@ -272,11 +272,17 @@ export class MarketManagerImpl
     const price = floorToStep(rawPrice, priceStep);
     const amount = floorToStep(rawAmount, amountStep);
 
+    // normalizeOrderInput rejects non-finite input gracefully (see the
+    // isFinite checks below), so its echoed numeric fields fall back to the
+    // raw string instead of throwing the way toCanonical now does.
+    const echoDecimal = (value: BigNumber): string =>
+      value.isFinite() ? toCanonical(value) : value.toString();
+
     const normalized: NormalizedOrderInput = {
-      price: toCanonical(price),
-      amount: toCanonical(amount),
-      rawPrice: toCanonical(rawPrice),
-      rawAmount: toCanonical(rawAmount),
+      price: echoDecimal(price),
+      amount: echoDecimal(amount),
+      rawPrice: echoDecimal(rawPrice),
+      rawAmount: echoDecimal(rawAmount),
       adjusted: !price.isEqualTo(rawPrice) || !amount.isEqualTo(rawAmount),
       accepted: true,
       priceStep: market.priceStep,

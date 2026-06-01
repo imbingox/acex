@@ -153,6 +153,25 @@ test("normalizeOrderInput reports min-notional rejection after normalization", a
   });
 });
 
+test("normalizeOrderInput rejects non-finite input without throwing", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  await client.market.loadMarkets();
+
+  expect(
+    client.market.normalizeOrderInput({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      price: "NaN",
+      amount: "0.01",
+    }),
+  ).toMatchObject({
+    accepted: false,
+    rejectReason: "price_not_positive",
+  });
+});
+
 test("market catalog load failure emits an adapter error and wrapped AcexError", async () => {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,

@@ -4,5 +4,8 @@
   "initialVersions": {
     "@imbingox/acex": "0.3.0"
   },
-  "changesets": ["market-ws-connection-multiplexing"]
+  "changesets": [
+    "market-ws-connection-multiplexing",
+    "public-decimal-string-contract"
+  ]
 }

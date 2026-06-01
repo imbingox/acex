@@ -10,6 +10,7 @@ import type {
 } from "../client/context.ts";
 import { AcexError } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
+import { toCanonical } from "../internal/decimal.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
 import type {
   CancelAllOrdersInput,
@@ -546,22 +547,20 @@ export class OrderManagerImpl
       type: input.type,
       status: input.status,
       price:
-        input.price === undefined
-          ? previous?.price
-          : new BigNumber(input.price),
+        input.price === undefined ? previous?.price : toCanonical(input.price),
       triggerPrice:
         input.triggerPrice === undefined
           ? previous?.triggerPrice
-          : new BigNumber(input.triggerPrice),
-      amount,
-      filled,
-      remaining,
+          : toCanonical(input.triggerPrice),
+      amount: toCanonical(amount),
+      filled: toCanonical(filled),
+      remaining: toCanonical(remaining),
       reduceOnly: input.reduceOnly ?? previous?.reduceOnly,
       positionSide: input.positionSide ?? previous?.positionSide,
       avgFillPrice:
         input.avgFillPrice === undefined
           ? previous?.avgFillPrice
-          : new BigNumber(input.avgFillPrice),
+          : toCanonical(input.avgFillPrice),
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,

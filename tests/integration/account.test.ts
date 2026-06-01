@@ -88,25 +88,25 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   expect(snapshot).toBeDefined();
   expect(usdt).toMatchObject({
     asset: "USDT",
-    free: new BigNumber("1000.25"),
-    used: new BigNumber("250.25"),
-    total: new BigNumber("1250.50"),
+    free: new BigNumber("1000.25").toFixed(),
+    used: new BigNumber("250.25").toFixed(),
+    total: new BigNumber("1250.50").toFixed(),
   });
   expect(position).toMatchObject({
     symbol: "BTC/USDT:USDT",
     side: "net",
-    size: new BigNumber("0.010"),
-    entryPrice: new BigNumber("100000.10"),
-    markPrice: new BigNumber("101000.20"),
-    unrealizedPnl: new BigNumber("10.50"),
+    size: new BigNumber("0.010").toFixed(),
+    entryPrice: new BigNumber("100000.10").toFixed(),
+    markPrice: new BigNumber("101000.20").toFixed(),
+    unrealizedPnl: new BigNumber("10.50").toFixed(),
   });
   expect(risk).toMatchObject({
-    netEquity: new BigNumber("1300.50"),
-    riskEquity: new BigNumber("1400.75"),
-    riskRatio: new BigNumber(1).dividedBy("31.0"),
-    riskLeverage: new BigNumber("1010.002").dividedBy("1400.75"),
-    initialMargin: new BigNumber("120.10"),
-    maintenanceMargin: new BigNumber("45.20"),
+    netEquity: new BigNumber("1300.50").toFixed(),
+    riskEquity: new BigNumber("1400.75").toFixed(),
+    riskRatio: new BigNumber(1).dividedBy("31.0").toFixed(),
+    riskLeverage: new BigNumber("1010.002").dividedBy("1400.75").toFixed(),
+    initialMargin: new BigNumber("120.10").toFixed(),
+    maintenanceMargin: new BigNumber("45.20").toFixed(),
   });
   expect(status).toMatchObject({
     activity: "active",
@@ -157,22 +157,22 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     type: "balance.updated",
     asset: "USDT",
     snapshot: {
-      free: new BigNumber("1050.25"),
-      used: new BigNumber("250.25"),
-      total: new BigNumber("1300.50"),
+      free: new BigNumber("1050.25").toFixed(),
+      used: new BigNumber("250.25").toFixed(),
+      total: new BigNumber("1300.50").toFixed(),
     },
   });
   expect(await nextEvent(iterator)).toMatchObject({
     type: "position.updated",
     symbol: "BTC/USDT:USDT",
     snapshot: {
-      size: new BigNumber("0.020"),
-      entryPrice: new BigNumber("100100.10"),
-      unrealizedPnl: new BigNumber("25.50"),
+      size: new BigNumber("0.020").toFixed(),
+      entryPrice: new BigNumber("100100.10").toFixed(),
+      unrealizedPnl: new BigNumber("25.50").toFixed(),
     },
   });
   expect(client.account.getBalance("main-binance", "USDT")).toMatchObject({
-    total: new BigNumber("1300.50"),
+    total: new BigNumber("1300.50").toFixed(),
   });
   expect(
     client.account.getPosition({
@@ -180,7 +180,7 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    size: new BigNumber("0.020"),
+    size: new BigNumber("0.020").toFixed(),
   });
 
   socket.disconnect();
@@ -297,28 +297,28 @@ test("Binance account polling refreshes risk and mark-to-market positions", asyn
     type: "position.updated",
     symbol: "BTC/USDT:USDT",
     snapshot: {
-      markPrice: new BigNumber("120000.00"),
-      unrealizedPnl: new BigNumber("200.00"),
-      liquidationPrice: new BigNumber("85000.00"),
+      markPrice: new BigNumber("120000.00").toFixed(),
+      unrealizedPnl: new BigNumber("200.00").toFixed(),
+      liquidationPrice: new BigNumber("85000.00").toFixed(),
     },
   });
   const secondPollEvent = await nextEvent(iterator, 200);
   expect(secondPollEvent).toMatchObject({
     type: "risk.updated",
     snapshot: {
-      netEquity: new BigNumber("1500.00"),
-      riskEquity: new BigNumber("1600.00"),
-      riskRatio: new BigNumber(1).dividedBy("20.0"),
-      riskLeverage: new BigNumber("1200.00").dividedBy("1600.00"),
-      initialMargin: new BigNumber("150.00"),
-      maintenanceMargin: new BigNumber("60.00"),
+      netEquity: new BigNumber("1500.00").toFixed(),
+      riskEquity: new BigNumber("1600.00").toFixed(),
+      riskRatio: new BigNumber(1).dividedBy("20.0").toFixed(),
+      riskLeverage: new BigNumber("1200.00").dividedBy("1600.00").toFixed(),
+      initialMargin: new BigNumber("150.00").toFixed(),
+      maintenanceMargin: new BigNumber("60.00").toFixed(),
     },
   });
 
   expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
-    netEquity: new BigNumber("1500.00"),
-    riskEquity: new BigNumber("1600.00"),
-    riskLeverage: new BigNumber("0.75"),
+    netEquity: new BigNumber("1500.00").toFixed(),
+    riskEquity: new BigNumber("1600.00").toFixed(),
+    riskLeverage: new BigNumber("0.75").toFixed(),
   });
   expect(
     client.account.getPosition({
@@ -326,8 +326,8 @@ test("Binance account polling refreshes risk and mark-to-market positions", asyn
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    markPrice: new BigNumber("120000.00"),
-    liquidationPrice: new BigNumber("85000.00"),
+    markPrice: new BigNumber("120000.00").toFixed(),
+    liquidationPrice: new BigNumber("85000.00").toFixed(),
   });
 
   await client.account.unsubscribeAccount({
@@ -440,13 +440,13 @@ test("Binance account polling does not mask websocket disconnect status", async 
   expect(await nextEvent(iterator, 200)).toMatchObject({
     type: "risk.updated",
     snapshot: {
-      netEquity: new BigNumber("1500.00"),
-      riskEquity: new BigNumber("1600.00"),
+      netEquity: new BigNumber("1500.00").toFixed(),
+      riskEquity: new BigNumber("1600.00").toFixed(),
     },
   });
   expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
-    netEquity: new BigNumber("1500.00"),
-    riskEquity: new BigNumber("1600.00"),
+    netEquity: new BigNumber("1500.00").toFixed(),
+    riskEquity: new BigNumber("1600.00").toFixed(),
   });
   expect(client.account.getAccountStatus("main-binance")).toMatchObject({
     ready: true,
@@ -704,37 +704,37 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
   expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "SOL")).toMatchObject({
     venue: "juplend",
     asset: "SOL",
-    total: new BigNumber("15"),
+    total: new BigNumber("15").toFixed(),
     lending: {
-      supplied: new BigNumber("15"),
-      borrowed: new BigNumber("0"),
-      netAsset: new BigNumber("15"),
-      supplyAPY: new BigNumber("0.0554"),
+      supplied: new BigNumber("15").toFixed(),
+      borrowed: new BigNumber("0").toFixed(),
+      netAsset: new BigNumber("15").toFixed(),
+      supplyAPY: new BigNumber("0.0554").toFixed(),
     },
   });
   expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "USDC")).toMatchObject({
     asset: "USDC",
-    total: new BigNumber("-300"),
+    total: new BigNumber("-300").toFixed(),
     lending: {
-      supplied: new BigNumber("0"),
-      borrowed: new BigNumber("300"),
-      netAsset: new BigNumber("-300"),
-      borrowAPY: new BigNumber("0.0513"),
+      supplied: new BigNumber("0").toFixed(),
+      borrowed: new BigNumber("300").toFixed(),
+      netAsset: new BigNumber("-300").toFixed(),
+      borrowAPY: new BigNumber("0.0513").toFixed(),
     },
   });
   const juplendRisk = client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID);
   expect(juplendRisk).toMatchObject({
-    riskRatio: new BigNumber("300").dividedBy("1275"),
-    netEquity: new BigNumber("1200"),
-    riskEquity: new BigNumber("975"),
+    riskRatio: new BigNumber("300").dividedBy("1275").toFixed(),
+    netEquity: new BigNumber("1200").toFixed(),
+    riskEquity: new BigNumber("975").toFixed(),
     lending: {
-      ltv: new BigNumber("0.2"),
-      liquidationThreshold: new BigNumber("0.85"),
-      totalCollateralUSD: new BigNumber("1500"),
-      totalDebtUSD: new BigNumber("300"),
+      ltv: new BigNumber("0.2").toFixed(),
+      liquidationThreshold: new BigNumber("0.85").toFixed(),
+      totalCollateralUSD: new BigNumber("1500").toFixed(),
+      totalDebtUSD: new BigNumber("300").toFixed(),
     },
   });
-  expect(juplendRisk?.lending?.healthFactor?.toFixed()).toBe(
+  expect(juplendRisk?.lending?.healthFactor).toBe(
     new BigNumber(1).dividedBy(juplendRisk?.riskRatio ?? 0).toFixed(),
   );
   expect(client.account.getAccountStatus(JUPLEND_ACCOUNT_ID)).toMatchObject({
@@ -798,28 +798,28 @@ test("Juplend account subscribe can filter one lending position", async () => {
   await client.account.subscribeAccount({ accountId });
 
   expect(client.account.getBalance(accountId, "SOL")).toMatchObject({
-    total: new BigNumber("10"),
+    total: new BigNumber("10").toFixed(),
     lending: {
-      supplied: new BigNumber("10"),
-      borrowed: new BigNumber("0"),
+      supplied: new BigNumber("10").toFixed(),
+      borrowed: new BigNumber("0").toFixed(),
     },
   });
   expect(client.account.getBalance(accountId, "USDC")).toMatchObject({
-    total: new BigNumber("-250"),
+    total: new BigNumber("-250").toFixed(),
     lending: {
-      supplied: new BigNumber("0"),
-      borrowed: new BigNumber("250"),
+      supplied: new BigNumber("0").toFixed(),
+      borrowed: new BigNumber("250").toFixed(),
     },
   });
   expect(client.account.getRiskSnapshot(accountId)).toMatchObject({
-    riskRatio: new BigNumber("250").dividedBy("850"),
-    netEquity: new BigNumber("750"),
-    riskEquity: new BigNumber("600"),
+    riskRatio: new BigNumber("250").dividedBy("850").toFixed(),
+    netEquity: new BigNumber("750").toFixed(),
+    riskEquity: new BigNumber("600").toFixed(),
     lending: {
-      ltv: new BigNumber("0.25"),
-      liquidationThreshold: new BigNumber("0.85"),
-      totalCollateralUSD: new BigNumber("1000"),
-      totalDebtUSD: new BigNumber("250"),
+      ltv: new BigNumber("0.25").toFixed(),
+      liquidationThreshold: new BigNumber("0.85").toFixed(),
+      totalCollateralUSD: new BigNumber("1000").toFixed(),
+      totalDebtUSD: new BigNumber("250").toFixed(),
     },
   });
 });
@@ -844,10 +844,10 @@ test("Juplend account subscribe can direct-read one position by vaultId and posi
   await client.account.subscribeAccount({ accountId });
 
   expect(client.account.getBalance(accountId, "SOL")).toMatchObject({
-    total: new BigNumber("10"),
+    total: new BigNumber("10").toFixed(),
   });
   expect(client.account.getBalance(accountId, "USDC")).toMatchObject({
-    total: new BigNumber("-250"),
+    total: new BigNumber("-250").toFixed(),
   });
   expect(requests.state.maxActivePositionRequests).toBe(0);
   expect(requests.state.directPositionRequests).toEqual([
@@ -924,21 +924,21 @@ test("Juplend account subscribe maps lend-read amounts on fixed 1e9 scale", asyn
   await client.account.subscribeAccount({ accountId });
 
   expect(client.account.getBalance(accountId, "JLP")).toMatchObject({
-    total: new BigNumber("5660693.627"),
+    total: new BigNumber("5660693.627").toFixed(),
     lending: {
-      supplied: new BigNumber("5660693.627"),
-      borrowed: new BigNumber("0"),
-      netAsset: new BigNumber("5660693.627"),
-      supplyAPY: new BigNumber("0"),
+      supplied: new BigNumber("5660693.627").toFixed(),
+      borrowed: new BigNumber("0").toFixed(),
+      netAsset: new BigNumber("5660693.627").toFixed(),
+      supplyAPY: new BigNumber("0").toFixed(),
     },
   });
   expect(client.account.getBalance(accountId, "JupUSD")).toMatchObject({
-    total: new BigNumber("-16271447.562893326"),
+    total: new BigNumber("-16271447.562893326").toFixed(),
     lending: {
-      supplied: new BigNumber("0"),
-      borrowed: new BigNumber("16271447.562893326"),
-      netAsset: new BigNumber("-16271447.562893326"),
-      borrowAPY: new BigNumber("0.0447"),
+      supplied: new BigNumber("0").toFixed(),
+      borrowed: new BigNumber("16271447.562893326").toFixed(),
+      netAsset: new BigNumber("-16271447.562893326").toFixed(),
+      borrowAPY: new BigNumber("0.0447").toFixed(),
     },
   });
 });
@@ -1148,20 +1148,20 @@ test("Juplend account subscribe falls back to lite vault metadata when Jup API f
   await client.account.subscribeAccount({ accountId: JUPLEND_ACCOUNT_ID });
 
   expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "SOL")).toMatchObject({
-    total: new BigNumber("15"),
+    total: new BigNumber("15").toFixed(),
   });
   expect(client.account.getBalance(JUPLEND_ACCOUNT_ID, "USDC")).toMatchObject({
-    total: new BigNumber("-300"),
+    total: new BigNumber("-300").toFixed(),
   });
   expect(client.account.getRiskSnapshot(JUPLEND_ACCOUNT_ID)).toMatchObject({
-    riskRatio: new BigNumber("300").dividedBy("1275"),
-    netEquity: new BigNumber("1200"),
-    riskEquity: new BigNumber("975"),
+    riskRatio: new BigNumber("300").dividedBy("1275").toFixed(),
+    netEquity: new BigNumber("1200").toFixed(),
+    riskEquity: new BigNumber("975").toFixed(),
     lending: {
-      ltv: new BigNumber("0.2"),
-      liquidationThreshold: new BigNumber("0.85"),
-      totalCollateralUSD: new BigNumber("1500"),
-      totalDebtUSD: new BigNumber("300"),
+      ltv: new BigNumber("0.2").toFixed(),
+      liquidationThreshold: new BigNumber("0.85").toFixed(),
+      totalCollateralUSD: new BigNumber("1500").toFixed(),
+      totalDebtUSD: new BigNumber("300").toFixed(),
     },
   });
   expect(

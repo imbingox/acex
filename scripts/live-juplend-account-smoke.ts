@@ -148,15 +148,15 @@ function summarizeSnapshot(
     balances: showAmounts
       ? balances.map((balance) => ({
           asset: balance.asset,
-          total: balance.total.toFixed(),
+          total: balance.total,
           lending: balance.lending
             ? {
-                supplied: balance.lending.supplied.toFixed(),
-                borrowed: balance.lending.borrowed.toFixed(),
-                interest: balance.lending.interest.toFixed(),
-                netAsset: balance.lending.netAsset.toFixed(),
-                supplyAPY: balance.lending.supplyAPY?.toFixed(),
-                borrowAPY: balance.lending.borrowAPY?.toFixed(),
+                supplied: balance.lending.supplied,
+                borrowed: balance.lending.borrowed,
+                interest: balance.lending.interest,
+                netAsset: balance.lending.netAsset,
+                supplyAPY: balance.lending.supplyAPY,
+                borrowAPY: balance.lending.borrowAPY,
               }
             : undefined,
           updatedAt: balance.updatedAt,
@@ -165,23 +165,23 @@ function summarizeSnapshot(
     risk: risk
       ? {
           hasRiskRatio: risk.riskRatio !== undefined,
-          riskRatio: showAmounts ? risk.riskRatio?.toFixed() : undefined,
-          netEquity: showAmounts ? risk.netEquity?.toFixed() : undefined,
-          riskEquity: showAmounts ? risk.riskEquity?.toFixed() : undefined,
+          riskRatio: showAmounts ? risk.riskRatio : undefined,
+          netEquity: showAmounts ? risk.netEquity : undefined,
+          riskEquity: showAmounts ? risk.riskEquity : undefined,
           lending: risk.lending
             ? {
                 healthFactor: showAmounts
-                  ? risk.lending.healthFactor?.toFixed()
+                  ? risk.lending.healthFactor
                   : undefined,
-                ltv: showAmounts ? risk.lending.ltv?.toFixed() : undefined,
+                ltv: showAmounts ? risk.lending.ltv : undefined,
                 liquidationThreshold: showAmounts
-                  ? risk.lending.liquidationThreshold?.toFixed()
+                  ? risk.lending.liquidationThreshold
                   : undefined,
                 totalCollateralUSD: showAmounts
-                  ? risk.lending.totalCollateralUSD?.toFixed()
+                  ? risk.lending.totalCollateralUSD
                   : undefined,
                 totalDebtUSD: showAmounts
-                  ? risk.lending.totalDebtUSD?.toFixed()
+                  ? risk.lending.totalDebtUSD
                   : undefined,
               }
             : undefined,

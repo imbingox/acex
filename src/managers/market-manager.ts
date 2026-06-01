@@ -16,6 +16,7 @@ import type {
 } from "../client/context.ts";
 import { AcexError } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
+import { toCanonical } from "../internal/decimal.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
 import type {
   FundingRateSnapshot,
@@ -98,10 +99,6 @@ function floorToStep(value: BigNumber, step: BigNumber): BigNumber {
     return value;
   }
   return value.dividedToIntegerBy(step).multipliedBy(step);
-}
-
-function normalizeDecimalInput(value: BigNumber): string {
-  return value.isFinite() ? value.toFixed() : value.toString();
 }
 
 export class MarketManagerImpl
@@ -262,20 +259,30 @@ export class MarketManagerImpl
     const market = this.resolveLoadedMarket(input);
     const rawPrice = new BigNumber(input.price);
     const rawAmount = new BigNumber(input.amount);
-    const price = floorToStep(rawPrice, market.priceStep);
-    const amount = floorToStep(rawAmount, market.amountStep);
+    const priceStep = new BigNumber(market.priceStep);
+    const amountStep = new BigNumber(market.amountStep);
+    const minAmount =
+      market.minAmount === undefined
+        ? undefined
+        : new BigNumber(market.minAmount);
+    const minNotional =
+      market.minNotional === undefined
+        ? undefined
+        : new BigNumber(market.minNotional);
+    const price = floorToStep(rawPrice, priceStep);
+    const amount = floorToStep(rawAmount, amountStep);
 
     const normalized: NormalizedOrderInput = {
-      price: normalizeDecimalInput(price),
-      amount: normalizeDecimalInput(amount),
-      rawPrice: normalizeDecimalInput(rawPrice),
-      rawAmount: normalizeDecimalInput(rawAmount),
+      price: toCanonical(price),
+      amount: toCanonical(amount),
+      rawPrice: toCanonical(rawPrice),
+      rawAmount: toCanonical(rawAmount),
       adjusted: !price.isEqualTo(rawPrice) || !amount.isEqualTo(rawAmount),
       accepted: true,
-      priceStep: market.priceStep.toFixed(),
-      amountStep: market.amountStep.toFixed(),
-      minAmount: market.minAmount?.toFixed(),
-      minNotional: market.minNotional?.toFixed(),
+      priceStep: market.priceStep,
+      amountStep: market.amountStep,
+      minAmount: market.minAmount,
+      minNotional: market.minNotional,
     };
 
     if (!price.isFinite() || price.isLessThanOrEqualTo(0)) {
@@ -294,7 +301,7 @@ export class MarketManagerImpl
       };
     }
 
-    if (market.minAmount && amount.isLessThan(market.minAmount)) {
+    if (minAmount && amount.isLessThan(minAmount)) {
       return {
         ...normalized,
         accepted: false,
@@ -302,9 +309,9 @@ export class MarketManagerImpl
       };
     }
 
-    if (market.minNotional) {
+    if (minNotional) {
       const notional = amount.multipliedBy(price);
-      if (notional.isLessThan(market.minNotional)) {
+      if (notional.isLessThan(minNotional)) {
         return {
           ...normalized,
           accepted: false,
@@ -774,10 +781,10 @@ export class MarketManagerImpl
     return {
       venue,
       symbol,
-      bidPrice: new BigNumber(input.bidPrice),
-      bidSize: new BigNumber(input.bidSize),
-      askPrice: new BigNumber(input.askPrice),
-      askSize: new BigNumber(input.askSize),
+      bidPrice: toCanonical(input.bidPrice),
+      bidSize: toCanonical(input.bidSize),
+      askPrice: toCanonical(input.askPrice),
+      askSize: toCanonical(input.askSize),
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
@@ -801,12 +808,10 @@ export class MarketManagerImpl
     return {
       venue,
       symbol,
-      fundingRate: new BigNumber(input.fundingRate),
+      fundingRate: toCanonical(input.fundingRate),
       nextFundingTime: input.nextFundingTime,
-      markPrice: input.markPrice ? new BigNumber(input.markPrice) : undefined,
-      indexPrice: input.indexPrice
-        ? new BigNumber(input.indexPrice)
-        : undefined,
+      markPrice: input.markPrice ? toCanonical(input.markPrice) : undefined,
+      indexPrice: input.indexPrice ? toCanonical(input.indexPrice) : undefined,
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,

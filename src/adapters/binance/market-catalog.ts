@@ -1,4 +1,4 @@
-import BigNumber from "bignumber.js";
+import { toCanonical } from "../../internal/decimal.ts";
 import type { MarketDefinition, MarketType } from "../../types/index.ts";
 
 type FetchLike = typeof fetch;
@@ -146,12 +146,12 @@ function normalizeSpotSymbol(
     contract: false,
     pricePrecision: precisionFromStep(priceStep),
     amountPrecision: precisionFromStep(amountStep),
-    priceStep: new BigNumber(priceStep),
-    amountStep: new BigNumber(amountStep),
+    priceStep: toCanonical(priceStep),
+    amountStep: toCanonical(amountStep),
     minAmount: lotSizeFilter?.minQty
-      ? new BigNumber(lotSizeFilter.minQty)
+      ? toCanonical(lotSizeFilter.minQty)
       : undefined,
-    minNotional: notionalValue ? new BigNumber(notionalValue) : undefined,
+    minNotional: notionalValue ? toCanonical(notionalValue) : undefined,
     raw: toRecord(symbol),
   };
 }
@@ -198,15 +198,15 @@ function normalizeDerivativesSymbol(
     contract: true,
     linear: family === "usdm",
     inverse: family === "coinm",
-    contractSize: contractSize ? new BigNumber(contractSize) : undefined,
+    contractSize: contractSize ? toCanonical(contractSize) : undefined,
     pricePrecision: precisionFromStep(priceStep),
     amountPrecision: precisionFromStep(amountStep),
-    priceStep: new BigNumber(priceStep),
-    amountStep: new BigNumber(amountStep),
+    priceStep: toCanonical(priceStep),
+    amountStep: toCanonical(amountStep),
     minAmount: lotSizeFilter?.minQty
-      ? new BigNumber(lotSizeFilter.minQty)
+      ? toCanonical(lotSizeFilter.minQty)
       : undefined,
-    minNotional: notionalValue ? new BigNumber(notionalValue) : undefined,
+    minNotional: notionalValue ? toCanonical(notionalValue) : undefined,
     expiry: type === "future" ? symbol.deliveryDate : undefined,
     raw: toRecord(symbol),
   };

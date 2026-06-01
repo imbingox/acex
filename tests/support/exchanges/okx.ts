@@ -1,4 +1,3 @@
-import BigNumber from "bignumber.js";
 import type {
   FundingRateStreamCallbacks,
   FundingRateStreamOptions,
@@ -9,6 +8,7 @@ import type {
   RawL1BookUpdate,
   StreamHandle,
 } from "../../../src/adapters/types.ts";
+import { toCanonical } from "../../../src/internal/decimal.ts";
 import type {
   MarketDefinition,
   Venue,
@@ -157,10 +157,10 @@ export function createFakeOkxSpotMarket(
     contract: false,
     pricePrecision: 2,
     amountPrecision: 6,
-    priceStep: new BigNumber("0.01"),
-    amountStep: new BigNumber("0.000001"),
-    minAmount: new BigNumber("0.00001"),
-    minNotional: new BigNumber("5"),
+    priceStep: toCanonical("0.01"),
+    amountStep: toCanonical("0.000001"),
+    minAmount: toCanonical("0.00001"),
+    minNotional: toCanonical("5"),
     raw: { source: "fake-okx" },
   };
 }
@@ -179,13 +179,13 @@ export function createFakeOkxSwapMarket(
     active: true,
     contract: true,
     linear: true,
-    contractSize: new BigNumber("1"),
+    contractSize: toCanonical("1"),
     pricePrecision: 1,
     amountPrecision: 3,
-    priceStep: new BigNumber("0.1"),
-    amountStep: new BigNumber("0.001"),
-    minAmount: new BigNumber("0.001"),
-    minNotional: new BigNumber("5"),
+    priceStep: toCanonical("0.1"),
+    amountStep: toCanonical("0.001"),
+    minAmount: toCanonical("0.001"),
+    minNotional: toCanonical("5"),
     raw: { source: "fake-okx" },
   };
 }

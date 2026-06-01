@@ -150,9 +150,9 @@ function summarizeSnapshot(
     balances: showAmounts
       ? balances.map((balance) => ({
           asset: balance.asset,
-          free: balance.free.toFixed(),
-          used: balance.used.toFixed(),
-          total: balance.total.toFixed(),
+          free: balance.free,
+          used: balance.used,
+          total: balance.total,
           exchangeTs: balance.exchangeTs,
           updatedAt: balance.updatedAt,
         }))
@@ -163,10 +163,10 @@ function summarizeSnapshot(
       ? positions.map((position) => ({
           symbol: position.symbol,
           side: position.side,
-          size: position.size.toFixed(),
-          entryPrice: position.entryPrice?.toFixed(),
-          markPrice: position.markPrice?.toFixed(),
-          unrealizedPnl: position.unrealizedPnl?.toFixed(),
+          size: position.size,
+          entryPrice: position.entryPrice,
+          markPrice: position.markPrice,
+          unrealizedPnl: position.unrealizedPnl,
           exchangeTs: position.exchangeTs,
           updatedAt: position.updatedAt,
         }))
@@ -179,16 +179,12 @@ function summarizeSnapshot(
           hasRiskLeverage: risk.riskLeverage !== undefined,
           hasInitialMargin: risk.initialMargin !== undefined,
           hasMaintenanceMargin: risk.maintenanceMargin !== undefined,
-          netEquity: showAmounts ? risk.netEquity?.toFixed() : undefined,
-          riskEquity: showAmounts ? risk.riskEquity?.toFixed() : undefined,
-          riskRatio: showAmounts ? risk.riskRatio?.toFixed() : undefined,
-          riskLeverage: showAmounts ? risk.riskLeverage?.toFixed() : undefined,
-          initialMargin: showAmounts
-            ? risk.initialMargin?.toFixed()
-            : undefined,
-          maintenanceMargin: showAmounts
-            ? risk.maintenanceMargin?.toFixed()
-            : undefined,
+          netEquity: showAmounts ? risk.netEquity : undefined,
+          riskEquity: showAmounts ? risk.riskEquity : undefined,
+          riskRatio: showAmounts ? risk.riskRatio : undefined,
+          riskLeverage: showAmounts ? risk.riskLeverage : undefined,
+          initialMargin: showAmounts ? risk.initialMargin : undefined,
+          maintenanceMargin: showAmounts ? risk.maintenanceMargin : undefined,
           exchangeTs: risk.exchangeTs,
           updatedAt: risk.updatedAt,
         }

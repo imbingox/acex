@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type BigNumber, createClient } from "../../index.ts";
+import { createClient } from "../../index.ts";
 import {
   BINANCE_USDM_WS_BASE_URL,
   installBinanceMarketInfra,
@@ -113,8 +113,8 @@ test("caller can observe l1 book keep changing for one minute", async () => {
     await subscribePromise;
 
     let eventCount = 0;
-    let firstBidPrice: BigNumber | undefined;
-    let lastBidPrice: BigNumber | undefined;
+    let firstBidPrice: string | undefined;
+    let lastBidPrice: string | undefined;
     let previousVersion = 0;
 
     while (eventCount < feed.totalTicks) {
@@ -145,7 +145,7 @@ test("caller can observe l1 book keep changing for one minute", async () => {
     expect(emittedTicks).toBe(feed.totalTicks);
     expect(eventCount).toBe(feed.totalTicks);
     expect(previousVersion).toBe(feed.totalTicks);
-    expect(firstBidPrice?.isEqualTo(lastBidPrice ?? 0)).toBe(false);
+    expect(firstBidPrice).not.toBe(lastBidPrice);
     expect(finalBook).toMatchObject({
       version: feed.totalTicks,
       bidPrice: lastBidPrice,

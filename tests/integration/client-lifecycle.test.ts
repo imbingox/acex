@@ -248,7 +248,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    bidPrice: new BigNumber("100002.10"),
+    bidPrice: new BigNumber("100002.10").toFixed(),
     status: {
       activity: "active",
       ready: true,
@@ -261,7 +261,7 @@ test("client stop keeps lifecycle and market health semantics observable", async
       symbol: "BTC/USDT:USDT",
     }),
   ).toMatchObject({
-    fundingRate: new BigNumber("0.00020000"),
+    fundingRate: new BigNumber("0.00020000").toFixed(),
     status: {
       activity: "active",
       ready: true,

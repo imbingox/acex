@@ -73,7 +73,6 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamReconnectMaxDelayMs: number;
   private readonly listenKeyKeepAliveMs: number;
   private readonly binanceRiskPollIntervalMs: number;
-  private readonly juplendPollIntervalMs?: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
   constructor(
@@ -102,7 +101,6 @@ export class PrivateSubscriptionCoordinator {
       options.binance?.riskPollIntervalMs,
       DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
     );
-    this.juplendPollIntervalMs = options.juplend?.pollIntervalMs;
   }
 
   async subscribeAccountFeed(accountId: string): Promise<void> {
@@ -115,7 +113,8 @@ export class PrivateSubscriptionCoordinator {
     }
 
     try {
-      if (record.venue === "juplend") {
+      const adapter = this.getAdapter(record.venue);
+      if (adapter.accountCapabilities.updates === "polling") {
         await this.bootstrapAccount(record, account);
         await this.ensureStream(record, account);
       } else {
@@ -233,7 +232,11 @@ export class PrivateSubscriptionCoordinator {
     this.stopAccountRefreshPolling(record);
 
     try {
-      if (record.venue === "juplend" && record.accountSubscribed) {
+      const adapter = this.getAdapter(record.venue);
+      if (
+        adapter.accountCapabilities.updates === "polling" &&
+        record.accountSubscribed
+      ) {
         await this.bootstrapAccount(record, account);
         await this.ensureStream(record, account);
       } else {
@@ -318,7 +321,7 @@ export class PrivateSubscriptionCoordinator {
 
   private ensureAccountRefreshPolling(record: PrivateSubscriptionRecord): void {
     if (
-      record.venue !== "binance" ||
+      typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
       !record.accountSubscribed ||
       record.accountRefreshTimer ||
       record.accountRefreshInFlight
@@ -339,7 +342,10 @@ export class PrivateSubscriptionCoordinator {
   }
 
   private scheduleAccountRefreshPoll(record: PrivateSubscriptionRecord): void {
-    if (record.venue !== "binance" || !record.accountSubscribed) {
+    if (
+      typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
+      !record.accountSubscribed
+    ) {
       return;
     }
 
@@ -348,7 +354,7 @@ export class PrivateSubscriptionCoordinator {
       record.accountRefreshTimer = undefined;
       if (
         generation !== record.accountRefreshGeneration ||
-        record.venue !== "binance" ||
+        typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
         !record.accountSubscribed
       ) {
         return;
@@ -374,7 +380,10 @@ export class PrivateSubscriptionCoordinator {
           }
 
           record.accountRefreshInFlight = undefined;
-          if (record.accountSubscribed && record.venue === "binance") {
+          if (
+            record.accountSubscribed &&
+            typeof this.getAdapter(record.venue).refreshAccount === "function"
+          ) {
             this.scheduleAccountRefreshPoll(record);
           }
         });
@@ -488,15 +497,15 @@ export class PrivateSubscriptionCoordinator {
     record: PrivateSubscriptionRecord,
     account: RegisteredAccountRecord,
   ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
     const credentials = account.credentials;
-    if (!credentials && record.venue !== "juplend") {
+    if (adapter.accountCapabilities.credentialsRequired && !credentials) {
       throw new AcexError(
         "CREDENTIALS_MISSING",
         `Account credentials are required for private subscriptions: ${account.accountId}`,
       );
     }
 
-    const adapter = this.getAdapter(record.venue);
     const stream = adapter.createPrivateStream(
       credentials ?? {},
       {
@@ -592,7 +601,6 @@ export class PrivateSubscriptionCoordinator {
         reconnectDelayMs: this.streamReconnectDelayMs,
         reconnectMaxDelayMs: this.streamReconnectMaxDelayMs,
         listenKeyKeepAliveMs: this.listenKeyKeepAliveMs,
-        juplendPollIntervalMs: this.juplendPollIntervalMs,
         now: () => this.context.now(),
       },
       { ...account.options, accountId: account.accountId },
@@ -664,7 +672,8 @@ export class PrivateSubscriptionCoordinator {
     account: RegisteredAccountRecord,
   ): Promise<void> {
     try {
-      const bootstrap = await this.getAdapter(record.venue).bootstrapAccount(
+      const adapter = this.getAdapter(record.venue);
+      const bootstrap = await adapter.bootstrapAccount(
         account.credentials ?? {},
         { ...account.options, accountId: account.accountId },
       );
@@ -700,7 +709,10 @@ export class PrivateSubscriptionCoordinator {
           ready: false,
           reason: transportReason(
             error,
-            record.venue === "juplend" ? "http_failed" : "auth_failed",
+            this.getAdapter(record.venue).accountCapabilities
+              .credentialsRequired
+              ? "auth_failed"
+              : "http_failed",
           ),
         },
       );

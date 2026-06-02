@@ -699,6 +699,7 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
     private readonly options: {
       readonly fetchFn?: FetchLike;
       readonly httpTimeoutMs?: number;
+      readonly pollIntervalMs?: number;
     } = {},
   ) {}
 
@@ -762,13 +763,13 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
   createPrivateStream(
     credentials: AccountCredentials,
     callbacks: PrivateStreamCallbacks,
-    options: PrivateStreamOptions,
+    _options: PrivateStreamOptions,
     accountOptions?: Record<string, unknown>,
   ): StreamHandle {
     let closed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const pollIntervalMs =
-      options.juplendPollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+      this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
     const poll = async (): Promise<void> => {
       try {

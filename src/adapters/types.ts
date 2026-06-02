@@ -210,7 +210,6 @@ export interface PrivateStreamOptions {
   reconnectDelayMs: number;
   reconnectMaxDelayMs: number;
   listenKeyKeepAliveMs: number;
-  juplendPollIntervalMs?: number;
   now?: () => number;
 }
 

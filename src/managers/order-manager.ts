@@ -102,7 +102,10 @@ export class OrderManagerImpl
   async subscribeOrders(input: SubscribeOrdersInput): Promise<void> {
     this.context.assertStarted();
     const account = this.context.getRegisteredAccount(input.accountId);
-    if (account.venue === "juplend") {
+    if (
+      this.context.getPrivateOrderCapabilities(account.venue)?.updates ===
+      "unsupported"
+    ) {
       throw this.createError(
         "VENUE_NOT_SUPPORTED",
         `Venue does not support private order subscriptions: ${account.venue}`,

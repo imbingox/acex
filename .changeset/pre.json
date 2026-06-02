@@ -6,6 +6,7 @@
   },
   "changesets": [
     "market-ws-connection-multiplexing",
-    "public-decimal-string-contract"
+    "public-decimal-string-contract",
+    "redact-transport-error-secrets"
   ]
 }

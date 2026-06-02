@@ -489,12 +489,24 @@ LISTEN_KEY_KEEPALIVE_RETRY_POLICY idempotent:true,  maxAttempts:3   listenKey PU
 #### 3.15 rate_limited 分类（PR1 只分类，不退避）
 
 - `429` / `418` ⇒ `kind:"rate_limited"`，并用 `parseRetryAfterMs` 解析 `Retry-After`（支持秒数与 HTTP-date）存入 `retryAfterMs`；但 `retryable:false`，PR1 **不重试、不 sleep**。
-- 主动消费 `retryAfterMs` 做退避 / 全局限流是 **PR3** 的范畴，禁止在本骨架里 sleep。
+- 主动消费 `retryAfterMs` 做退避 / 全局限流由 **PR3 的限流器 seam**（§3.17）负责；HTTP 骨架本身仍不 sleep。
 
 #### 3.16 body 解析与 empty body
 
 - `parseAs:"json"` 默认走 text→`JSON.parse`，解析失败 ⇒ `kind:"parse"`、`retryable:false`、`rawBody` 脱敏后保留。
 - `emptyBody:"empty_object"` 把空响应体解析成 `{}`（Binance 部分签名端点返回空 body 时保持原语义）；默认 `undefined`。
+
+#### 3.17 限流器 seam（RateLimiter，PR3）
+
+REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默认实现 `ReactiveRateLimiter`（`src/internal/rate-limiter.ts`，Layer 0、venue-agnostic）。经 public `CreateClientOptions.rateLimiter?` 注入（默认 reactive），与 `clock?` 同范式。
+
+- **hook 形**：`beforeRequest(ctx)` / `afterResponse(ctx, response)` / `onTransportError(ctx, error)` / `getSnapshot(scope)`（可同步或返回 `Promise`）。adapter 在每次 REST 调用前后调用这些 hook。
+- **scope 粒度**：`{ venue, accountId?, endpointKey }`，`endpointKey` 取 `"<METHOD> <path>"`。weight 是 IP 维度、order-count 另算 —— `RateLimitUsage` 分 `weight` / `orderCount` 两轨，按 interval key（如 `"1m"`）存。
+- **venue-agnostic 核 + venue 层解析**：通用核**不得**出现任何交易所 header 常量；Binance 的 `X-MBX-USED-WEIGHT-*` / `X-MBX-ORDER-COUNT-*` 解析只在 venue 层（`src/adapters/binance/rate-limit.ts`，用 `Headers.get()` 大小写不敏感、保留未知 interval），解析出的 `RateLimitUsage` 再喂给核。
+- **默认 reactive 行为**：happy path **不主动 throttle**（行为与无 limiter 等价）；只在收到 `429`/`418` 后按 `Retry-After`（PR1 已解析的 `retryAfterMs`）设 `blockedUntil`，下一次同 scope 请求在 `beforeRequest` 等待至 `blockedUntil`。`429`⇒`rate_limited`、`418`⇒`banned`（无 `Retry-After` 时 ban 默认更长）。proactive 权重桶留作同 seam 下 opt-in，不在默认实现内。
+- **签名时序**：Binance 签名请求的 `beforeRequest` 退避必须在生成签名 `timestamp` **之前**，避免退避 sleep 导致签名时间过旧。
+- **不构造 AcexError**：限流失败仍是 typed transport error（`kind:"rate_limited"`）冒泡；coordinator 经 `transportReason()` 映射到 runtime reason `"rate_limited"`（§3.6 / D2）。**非幂等请求遇 429/418 不自动重放**，只暴露状态 + retry metadata。
+- **公共面**：`RateLimiter` 接口与 `RateLimit*` 类型为 public 契约；usage snapshot 不挂上 `AcexClient` public API（仅作 seam 类型）。HTTP 客户端本身仍不公共可替换。
 
 ### 4. Validation & Error Matrix
 

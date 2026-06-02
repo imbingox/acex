@@ -753,3 +753,41 @@ PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: Step 4: capability 化 private 分派，清 venue 硬编码（PR #42）
+
+**Date**: 2026-06-02
+**Task**: Step 4: capability 化 private 分派，清 venue 硬编码（PR #42）
+**Branch**: `feat/venue-capability-dispatch`
+
+### Summary
+
+路线图 Step 4：把 private 链路残留的 venue 字面量分派改为读 capability（orderCapabilities/accountCapabilities/refreshAccount 方法存在性），纯内部重构、对外逐字节等价。流程：拉分支+建任务+brainstorm 锁 4 个决定（credential validator 延后 Step 5 / D3 fallback 对象来源 / 3-commit-1-PR / codex 实现+Claude 逐 commit 复核）；PRD 先经 codex 对抗性复核（8 点修正全折入）。codex 实现 3 commit，Claude 逐 commit 独立复核（重跑 gate+核 diff+验测试非空洞）：#1 离散判别点（下单/订阅/credential + 新增内部 ClientContext.getPrivateOrderCapabilities）、#2 coordinator 双 predicate（stream 顺序按 updates / refresh polling 按 refreshAccount 存在性）、#3 juplendPollIntervalMs 收进 adapter 构造 + 文档。PR review 回应：修 PRD changeset 口径 + 测试 toContain 守卫，跳过 order-manager undefined 建议（保等价）。补 patch changeset（纠正初判，存记忆 internal-src-refactor-needs-patch-changeset）。118 pass/0 fail，PR #42 待 merge。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `355d8d6` | (see git log) |
+| `a3aaf0e` | (see git log) |
+| `f091a73` | (see git log) |
+| `e61f10f` | (see git log) |
+| `afa456e` | (see git log) |
+| `5b9e059` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -611,6 +611,31 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
   await errors.return?.();
 });
 
+test("createOrder rejects missing Binance credentials before sending adapter commands", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+  });
+  await client.start();
+
+  await expect(
+    client.order.createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    }),
+  ).rejects.toMatchObject({
+    code: "CREDENTIALS_MISSING",
+  });
+  expect(requests).toHaveLength(0);
+});
+
 test("order public status stream and unsubscribe expose stopped semantics", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient({
@@ -698,5 +723,53 @@ test("Juplend order subscriptions are rejected as unsupported", async () => {
     }),
   ).rejects.toMatchObject({
     code: "VENUE_NOT_SUPPORTED",
+  });
+});
+
+test("Juplend order commands are rejected before adapter command methods", async () => {
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "jup-loop-a",
+    venue: "juplend",
+    options: {
+      walletAddress: "wallet",
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.order.createOrder({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+      side: "buy",
+      type: "limit",
+      price: "100",
+      amount: "1",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    message: "Venue does not support private order commands: juplend",
+  });
+
+  await expect(
+    client.order.cancelOrder({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+      orderId: "order-1",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    message: "Venue does not support private order commands: juplend",
+  });
+
+  await expect(
+    client.order.cancelAllOrders({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    message: "Venue does not support private order commands: juplend",
   });
 });

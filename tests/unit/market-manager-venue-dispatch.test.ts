@@ -24,6 +24,7 @@ import type {
   MarketDefinition,
   Venue,
   VenueMarketCapabilities,
+  VenueOrderCapabilities,
 } from "../../src/types/index.ts";
 import {
   BINANCE_USDM_WS_BASE_URL,
@@ -45,6 +46,12 @@ class StubMarketContext implements ClientContext {
 
   getRegisteredAccount(_accountId: string): RegisteredAccountRecord {
     throw new AcexError("ACCOUNT_NOT_FOUND", "Account not found");
+  }
+
+  getPrivateOrderCapabilities(
+    _venue: Venue,
+  ): VenueOrderCapabilities | undefined {
+    return undefined;
   }
 
   ensurePrivateCredentials(_accountId: string): void {}

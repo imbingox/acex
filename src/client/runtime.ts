@@ -38,6 +38,7 @@ import type {
   StopOptions,
   Venue,
   VenueCapabilities,
+  VenueOrderCapabilities,
 } from "../types/index.ts";
 import {
   type ClientContext,
@@ -298,9 +299,20 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     return account;
   }
 
+  getPrivateOrderCapabilities(
+    venue: Venue,
+  ): VenueOrderCapabilities | undefined {
+    return this.privateAdapters.get(venue)?.orderCapabilities;
+  }
+
   ensurePrivateCredentials(accountId: string): void {
     const account = this.getRegisteredAccount(accountId);
-    if (hasPrivateCredentials(account.credentials, account.venue)) {
+    if (
+      hasPrivateCredentials(
+        account.credentials,
+        this.getPrivateCredentialsRequired(account.venue),
+      )
+    ) {
       return;
     }
 
@@ -429,7 +441,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private getPrivateCommandAccount(accountId: string): RegisteredAccountRecord {
     const account = this.getRegisteredAccount(accountId);
     const adapter = this.getPrivateAdapter(account.venue);
-    if (adapter.venue === "juplend") {
+    if (!adapter.orderCapabilities.supported) {
       throw this.createError(
         "VENUE_NOT_SUPPORTED",
         `Venue does not support private order commands: ${account.venue}`,
@@ -437,7 +449,12 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       );
     }
 
-    if (!hasPrivateCredentials(account.credentials, account.venue)) {
+    if (
+      !hasPrivateCredentials(
+        account.credentials,
+        adapter.accountCapabilities.credentialsRequired,
+      )
+    ) {
       throw this.createError(
         "CREDENTIALS_MISSING",
         `Account credentials are required for private order commands: ${accountId}`,
@@ -446,6 +463,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     return account;
+  }
+
+  private getPrivateCredentialsRequired(venue: Venue): boolean {
+    return (
+      this.privateAdapters.get(venue)?.accountCapabilities
+        .credentialsRequired ?? true
+    );
   }
 
   private getPrivateAdapter(venue: Venue): PrivateUserDataAdapter {

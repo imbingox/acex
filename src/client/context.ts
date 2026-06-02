@@ -13,6 +13,7 @@ import type {
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
   Venue,
+  VenueOrderCapabilities,
 } from "../types/index.ts";
 
 export interface RegisteredAccountRecord {
@@ -26,6 +27,7 @@ export interface ClientContext {
   now(): number;
   assertStarted(): void;
   getRegisteredAccount(accountId: string): RegisteredAccountRecord;
+  getPrivateOrderCapabilities(venue: Venue): VenueOrderCapabilities | undefined;
   ensurePrivateCredentials(accountId: string): void;
   subscribePrivateAccountFeed(accountId: string): Promise<void>;
   unsubscribePrivateAccountFeed(accountId: string): void;
@@ -105,13 +107,11 @@ export interface PrivateOrderDataConsumer {
 
 export function hasPrivateCredentials(
   credentials?: AccountCredentials,
-  venue?: Venue,
+  credentialsRequired = true,
 ): boolean {
-  if (venue === "juplend") {
-    return true;
-  }
-
-  return Boolean(credentials?.apiKey && credentials.secret);
+  return credentialsRequired
+    ? Boolean(credentials?.apiKey && credentials.secret)
+    : true;
 }
 
 export function mergeCredentials(

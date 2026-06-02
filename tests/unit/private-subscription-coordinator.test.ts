@@ -10,10 +10,12 @@ import type {
   ClientContext,
   PrivateAccountDataConsumer,
   PrivateOrderDataConsumer,
+  PrivateSubscriptionState,
   RegisteredAccountRecord,
 } from "../../src/client/context.ts";
 import { PrivateSubscriptionCoordinator } from "../../src/client/private-subscription-coordinator.ts";
 import { AcexError } from "../../src/errors.ts";
+import { TransportError } from "../../src/internal/http-client.ts";
 import type {
   AccountCredentials,
   AcexInternalError,
@@ -52,6 +54,12 @@ class StubContext implements ClientContext {
     }
 
     return this.account;
+  }
+
+  getPrivateOrderCapabilities(
+    _venue: Venue,
+  ): VenueOrderCapabilities | undefined {
+    return undefined;
   }
 
   ensurePrivateCredentials(): void {}
@@ -98,6 +106,7 @@ class StubContext implements ClientContext {
 
 class StubAccountConsumer implements PrivateAccountDataConsumer {
   updates: RawAccountUpdate[] = [];
+  states: PrivateSubscriptionState[] = [];
 
   onPrivateAccountPending(_accountId: string, _venue: Venue): void {}
 
@@ -115,7 +124,13 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
     this.updates.push(update);
   }
 
-  onPrivateAccountStreamState(): void {}
+  onPrivateAccountStreamState(
+    _accountId: string,
+    _venue: Venue,
+    state: PrivateSubscriptionState,
+  ): void {
+    this.states.push(state);
+  }
 }
 
 class StubOrderConsumer implements PrivateOrderDataConsumer {
@@ -154,8 +169,13 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     clientOrderId: true,
   };
   refreshCalls = 0;
+  bootstrapAccountError: unknown;
 
   bootstrapAccount(): Promise<RawAccountBootstrap> {
+    if (this.bootstrapAccountError) {
+      return Promise.reject(this.bootstrapAccountError);
+    }
+
     return Promise.resolve({
       balances: [],
       positions: [],
@@ -172,6 +192,75 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
       },
       receivedAt: Date.now(),
     });
+  }
+
+  bootstrapOpenOrders(): Promise<RawOrderUpdate[]> {
+    return Promise.resolve([]);
+  }
+
+  createOrder(
+    _credentials: AccountCredentials,
+    _request: never,
+  ): Promise<RawOrderUpdate> {
+    throw new Error("not implemented");
+  }
+
+  cancelOrder(
+    _credentials: AccountCredentials,
+    _request: never,
+  ): Promise<RawOrderUpdate> {
+    throw new Error("not implemented");
+  }
+
+  cancelAllOrders(
+    _credentials: AccountCredentials,
+    _request: never,
+  ): Promise<RawOrderUpdate[]> {
+    throw new Error("not implemented");
+  }
+
+  createPrivateStream(): StreamHandle {
+    return {
+      ready: Promise.resolve(),
+      close() {},
+    };
+  }
+}
+
+class StubJuplendAdapter implements PrivateUserDataAdapter {
+  readonly venue = "juplend" as const;
+  readonly readOnly = true;
+  readonly notes: string[] = [];
+  readonly accountCapabilities: VenueAccountCapabilities = {
+    register: "supported",
+    snapshot: "supported",
+    updates: "polling",
+    balances: "supported",
+    positions: "unsupported",
+    risk: "supported",
+    lending: "supported",
+    credentialsRequired: false,
+  };
+  readonly orderCapabilities: VenueOrderCapabilities = {
+    supported: false,
+    openOrders: "unsupported",
+    updates: "unsupported",
+    create: "unsupported",
+    cancel: "unsupported",
+    cancelAll: "unsupported",
+    orderTypes: [],
+    timeInForce: [],
+    postOnly: false,
+    reduceOnly: false,
+    positionSide: "unsupported",
+    clientOrderId: false,
+    reason: "read_only",
+  };
+
+  constructor(private readonly bootstrapAccountError: unknown) {}
+
+  bootstrapAccount(): Promise<RawAccountBootstrap> {
+    return Promise.reject(this.bootstrapAccountError);
   }
 
   bootstrapOpenOrders(): Promise<RawOrderUpdate[]> {
@@ -253,4 +342,88 @@ test("invalid Binance risk poll interval falls back to the default interval", as
   coordinator.unsubscribeAccountFeed("main-binance");
 
   expect(adapter.refreshCalls).toBe(0);
+});
+
+test("account bootstrap failure reasons preserve auth, http, and rate-limit mapping", async () => {
+  const binanceContext = new StubContext();
+  const binanceAdapter = new StubBinanceAdapter();
+  const binanceConsumer = new StubAccountConsumer();
+  binanceAdapter.bootstrapAccountError = new Error("invalid credentials");
+  const binanceCoordinator = new PrivateSubscriptionCoordinator(
+    binanceContext,
+    [binanceAdapter],
+    binanceConsumer,
+    new StubOrderConsumer(),
+  );
+
+  await expect(
+    binanceCoordinator.subscribeAccountFeed("main-binance"),
+  ).rejects.toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+  expect(binanceConsumer.states.at(-1)).toMatchObject({
+    runtimeStatus: "degraded",
+    ready: false,
+    reason: "auth_failed",
+  });
+
+  const juplendContext = new StubContext();
+  juplendContext.account = {
+    accountId: "jup-loop-a",
+    venue: "juplend",
+    options: {
+      walletAddress: "wallet",
+    },
+  };
+  const juplendConsumer = new StubAccountConsumer();
+  const juplendCoordinator = new PrivateSubscriptionCoordinator(
+    juplendContext,
+    [new StubJuplendAdapter(new Error("positions unavailable"))],
+    juplendConsumer,
+    new StubOrderConsumer(),
+  );
+
+  await expect(
+    juplendCoordinator.subscribeAccountFeed("jup-loop-a"),
+  ).rejects.toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+  expect(juplendConsumer.states.at(-1)).toMatchObject({
+    runtimeStatus: "degraded",
+    ready: false,
+    reason: "http_failed",
+  });
+
+  const rateLimitedContext = new StubContext();
+  const rateLimitedAdapter = new StubBinanceAdapter();
+  const rateLimitedConsumer = new StubAccountConsumer();
+  rateLimitedAdapter.bootstrapAccountError = new TransportError(
+    "too many requests",
+    {
+      kind: "rate_limited",
+      status: 429,
+      statusText: "Too Many Requests",
+      retryAfterMs: 2_000,
+      attempts: 1,
+      retryable: false,
+      url: "https://papi.binance.com/papi/v1/account",
+    },
+  );
+  const rateLimitedCoordinator = new PrivateSubscriptionCoordinator(
+    rateLimitedContext,
+    [rateLimitedAdapter],
+    rateLimitedConsumer,
+    new StubOrderConsumer(),
+  );
+
+  await expect(
+    rateLimitedCoordinator.subscribeAccountFeed("main-binance"),
+  ).rejects.toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+  expect(rateLimitedConsumer.states.at(-1)).toMatchObject({
+    runtimeStatus: "degraded",
+    ready: false,
+    reason: "rate_limited",
+  });
 });

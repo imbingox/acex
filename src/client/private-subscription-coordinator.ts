@@ -488,15 +488,15 @@ export class PrivateSubscriptionCoordinator {
     record: PrivateSubscriptionRecord,
     account: RegisteredAccountRecord,
   ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
     const credentials = account.credentials;
-    if (!credentials && record.venue !== "juplend") {
+    if (adapter.accountCapabilities.credentialsRequired && !credentials) {
       throw new AcexError(
         "CREDENTIALS_MISSING",
         `Account credentials are required for private subscriptions: ${account.accountId}`,
       );
     }
 
-    const adapter = this.getAdapter(record.venue);
     const stream = adapter.createPrivateStream(
       credentials ?? {},
       {
@@ -664,7 +664,8 @@ export class PrivateSubscriptionCoordinator {
     account: RegisteredAccountRecord,
   ): Promise<void> {
     try {
-      const bootstrap = await this.getAdapter(record.venue).bootstrapAccount(
+      const adapter = this.getAdapter(record.venue);
+      const bootstrap = await adapter.bootstrapAccount(
         account.credentials ?? {},
         { ...account.options, accountId: account.accountId },
       );
@@ -700,7 +701,10 @@ export class PrivateSubscriptionCoordinator {
           ready: false,
           reason: transportReason(
             error,
-            record.venue === "juplend" ? "http_failed" : "auth_failed",
+            this.getAdapter(record.venue).accountCapabilities
+              .credentialsRequired
+              ? "auth_failed"
+              : "http_failed",
           ),
         },
       );

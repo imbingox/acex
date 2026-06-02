@@ -595,7 +595,7 @@ export class PrivateSubscriptionCoordinator {
         juplendPollIntervalMs: this.juplendPollIntervalMs,
         now: () => this.context.now(),
       },
-      account.options,
+      { ...account.options, accountId: account.accountId },
     );
 
     record.stream = stream;

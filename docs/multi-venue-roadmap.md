@@ -19,7 +19,7 @@
 | **§6** 公共数值契约 BigNumber → canonical 十进制 string | ✅ 已完成 | 任务 `06-01-public-decimal-string-contract`（破坏性公共 API，已发 beta） |
 | venue capability **查询**面（Step 4 的前置积木） | ✅ 已完成 | 任务 `05-06-venue-capabilities-query`；`src/client/venue-capabilities.ts` + 各 adapter `orderCapabilities` |
 | **Step 3** 共享基础设施（REST 骨架 + 错误归一 + timeout/retry · rate limiter · time provider） | ✅ 已完成 | HTTP transport PR#36 / TimeProvider PR#38 / RateLimiter PR#40 已 merge |
-| **Step 4** capability 化分派 + per-adapter credential validator + venue runtime options registry + 清 §4 四处 venue 字面量 | 🚧 进行中 | 分支 `feat/venue-capability-dispatch`；任务 `06-02-venue-capability-dispatch` |
+| **Step 4** capability 化分派 + per-adapter credential validator + venue runtime options registry + 清 §4 四处 venue 字面量 | 🚧 实现+复核完成，PR #42 待 merge | 任务 `06-02-venue-capability-dispatch`（3 commit + patch changeset；codex 实现 + Claude 逐 commit 复核）；**per-adapter credential validator 延后至 Step 5**（D2，YAGNI——目前仅 binance 一个 cex，passphrase 多字段校验留到接 OKX 时随该 adapter 落地） |
 | **Step 5** 接第一个新所（OKX/Bybit） | ⬜ 未开始 | — |
 | §2.4 symbol encode/decode 共享边界 + 下单 catalog 校验 | ⬜ 未排期 | 松散点（`runtime.ts` 下单仍不校验 market） |
 | §2.6 `AsyncEventBus` 事件背压 | ⬜ 未排期 | 松散点（`async-event-bus.ts:25` queue 仍无上限） |

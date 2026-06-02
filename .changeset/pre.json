@@ -7,6 +7,7 @@
   "changesets": [
     "market-ws-connection-multiplexing",
     "public-decimal-string-contract",
-    "redact-transport-error-secrets"
+    "redact-transport-error-secrets",
+    "venue-time-provider"
   ]
 }

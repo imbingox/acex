@@ -86,6 +86,7 @@ export interface FakeOkxMarketAdapterOptions {
   readonly venue?: Venue;
   readonly markets?: MarketDefinition[];
   readonly failLoadMarkets?: boolean;
+  readonly loadMarketsResults?: Array<MarketDefinition[] | Error>;
 }
 
 export class FakeOkxMarketAdapter implements MarketAdapter {
@@ -104,15 +105,25 @@ export class FakeOkxMarketAdapter implements MarketAdapter {
   readonly fundingRateStreams: FakeOkxFundingRateStream[] = [];
   private readonly markets: MarketDefinition[];
   private readonly failLoadMarkets: boolean;
+  private readonly loadMarketsResults: Array<MarketDefinition[] | Error>;
 
   constructor(options: FakeOkxMarketAdapterOptions = {}) {
     this.venue = options.venue ?? "okx";
     this.markets = options.markets ?? [createFakeOkxSwapMarket(this.venue)];
     this.failLoadMarkets = options.failLoadMarkets ?? false;
+    this.loadMarketsResults = [...(options.loadMarketsResults ?? [])];
   }
 
   loadMarkets(): Promise<MarketDefinition[]> {
     this.loadMarketsCalls += 1;
+    const nextResult = this.loadMarketsResults.shift();
+    if (nextResult instanceof Error) {
+      return Promise.reject(nextResult);
+    }
+    if (nextResult) {
+      return Promise.resolve(nextResult);
+    }
+
     if (this.failLoadMarkets) {
       return Promise.reject(new Error(`${this.venue} catalog failed`));
     }

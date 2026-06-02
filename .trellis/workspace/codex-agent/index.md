@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-06-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~793 | Active |
+| `journal-1.md` | ~827 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-06-02 | market catalog reload: reloadMarkets 主动刷新目录 | `65fbdb2`, `f65bab7` | `feat/market-catalog-reload` |
 | 21 | 2026-06-02 | Step 4: capability 化 private 分派，清 venue 硬编码（PR #42） | `355d8d6`, `a3aaf0e`, `f091a73`, `e61f10f`, `afa456e`, `5b9e059` | `feat/venue-capability-dispatch` |
 | 20 | 2026-06-02 | 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档 | `4259cc6` | `feat/venue-rate-limiter` |
 | 19 | 2026-06-02 | 共享 venue 基础设施 PR3（REST 限流器 / RateLimiter seam） | `0d99377`, `f48c061` | `feat/venue-rate-limiter` |

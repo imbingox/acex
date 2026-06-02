@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "reload 复用 fetchAndStoreMarketCatalog → adapter.loadMarkets()；须吃透 catalog 加载契约与错误传播边界（adapter/internal 不构造 AcexError、由 manager 归一），保证『先 fetch 后原子换 / 失败保留旧目录』两不变量不被 reload 破坏"}
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "reload 是 per-venue + Promise.allSettled 隔离；须对齐多 venue registry 边界与 venue 字面量去除约定，reloadMarkets(venue?) 的 venue 维度分派以此为准"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "新增 public type MarketCatalogReloadSummary（含 ok/error 字段）+ reloadMarkets 显式返回类型；须闭合 union、不宽化、不循环引用，error 字段与现有 AcexError 契约一致"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "5 层边界：新 public method 落 MarketManager(managers)、新 type 落 src/types 只放契约、coalescing helper 属 manager 内部；依赖方向不得反转"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "coalescing 入口 fetchCatalogCoalesced 必须复用既有 fetchAndStoreMarketCatalog + catalogPromises，loadMarketCatalog/reloadMarketCatalog 共用同一拉取核，避免另造一套拉取/缓存逻辑"}

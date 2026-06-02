@@ -791,3 +791,37 @@ PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
 ### Next Steps
 
 - None - task complete
+
+
+## Session 22: market catalog reload: reloadMarkets 主动刷新目录
+
+**Date**: 2026-06-02
+**Task**: market catalog reload: reloadMarkets 主动刷新目录
+**Branch**: `feat/market-catalog-reload`
+
+### Summary
+
+为 MarketManager 新增 public API reloadMarkets(venue?)，下游可在交易所新增 symbol 后主动刷新目录、无需重启。返回 per-venue MarketCatalogReloadSummary(added/removed/total/ok/error)；全量用 Promise.allSettled，catalog 失败保留旧目录并转 ok:false 不 reject，未注册合法 venue 仍 throw VENUE_NOT_SUPPORTED；catalogPromises 改 in-flight 登记表做 coalescing，并发同 venue 只打一次 fetch；写入前校验 adapter 返回 venue 防跨 venue 污染；不 assertStarted；严守先 fetch 后原子换/失败保留旧目录/不碰订阅三不变量。流程：brainstorm PRD → codex 对抗性复核 PRD(7 点并入) → codex 实现 → Claude 独立 review(重跑 lint/type-check/test 127 pass + 逐条核 9 条 AC)。minor changeset，PR #44。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `65fbdb2` | (see git log) |
+| `f65bab7` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

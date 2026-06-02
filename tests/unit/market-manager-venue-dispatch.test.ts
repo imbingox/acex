@@ -31,7 +31,11 @@ import {
   installBinanceMarketInfra,
   waitForBinanceControlFrame,
 } from "../support/exchanges/binance.ts";
-import { FakeOkxMarketAdapter } from "../support/exchanges/okx.ts";
+import {
+  createFakeOkxSpotMarket,
+  createFakeOkxSwapMarket,
+  FakeOkxMarketAdapter,
+} from "../support/exchanges/okx.ts";
 import { FakeWebSocket, waitForSocket } from "../support/test-utils.ts";
 
 class StubMarketContext implements ClientContext {
@@ -151,6 +155,342 @@ async function waitForValue<T>(
 
   throw new Error("Timed out waiting for value");
 }
+
+function createFakeSpotMarket(
+  venue: Venue,
+  symbol: string,
+  id: string,
+  base: string,
+): MarketDefinition {
+  return {
+    ...createFakeOkxSpotMarket(venue),
+    symbol,
+    id,
+    base,
+    raw: { source: "fake-okx", id },
+  };
+}
+
+test("MarketManager reloadMarkets refreshes one venue catalog and reports added symbols", async () => {
+  const markets = [createFakeOkxSwapMarket("okx")];
+  const okxAdapter = new FakeOkxMarketAdapter({ markets });
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await manager.loadMarkets();
+  expect(okxAdapter.loadMarketsCalls).toBe(1);
+
+  markets.push(createFakeSpotMarket("okx", "ETH/USDT", "ETH-USDT", "ETH"));
+  const summaries = await manager.reloadMarkets("okx");
+
+  expect(okxAdapter.loadMarketsCalls).toBe(2);
+  expect(summaries).toEqual([
+    {
+      venue: "okx",
+      added: ["ETH/USDT"],
+      removed: [],
+      total: 2,
+      ok: true,
+    },
+  ]);
+  expect(manager.getMarket("okx", "ETH/USDT")?.id).toBe("ETH-USDT");
+  expect(manager.listMarkets("okx").map((market) => market.symbol)).toEqual([
+    "BTC/USDT:USDT",
+    "ETH/USDT",
+  ]);
+});
+
+test("MarketManager reloadMarkets reports catalog failures without dropping the old catalog", async () => {
+  const context = new StubMarketContext();
+  const oldMarkets = [createFakeOkxSwapMarket("okx")];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    loadMarketsResults: [oldMarkets, new Error("okx reload failed")],
+  });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await manager.loadMarkets();
+  const summaries = await manager.reloadMarkets("okx");
+
+  expect(okxAdapter.loadMarketsCalls).toBe(2);
+  expect(summaries).toHaveLength(1);
+  expect(summaries[0]).toMatchObject({
+    venue: "okx",
+    added: [],
+    removed: [],
+    total: 1,
+    ok: false,
+    error: { code: "MARKET_CATALOG_LOAD_FAILED" },
+  });
+  expect(manager.listMarkets("okx").map((market) => market.symbol)).toEqual([
+    "BTC/USDT:USDT",
+  ]);
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]).toMatchObject({
+    source: "adapter",
+    venue: "okx",
+  });
+});
+
+test("MarketManager reloadMarkets rejects mixed-venue catalog results without replacing the old catalog", async () => {
+  const context = new StubMarketContext();
+  const oldMarkets = [createFakeOkxSwapMarket("okx")];
+  const mixedMarkets = [
+    createFakeOkxSwapMarket("okx"),
+    createFakeSpotMarket("binance", "ETH/USDT", "ETH-USDT", "ETH"),
+  ];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    loadMarketsResults: [oldMarkets, mixedMarkets],
+  });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await manager.loadMarkets();
+  const summaries = await manager.reloadMarkets("okx");
+
+  expect(summaries[0]).toMatchObject({
+    venue: "okx",
+    ok: false,
+    error: { code: "MARKET_CATALOG_LOAD_FAILED" },
+  });
+  expect(manager.listMarkets("okx").map((market) => market.symbol)).toEqual([
+    "BTC/USDT:USDT",
+  ]);
+  expect(manager.getMarket("binance", "ETH/USDT")).toBeUndefined();
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]?.error.message).toContain("included binance market");
+});
+
+test("MarketManager reloadMarkets leaves existing L1 and funding subscriptions running", async () => {
+  const markets = [createFakeOkxSwapMarket("okx")];
+  const okxAdapter = new FakeOkxMarketAdapter({ markets });
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+    { initialL1TimeoutMs: 200 },
+  );
+
+  const l1Subscribe = manager.subscribeL1Book({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const l1Stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  l1Stream.emitUpdate({
+    bidPrice: "101.1",
+    bidSize: "2",
+    askPrice: "101.2",
+    askSize: "3",
+    receivedAt: 1710000000100,
+  });
+  await l1Subscribe;
+
+  const fundingSubscribe = manager.subscribeFundingRate({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+  fundingStream.emitUpdate({
+    fundingRate: "0.0001",
+    receivedAt: 1710000000200,
+  });
+  await fundingSubscribe;
+
+  markets.push(createFakeSpotMarket("okx", "ETH/USDT", "ETH-USDT", "ETH"));
+  await manager.reloadMarkets("okx");
+
+  l1Stream.emitUpdate({
+    bidPrice: "102.1",
+    bidSize: "4",
+    askPrice: "102.2",
+    askSize: "5",
+    receivedAt: 1710000000300,
+  });
+  fundingStream.emitUpdate({
+    fundingRate: "0.0002",
+    receivedAt: 1710000000400,
+  });
+
+  expect(l1Stream.closeCalls).toBe(0);
+  expect(fundingStream.closeCalls).toBe(0);
+  expect(okxAdapter.l1BookStreams).toHaveLength(1);
+  expect(okxAdapter.fundingRateStreams).toHaveLength(1);
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "102.1", version: 2 });
+  expect(
+    manager.getFundingRate({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ fundingRate: "0.0002", version: 2 });
+});
+
+test("MarketManager coalesces concurrent reloadMarkets calls for the same venue", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await manager.loadMarkets();
+  const results = await Promise.all([
+    manager.reloadMarkets("okx"),
+    manager.reloadMarkets("okx"),
+    manager.reloadMarkets("okx"),
+  ]);
+
+  expect(okxAdapter.loadMarketsCalls).toBe(2);
+  expect(results.map((summaries) => summaries[0])).toEqual([
+    { venue: "okx", added: [], removed: [], total: 1, ok: true },
+    { venue: "okx", added: [], removed: [], total: 1, ok: true },
+    { venue: "okx", added: [], removed: [], total: 1, ok: true },
+  ]);
+});
+
+test("MarketManager reloadMarkets isolates venues and full reload refreshes every registered venue", async () => {
+  const okxMarkets = [createFakeOkxSwapMarket("okx")];
+  const binanceMarkets = [createFakeOkxSwapMarket("binance")];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+    markets: okxMarkets,
+  });
+  const binanceAdapter = new FakeOkxMarketAdapter({
+    venue: "binance",
+    markets: binanceMarkets,
+  });
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([
+      [okxAdapter.venue, okxAdapter],
+      [binanceAdapter.venue, binanceAdapter],
+    ]),
+  );
+
+  await manager.loadMarkets();
+  okxMarkets.push(createFakeSpotMarket("okx", "ETH/USDT", "ETH-USDT", "ETH"));
+  const okxOnly = await manager.reloadMarkets("okx");
+
+  expect(okxOnly[0]).toMatchObject({
+    venue: "okx",
+    added: ["ETH/USDT"],
+    total: 2,
+    ok: true,
+  });
+  expect(okxAdapter.loadMarketsCalls).toBe(2);
+  expect(binanceAdapter.loadMarketsCalls).toBe(1);
+  expect(manager.getMarket("binance", "ETH/USDT")).toBeUndefined();
+
+  binanceMarkets.push(
+    createFakeSpotMarket("binance", "SOL/USDT", "SOL-USDT", "SOL"),
+  );
+  const full = await manager.reloadMarkets();
+
+  expect(okxAdapter.loadMarketsCalls).toBe(3);
+  expect(binanceAdapter.loadMarketsCalls).toBe(2);
+  expect(full).toEqual([
+    { venue: "okx", added: [], removed: [], total: 2, ok: true },
+    {
+      venue: "binance",
+      added: ["SOL/USDT"],
+      removed: [],
+      total: 2,
+      ok: true,
+    },
+  ]);
+});
+
+test("MarketManager full reload returns ok false only for venues with catalog failures", async () => {
+  const context = new StubMarketContext();
+  const okxMarkets = [createFakeOkxSwapMarket("okx")];
+  const binanceMarkets = [createFakeOkxSwapMarket("binance")];
+  const binanceReloadMarkets = [
+    ...binanceMarkets,
+    createFakeSpotMarket("binance", "SOL/USDT", "SOL-USDT", "SOL"),
+  ];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+    loadMarketsResults: [okxMarkets, new Error("okx full reload failed")],
+  });
+  const binanceAdapter = new FakeOkxMarketAdapter({
+    venue: "binance",
+    loadMarketsResults: [binanceMarkets, binanceReloadMarkets],
+  });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([
+      [okxAdapter.venue, okxAdapter],
+      [binanceAdapter.venue, binanceAdapter],
+    ]),
+  );
+
+  await manager.loadMarkets();
+  const summaries = await manager.reloadMarkets();
+
+  expect(summaries).toHaveLength(2);
+  expect(summaries[0]).toMatchObject({
+    venue: "okx",
+    added: [],
+    removed: [],
+    total: 1,
+    ok: false,
+    error: { code: "MARKET_CATALOG_LOAD_FAILED" },
+  });
+  expect(summaries[1]).toEqual({
+    venue: "binance",
+    added: ["SOL/USDT"],
+    removed: [],
+    total: 2,
+    ok: true,
+  });
+  expect(manager.listMarkets("okx").map((market) => market.symbol)).toEqual([
+    "BTC/USDT:USDT",
+  ]);
+  expect(manager.getMarket("binance", "SOL/USDT")?.id).toBe("SOL-USDT");
+  expect(context.errors).toHaveLength(1);
+});
+
+test("MarketManager reloadMarkets throws for legal venues without registered market adapters", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(manager.reloadMarkets("bybit")).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]).toMatchObject({
+    source: "client",
+    venue: "bybit",
+  });
+  expect(okxAdapter.loadMarketsCalls).toBe(0);
+});
+
+test("MarketManager reloadMarkets does not require a started client lifecycle", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(manager.reloadMarkets("okx")).resolves.toMatchObject([
+    { venue: "okx", ok: true, total: 1 },
+  ]);
+
+  manager.onClientStopping(Date.now());
+
+  await expect(manager.reloadMarkets("okx")).resolves.toMatchObject([
+    { venue: "okx", ok: true, total: 1 },
+  ]);
+  expect(okxAdapter.loadMarketsCalls).toBe(2);
+});
 
 test("MarketManager dispatches L1 subscriptions to the adapter for each venue", async () => {
   installBinanceMarketInfra();

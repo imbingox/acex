@@ -1,4 +1,5 @@
 import type BigNumber from "bignumber.js";
+import type { AcexError } from "../errors.ts";
 import type { MarketFreshness, SubscriptionActivity, Venue } from "./shared.ts";
 
 export type MarketType = "spot" | "swap" | "future";
@@ -24,6 +25,15 @@ export interface MarketDefinition {
   minNotional?: string;
   expiry?: number;
   raw: Record<string, unknown>;
+}
+
+export interface MarketCatalogReloadSummary {
+  venue: Venue;
+  added: string[];
+  removed: string[];
+  total: number;
+  ok: boolean;
+  error?: AcexError;
 }
 
 export interface MarketDataStatus {
@@ -159,6 +169,7 @@ export interface MarketManager {
   readonly events: MarketEventStreams;
 
   loadMarkets(): Promise<void>;
+  reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;

@@ -345,6 +345,7 @@ interface MarketManager {
   readonly events: MarketEventStreams;
 
   loadMarkets(): Promise<void>;
+  reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
   listMarkets(venue?: Venue): MarketDefinition[];
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
@@ -368,6 +369,7 @@ interface MarketManager {
 
 ```ts
 await client.market.loadMarkets();
+const reloadSummaries = await client.market.reloadMarkets("binance");
 
 const all = client.market.listMarkets();
 const binanceOnly = client.market.listMarkets("binance");
@@ -377,6 +379,25 @@ const allBtcPerp = client.market.getMarkets("BTC/USDT:USDT");
 ```
 
 `getMarkets(symbol)` 严格按完整统一 symbol 匹配。
+
+`loadMarkets()` 会懒加载并缓存当前已注册 venue 的市场目录；已加载过的 venue 不会重复拉取。`reloadMarkets(venue?)` 用于主动刷新市场目录：传入 `venue` 时只刷新该 venue，省略时刷新所有已注册 market adapter。它和 `loadMarkets()` 一样不要求 client 已 `start()`，因此可在 `start()` 前或 `stop()` 后调用。
+
+`reloadMarkets()` 返回每个 venue 的刷新摘要：
+
+```ts
+type MarketCatalogReloadSummary = {
+  venue: Venue;
+  added: string[];
+  removed: string[];
+  total: number;
+  ok: boolean;
+  error?: AcexError;
+};
+```
+
+`added` / `removed` 是本次刷新相对旧目录变化的 symbol 列表，`total` 是刷新后该 venue 的目录数量。catalog 拉取失败时，对应 summary 为 `ok: false`，`error.code = "MARKET_CATALOG_LOAD_FAILED"`，旧目录会保留，方法不会因为该 venue 的 catalog 失败而 reject；未注册 runtime adapter 的合法 venue（例如当前 market adapter 未接入的 `bybit`）仍会抛 `VENUE_NOT_SUPPORTED`。
+
+如果刷新会新增 symbol，调用方应先 `await client.market.reloadMarkets(venue)`，再按 summary 订阅新增 symbol。已加载 venue 上的后台 reload 不会阻塞并发 `subscribe*()`；reload 完成前订阅新增 symbol 仍可能按旧目录返回 `MARKET_NOT_FOUND`。
 
 `MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 canonical decimal string；需要运算时用 `new BigNumber(field)` 自行解析。
 

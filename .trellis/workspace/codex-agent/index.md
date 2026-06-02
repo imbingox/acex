@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 16
-- **Last Active**: 2026-06-01
+- **Total Sessions**: 17
+- **Last Active**: 2026-06-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~581 | Active |
+| `journal-1.md` | ~625 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 17 | 2026-06-02 | 共享 venue 基础设施 PR1（REST 骨架 + 错误脱敏） | `d9bacb6`, `df49fa1`, `362b6b5` | `feat/shared-venue-infrastructure` |
 | 16 | 2026-06-01 | 公共数值契约：对外 BigNumber 改 canonical decimal string | `adc9274`, `eb9a1a2`, `6219bee` | `feat/public-decimal-string-contract` |
 | 15 | 2026-06-01 | 行情多 venue 分派与 WS 连接复用 | `d99ac9a`, `343ac4b`, `19f60bc`, `a8328f6` | `feat/market-venue-ws-multiplex` |
 | 14 | 2026-05-27 | 完成 Juplend lend-read 替换与收尾 | `e47874a`, `99fb840`, `f997750` | `dev` |

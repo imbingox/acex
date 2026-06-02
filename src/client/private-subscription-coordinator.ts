@@ -115,7 +115,8 @@ export class PrivateSubscriptionCoordinator {
     }
 
     try {
-      if (record.venue === "juplend") {
+      const adapter = this.getAdapter(record.venue);
+      if (adapter.accountCapabilities.updates === "polling") {
         await this.bootstrapAccount(record, account);
         await this.ensureStream(record, account);
       } else {
@@ -233,7 +234,11 @@ export class PrivateSubscriptionCoordinator {
     this.stopAccountRefreshPolling(record);
 
     try {
-      if (record.venue === "juplend" && record.accountSubscribed) {
+      const adapter = this.getAdapter(record.venue);
+      if (
+        adapter.accountCapabilities.updates === "polling" &&
+        record.accountSubscribed
+      ) {
         await this.bootstrapAccount(record, account);
         await this.ensureStream(record, account);
       } else {
@@ -318,7 +323,7 @@ export class PrivateSubscriptionCoordinator {
 
   private ensureAccountRefreshPolling(record: PrivateSubscriptionRecord): void {
     if (
-      record.venue !== "binance" ||
+      typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
       !record.accountSubscribed ||
       record.accountRefreshTimer ||
       record.accountRefreshInFlight
@@ -339,7 +344,10 @@ export class PrivateSubscriptionCoordinator {
   }
 
   private scheduleAccountRefreshPoll(record: PrivateSubscriptionRecord): void {
-    if (record.venue !== "binance" || !record.accountSubscribed) {
+    if (
+      typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
+      !record.accountSubscribed
+    ) {
       return;
     }
 
@@ -348,7 +356,7 @@ export class PrivateSubscriptionCoordinator {
       record.accountRefreshTimer = undefined;
       if (
         generation !== record.accountRefreshGeneration ||
-        record.venue !== "binance" ||
+        typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
         !record.accountSubscribed
       ) {
         return;
@@ -374,7 +382,10 @@ export class PrivateSubscriptionCoordinator {
           }
 
           record.accountRefreshInFlight = undefined;
-          if (record.accountSubscribed && record.venue === "binance") {
+          if (
+            record.accountSubscribed &&
+            typeof this.getAdapter(record.venue).refreshAccount === "function"
+          ) {
             this.scheduleAccountRefreshPoll(record);
           }
         });

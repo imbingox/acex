@@ -108,19 +108,24 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
   updates: RawAccountUpdate[] = [];
   states: PrivateSubscriptionState[] = [];
 
+  constructor(private readonly trace?: string[]) {}
+
   onPrivateAccountPending(_accountId: string, _venue: Venue): void {}
 
   onPrivateAccountBootstrap(
     _accountId: string,
     _venue: Venue,
     _bootstrap: RawAccountBootstrap,
-  ): void {}
+  ): void {
+    this.trace?.push("account-bootstrap");
+  }
 
   onPrivateAccountUpdate(
     _accountId: string,
     _venue: Venue,
     update: RawAccountUpdate,
   ): void {
+    this.trace?.push("account-update");
     this.updates.push(update);
   }
 
@@ -169,9 +174,16 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     clientOrderId: true,
   };
   refreshCalls = 0;
+  bootstrapCalls = 0;
+  createStreamCalls = 0;
+  closeCalls = 0;
   bootstrapAccountError: unknown;
 
+  constructor(private readonly trace?: string[]) {}
+
   bootstrapAccount(): Promise<RawAccountBootstrap> {
+    this.bootstrapCalls += 1;
+    this.trace?.push("bootstrap");
     if (this.bootstrapAccountError) {
       return Promise.reject(this.bootstrapAccountError);
     }
@@ -185,6 +197,7 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
 
   refreshAccount(): Promise<RawAccountUpdate> {
     this.refreshCalls += 1;
+    this.trace?.push("refresh");
     return Promise.resolve({
       risk: {
         riskEquity: "1",
@@ -220,11 +233,41 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
   }
 
   createPrivateStream(): StreamHandle {
+    this.createStreamCalls += 1;
+    this.trace?.push("stream-create");
     return {
-      ready: Promise.resolve(),
-      close() {},
+      ready: Promise.resolve().then(() => {
+        this.trace?.push("stream-ready");
+      }),
+      close: () => {
+        this.closeCalls += 1;
+        this.trace?.push("stream-close");
+      },
     };
   }
+}
+
+class StubNoRefreshBinanceAdapter extends StubBinanceAdapter {
+  constructor(trace?: string[]) {
+    super(trace);
+    Object.defineProperty(this, "refreshAccount", {
+      value: undefined,
+      configurable: true,
+    });
+  }
+}
+
+class StubPollingBinanceAdapter extends StubNoRefreshBinanceAdapter {
+  override readonly accountCapabilities: VenueAccountCapabilities = {
+    register: "supported",
+    snapshot: "supported",
+    updates: "polling",
+    balances: "supported",
+    positions: "supported",
+    risk: "supported",
+    lending: "unsupported",
+    credentialsRequired: true,
+  };
 }
 
 class StubJuplendAdapter implements PrivateUserDataAdapter {
@@ -257,10 +300,27 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
     reason: "read_only",
   };
 
-  constructor(private readonly bootstrapAccountError: unknown) {}
+  bootstrapCalls = 0;
+  createStreamCalls = 0;
+  closeCalls = 0;
+
+  constructor(
+    private readonly bootstrapAccountError?: unknown,
+    private readonly trace?: string[],
+  ) {}
 
   bootstrapAccount(): Promise<RawAccountBootstrap> {
-    return Promise.reject(this.bootstrapAccountError);
+    this.bootstrapCalls += 1;
+    this.trace?.push("bootstrap");
+    if (this.bootstrapAccountError) {
+      return Promise.reject(this.bootstrapAccountError);
+    }
+
+    return Promise.resolve({
+      balances: [],
+      positions: [],
+      receivedAt: Date.now(),
+    });
   }
 
   bootstrapOpenOrders(): Promise<RawOrderUpdate[]> {
@@ -289,12 +349,208 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
   }
 
   createPrivateStream(): StreamHandle {
+    this.createStreamCalls += 1;
+    this.trace?.push("stream-create");
     return {
-      ready: Promise.resolve(),
-      close() {},
+      ready: Promise.resolve().then(() => {
+        this.trace?.push("stream-ready");
+      }),
+      close: () => {
+        this.closeCalls += 1;
+        this.trace?.push("stream-close");
+      },
     };
   }
 }
+
+function withSetTimeoutCounter<T>(
+  fn: () => Promise<T>,
+): Promise<{ result: T; scheduled: number }> {
+  const originalSetTimeout = globalThis.setTimeout;
+  let scheduled = 0;
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    scheduled += 1;
+    return originalSetTimeout(...args);
+  }) as typeof setTimeout;
+
+  return fn()
+    .then((result) => ({ result, scheduled }))
+    .finally(() => {
+      globalThis.setTimeout = originalSetTimeout;
+    });
+}
+
+test("websocket-like account subscriptions start the stream before bootstrapping and schedule refresh polling", async () => {
+  const trace: string[] = [];
+  const context = new StubContext();
+  const adapter = new StubBinanceAdapter(trace);
+  const accountConsumer = new StubAccountConsumer(trace);
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 5,
+      },
+    },
+  );
+
+  const { scheduled } = await withSetTimeoutCounter(() =>
+    coordinator.subscribeAccountFeed("main-binance"),
+  );
+
+  expect(trace.indexOf("stream-ready")).toBeLessThan(
+    trace.indexOf("account-bootstrap"),
+  );
+  expect(scheduled).toBeGreaterThan(0);
+
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(adapter.refreshCalls).toBeGreaterThan(0);
+});
+
+test("polling-like account subscriptions bootstrap before stream startup and do not schedule refresh polling", async () => {
+  const trace: string[] = [];
+  const context = new StubContext();
+  const adapter = new StubPollingBinanceAdapter(trace);
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(trace),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 5,
+      },
+    },
+  );
+
+  const { scheduled } = await withSetTimeoutCounter(() =>
+    coordinator.subscribeAccountFeed("main-binance"),
+  );
+
+  expect(trace.indexOf("bootstrap")).toBeLessThan(
+    trace.indexOf("stream-create"),
+  );
+  expect(scheduled).toBe(0);
+  expect(adapter.createStreamCalls).toBe(1);
+});
+
+test("websocket-like adapters without refreshAccount do not schedule refresh polling", async () => {
+  const context = new StubContext();
+  const adapter = new StubNoRefreshBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 5,
+      },
+    },
+  );
+
+  const { scheduled } = await withSetTimeoutCounter(() =>
+    coordinator.subscribeAccountFeed("main-binance"),
+  );
+
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(scheduled).toBe(0);
+  expect(adapter.refreshCalls).toBe(0);
+});
+
+test("account subscribe failures close unused streams, leave no refresh polling, and allow resubscribe", async () => {
+  const context = new StubContext();
+  const adapter = new StubBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 5,
+      },
+    },
+  );
+
+  adapter.bootstrapAccountError = new Error("bootstrap failed");
+  await expect(
+    coordinator.subscribeAccountFeed("main-binance"),
+  ).rejects.toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+
+  await Bun.sleep(20);
+
+  expect(adapter.closeCalls).toBe(1);
+  expect(adapter.refreshCalls).toBe(0);
+
+  adapter.bootstrapAccountError = undefined;
+  await coordinator.subscribeAccountFeed("main-binance");
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(adapter.createStreamCalls).toBe(2);
+  expect(adapter.bootstrapCalls).toBe(2);
+  expect(adapter.refreshCalls).toBeGreaterThan(0);
+});
+
+test("resumeRecord preserves websocket-like stream-first account ordering", async () => {
+  const trace: string[] = [];
+  const context = new StubContext();
+  const adapter = new StubBinanceAdapter(trace);
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(trace),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 50,
+      },
+    },
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  trace.length = 0;
+
+  coordinator.onCredentialsUpdated("main-binance");
+  await Bun.sleep(5);
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(trace.indexOf("stream-ready")).toBeLessThan(
+    trace.indexOf("account-bootstrap"),
+  );
+});
+
+test("resumeRecord preserves polling-like bootstrap-first account ordering", async () => {
+  const trace: string[] = [];
+  const context = new StubContext();
+  const adapter = new StubPollingBinanceAdapter(trace);
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(trace),
+    new StubOrderConsumer(),
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  trace.length = 0;
+
+  coordinator.onCredentialsUpdated("main-binance");
+  await Bun.sleep(5);
+
+  expect(trace.indexOf("bootstrap")).toBeLessThan(
+    trace.indexOf("stream-create"),
+  );
+});
 
 test("Binance risk polling ignores missing accounts when a pending timer fires", async () => {
   const context = new StubContext();

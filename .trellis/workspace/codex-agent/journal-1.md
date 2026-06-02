@@ -709,3 +709,47 @@ PR2 合并后起 PR3（三件里最复杂）。codex 实现：可插拔 `RateLim
 - PR3 合并后归档 06-01 task。
 - 已知 defer：`ReactiveRateLimiter` 无-Retry-After 的 429 在 `getSnapshot` 不可见（Binance 不触发；将来接无 Retry-After venue 时给 429 加小默认退避窗）。
 - roadmap：step 4（capability 化分派 + 清 venue 字面量 + credential validator + venue runtime options registry）/ step 5（接第一个新所 OKX/Bybit，届时按 venue 补 server-time 校准 + proactive 权重桶）。
+
+
+## Session 20: 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档
+
+**Date**: 2026-06-02
+**Task**: 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档
+**Branch**: `feat/venue-rate-limiter`
+
+### Summary
+
+PR3 (#40) review 修复 + 06-01 任务归档。createPrivateStream 传裸 account.options 致 listenKey rate-limit scope 缺 accountId（全局、跨账户退避污染），改为 { ...account.options, accountId } 与其它 5 处对齐 + 补回归测试（验证修前 fail / 修后 pass）。lint/type-check/test 全绿（109 pass）。06-01 三件套（REST 骨架 / TimeProvider / RateLimiter）全部完成并归档。
+
+### Main Changes
+
+PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
+- `private-subscription-coordinator.ts:598` 的 `createPrivateStream` 传裸 `account.options` → listenKey 的 `rateLimitScope` 拿到 `accountId=undefined`（全局），与其它 5 处（runtime order×3、coordinator refresh/bootstrapAccount/bootstrapOpenOrders）不一致，且一个账户 listenKey 遇 429/418 会让其它账户 keepalive 跟着退避。改为 `{ ...account.options, accountId: account.accountId }`。
+- 回归测试（`account.test.ts`）：注入 capture `RateLimiter` 断言 listenKey scope 带 `accountId`；已实测**修前 fail（undefined）/ 修后 pass**，是真守护。
+- 验证：`bun run lint` / `type-check` / `test` 全绿，109 pass / 0 fail。
+
+06-01「共享 venue 基础设施」三件套完成并归档：
+- PR1 #36（已合）：共享 HTTP 客户端 + D5 错误脱敏。
+- PR2 #38（已合）：统一 `TimeProvider` / 可注入签名时钟（与 freshness 时钟分离）。
+- PR3 #40（待合）：可插拔 `RateLimiter` seam + reactive 默认（venue-agnostic 核 + Binance 解析在 venue 层）。
+
+分工：codex 实现、Claude 独立核验 + trellis-check 广度审。后续 roadmap：step 4（capability 化分派 + 清 venue 字面量 + credential validator + venue runtime options registry）、step 5（接第一个新所，按 venue 补 server-time 校准 + proactive 权重桶）。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4259cc6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

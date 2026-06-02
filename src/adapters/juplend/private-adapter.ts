@@ -1,5 +1,9 @@
 import BigNumber from "bignumber.js";
 import { AcexError } from "../../errors.ts";
+import {
+  type HttpClientMessages,
+  httpRequest,
+} from "../../internal/http-client.ts";
 import type {
   AccountCredentials,
   VenueAccountCapabilities,
@@ -66,6 +70,8 @@ interface JuplendPriceApiEntry {
   decimals?: number | string;
 }
 
+type FetchLike = typeof fetch;
+
 interface JuplendTokenSearchEntry {
   id?: string;
   address?: string;
@@ -86,6 +92,11 @@ const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 // not mint-atomic token amounts.
 const POSITION_AMOUNT_SCALE_DECIMALS = 9;
 const VAULT_CACHE_TTL_MS = 60 * 60 * 1_000;
+const JUPLEND_HTTP_MESSAGES: HttpClientMessages = {
+  http: ({ status, statusText }) => `Juplend HTTP ${status}: ${statusText}`,
+  timeout: () => `Juplend fetch timeout after ${DEFAULT_HTTP_TIMEOUT_MS}ms`,
+  aborted: () => "Juplend fetch aborted",
+};
 
 interface JuplendVaultEnrichmentCacheEntry {
   loadedAt: number;
@@ -260,52 +271,30 @@ function buildRisk(input: {
   };
 }
 
-async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const upstreamSignal = init?.signal;
-  let timedOut = false;
-  const onUpstreamAbort = () => {
-    controller.abort();
-  };
+async function requestJuplendJson<T>(
+  url: string,
+  init: RequestInit | undefined,
+  fetchFn: FetchLike | undefined,
+  timeoutMs: number,
+): Promise<T> {
+  const response = await httpRequest<T>({
+    fetchFn,
+    url,
+    method: init?.method,
+    headers: init?.headers,
+    body: init?.body,
+    signal: init?.signal ?? undefined,
+    timeoutMs,
+    parseAs: "json",
+    jsonParseMode: "response",
+    retryPolicy: {
+      idempotent: true,
+      maxAttempts: 3,
+    },
+    messages: JUPLEND_HTTP_MESSAGES,
+  });
 
-  if (upstreamSignal?.aborted) {
-    controller.abort();
-  } else if (upstreamSignal) {
-    upstreamSignal.addEventListener("abort", onUpstreamAbort, { once: true });
-  }
-
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, DEFAULT_HTTP_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Juplend HTTP ${response.status}: ${response.statusText}`,
-      );
-    }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(
-        timedOut
-          ? `Juplend fetch timeout after ${DEFAULT_HTTP_TIMEOUT_MS}ms`
-          : "Juplend fetch aborted",
-      );
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-    if (upstreamSignal) {
-      upstreamSignal.removeEventListener("abort", onUpstreamAbort);
-    }
-  }
+  return response.body;
 }
 
 function getJupApiKey(explicitApiKey?: string): string | undefined {
@@ -326,12 +315,19 @@ function withBaseUrl(baseUrl: string, path: string): string {
 
 async function loadVaultMetadataFromLiteApi(
   apiKey?: string,
+  fetchFn?: FetchLike,
+  timeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
 ): Promise<Map<string, JuplendVaultMetadata>> {
-  const response = await readJson<
+  const response = await requestJuplendJson<
     JuplendVaultMetadata[] | { data?: JuplendVaultMetadata[] }
-  >(withBaseUrl(JUP_LITE_API_BASE_URL, LEND_VAULTS_PATH), {
-    headers: buildApiHeaders(apiKey),
-  });
+  >(
+    withBaseUrl(JUP_LITE_API_BASE_URL, LEND_VAULTS_PATH),
+    {
+      headers: buildApiHeaders(apiKey),
+    },
+    fetchFn,
+    timeoutMs,
+  );
   const rawVaults = Array.isArray(response) ? response : response.data;
   const vaults = new Map<string, JuplendVaultMetadata>();
 
@@ -348,17 +344,21 @@ async function loadVaultMetadataFromLiteApi(
 async function loadTokenSearchMap(
   mintAddresses: string[],
   apiKey?: string,
+  fetchFn?: FetchLike,
+  timeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
 ): Promise<Map<string, JuplendTokenMetadata>> {
   if (mintAddresses.length === 0) {
     return new Map();
   }
 
   const query = encodeURIComponent(mintAddresses.join(","));
-  const response = await readJson<JuplendTokenSearchEntry[]>(
+  const response = await requestJuplendJson<JuplendTokenSearchEntry[]>(
     `${withBaseUrl(JUP_API_BASE_URL, TOKENS_SEARCH_PATH)}?query=${query}`,
     {
       headers: buildApiHeaders(apiKey),
     },
+    fetchFn,
+    timeoutMs,
   );
 
   const tokens = new Map<string, JuplendTokenMetadata>();
@@ -385,17 +385,23 @@ async function loadTokenSearchMap(
 async function loadPriceMap(
   mintAddresses: string[],
   apiKey?: string,
+  fetchFn?: FetchLike,
+  timeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
 ): Promise<Map<string, JuplendPriceApiEntry>> {
   if (mintAddresses.length === 0) {
     return new Map();
   }
 
   const ids = encodeURIComponent(mintAddresses.join(","));
-  const response = await readJson<Record<string, JuplendPriceApiEntry>>(
+  const response = await requestJuplendJson<
+    Record<string, JuplendPriceApiEntry>
+  >(
     `${withBaseUrl(JUP_API_BASE_URL, PRICE_V3_PATH)}?ids=${ids}`,
     {
       headers: buildApiHeaders(apiKey),
     },
+    fetchFn,
+    timeoutMs,
   );
 
   return new Map(Object.entries(response ?? {}));
@@ -436,6 +442,8 @@ function mergeTokenMetadata(
 async function enrichVaultsWithJupApi(input: {
   apiKey?: string;
   baseVaults: Map<string, JuplendVaultMetadata>;
+  fetchFn?: FetchLike;
+  timeoutMs: number;
 }): Promise<Map<string, JuplendVaultMetadata>> {
   const mintAddresses = new Set<string>();
   for (const vault of input.baseVaults.values()) {
@@ -450,8 +458,18 @@ async function enrichVaultsWithJupApi(input: {
   }
 
   const [tokenMap, priceMap] = await Promise.all([
-    loadTokenSearchMap([...mintAddresses], input.apiKey),
-    loadPriceMap([...mintAddresses], input.apiKey),
+    loadTokenSearchMap(
+      [...mintAddresses],
+      input.apiKey,
+      input.fetchFn,
+      input.timeoutMs,
+    ),
+    loadPriceMap(
+      [...mintAddresses],
+      input.apiKey,
+      input.fetchFn,
+      input.timeoutMs,
+    ),
   ]);
 
   const enriched = new Map<string, JuplendVaultMetadata>();
@@ -480,6 +498,8 @@ async function enrichVaultsWithJupApi(input: {
 async function loadVaults(
   now: number,
   apiKey?: string,
+  fetchFn?: FetchLike,
+  timeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
 ): Promise<Map<string, JuplendVaultMetadata>> {
   const cacheKey = getEnrichmentCacheKey(apiKey);
   const cached = enrichmentCache.get(cacheKey);
@@ -492,7 +512,11 @@ async function loadVaults(
   const inflight = enrichmentCachePromise.get(cacheKey);
   if (!inflight) {
     const nextPromise = (async () => {
-      const baseVaults = await loadVaultMetadataFromLiteApi(apiKey);
+      const baseVaults = await loadVaultMetadataFromLiteApi(
+        apiKey,
+        fetchFn,
+        timeoutMs,
+      );
       if (!apiKey) {
         enrichmentCache.set(cacheKey, {
           loadedAt: now,
@@ -506,6 +530,8 @@ async function loadVaults(
         const enrichedVaults = await enrichVaultsWithJupApi({
           apiKey,
           baseVaults,
+          fetchFn,
+          timeoutMs,
         });
         enrichmentCache.set(cacheKey, {
           loadedAt: now,
@@ -545,9 +571,11 @@ async function mapAccount(
   receivedAt: number,
   rpcUrl: string | undefined,
   jupApiKey: string | undefined,
+  fetchFn: FetchLike | undefined,
+  timeoutMs: number,
 ): Promise<JuplendMappedAccount> {
   const [vaults, positionResult] = await Promise.all([
-    loadVaults(receivedAt, jupApiKey),
+    loadVaults(receivedAt, jupApiKey, fetchFn, timeoutMs),
     readJuplendPositions({
       walletAddress: accountOptions.walletAddress,
       vaultId: accountOptions.vaultId,
@@ -666,6 +694,10 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
   constructor(
     private readonly rpcUrl?: string,
     private readonly jupApiKey?: string,
+    private readonly options: {
+      readonly fetchFn?: FetchLike;
+      readonly httpTimeoutMs?: number;
+    } = {},
   ) {}
 
   async bootstrapAccount(
@@ -679,6 +711,8 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
       receivedAt,
       this.rpcUrl,
       getJupApiKey(this.jupApiKey),
+      this.options.fetchFn,
+      this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
     );
 
     return {

@@ -1,4 +1,8 @@
 import { toCanonical } from "../../internal/decimal.ts";
+import {
+  type HttpClientMessages,
+  httpRequest,
+} from "../../internal/http-client.ts";
 import type { MarketDefinition, MarketType } from "../../types/index.ts";
 
 type FetchLike = typeof fetch;
@@ -54,6 +58,11 @@ const BINANCE_USDM_EXCHANGE_INFO_URL =
   "https://fapi.binance.com/fapi/v1/exchangeInfo";
 const BINANCE_COINM_EXCHANGE_INFO_URL =
   "https://dapi.binance.com/dapi/v1/exchangeInfo";
+const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
+const BINANCE_CATALOG_HTTP_MESSAGES: HttpClientMessages = {
+  http: ({ status, statusText }) =>
+    `Binance request failed: ${status} ${statusText ?? ""}`,
+};
 
 function toRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -212,15 +221,24 @@ function normalizeDerivativesSymbol(
   };
 }
 
-async function fetchJson<T>(fetchFn: FetchLike, url: string): Promise<T> {
-  const response = await fetchFn(url);
-  if (!response.ok) {
-    throw new Error(
-      `Binance request failed: ${response.status} ${response.statusText}`,
-    );
-  }
+async function requestCatalogJson<T>(
+  fetchFn: FetchLike,
+  url: string,
+): Promise<T> {
+  const response = await httpRequest<T>({
+    fetchFn,
+    url,
+    timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+    parseAs: "json",
+    jsonParseMode: "response",
+    retryPolicy: {
+      idempotent: true,
+      maxAttempts: 3,
+    },
+    messages: BINANCE_CATALOG_HTTP_MESSAGES,
+  });
 
-  return (await response.json()) as T;
+  return response.body;
 }
 
 function sortMarkets(
@@ -235,12 +253,15 @@ export async function loadBinanceMarkets(
   fetchFn: FetchLike = fetch,
 ): Promise<BinanceMarketDefinition[]> {
   const [spot, usdm, coinm] = await Promise.all([
-    fetchJson<BinanceSpotExchangeInfo>(fetchFn, BINANCE_SPOT_EXCHANGE_INFO_URL),
-    fetchJson<BinanceDerivativesExchangeInfo>(
+    requestCatalogJson<BinanceSpotExchangeInfo>(
+      fetchFn,
+      BINANCE_SPOT_EXCHANGE_INFO_URL,
+    ),
+    requestCatalogJson<BinanceDerivativesExchangeInfo>(
       fetchFn,
       BINANCE_USDM_EXCHANGE_INFO_URL,
     ),
-    fetchJson<BinanceDerivativesExchangeInfo>(
+    requestCatalogJson<BinanceDerivativesExchangeInfo>(
       fetchFn,
       BINANCE_COINM_EXCHANGE_INFO_URL,
     ),

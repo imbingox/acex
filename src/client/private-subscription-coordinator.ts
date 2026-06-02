@@ -3,7 +3,12 @@ import type {
   StreamHandle,
 } from "../adapters/types.ts";
 import { AcexError } from "../errors.ts";
-import type { AccountRuntimeOptions, Venue } from "../types/index.ts";
+import { isTransportError, redactSecrets } from "../internal/http-client.ts";
+import type {
+  AccountRuntimeOptions,
+  PrivateRuntimeReason,
+  Venue,
+} from "../types/index.ts";
 import type {
   ClientContext,
   PrivateAccountDataConsumer,
@@ -39,6 +44,23 @@ function normalizePositiveInterval(
   return value !== undefined && Number.isFinite(value) && value > 0
     ? value
     : fallback;
+}
+
+function transportReason(
+  error: unknown,
+  fallback: PrivateRuntimeReason,
+): PrivateRuntimeReason {
+  return isTransportError(error) && error.kind === "rate_limited"
+    ? "rate_limited"
+    : fallback;
+}
+
+function bootstrapErrorDetail(error: unknown): string {
+  if (!(error instanceof Error) || !error.message) {
+    return "";
+  }
+
+  return ` (${redactSecrets(error.message)})`;
 }
 
 export class PrivateSubscriptionCoordinator {
@@ -435,7 +457,7 @@ export class PrivateSubscriptionCoordinator {
         {
           runtimeStatus: "degraded",
           ready: record.accountReady,
-          reason: "http_failed",
+          reason: transportReason(error, "http_failed"),
         },
       );
     }
@@ -559,7 +581,7 @@ export class PrivateSubscriptionCoordinator {
               {
                 runtimeStatus: "degraded",
                 ready: record.accountReady,
-                reason: "http_failed",
+                reason: transportReason(error, "http_failed"),
               },
             );
           }
@@ -676,11 +698,13 @@ export class PrivateSubscriptionCoordinator {
         {
           runtimeStatus: "degraded",
           ready: false,
-          reason: record.venue === "juplend" ? "http_failed" : "auth_failed",
+          reason: transportReason(
+            error,
+            record.venue === "juplend" ? "http_failed" : "auth_failed",
+          ),
         },
       );
-      const reason =
-        error instanceof Error && error.message ? ` (${error.message})` : "";
+      const reason = bootstrapErrorDetail(error);
       throw new AcexError(
         "ACCOUNT_BOOTSTRAP_FAILED",
         `Failed to bootstrap account data: ${record.accountId}${reason}`,
@@ -727,7 +751,7 @@ export class PrivateSubscriptionCoordinator {
         {
           runtimeStatus: "degraded",
           ready: false,
-          reason: "auth_failed",
+          reason: transportReason(error, "auth_failed"),
         },
       );
       throw new AcexError(

@@ -519,13 +519,20 @@ test("account bootstrap failure does not create a placeholder snapshot", async (
   });
   await client.start();
 
-  await expect(
-    client.account.subscribeAccount({
+  const failure = await client.account
+    .subscribeAccount({
       accountId: "main-binance",
-    }),
-  ).rejects.toMatchObject({
+    })
+    .catch((error) => error);
+  expect(failure).toMatchObject({
     code: "ACCOUNT_BOOTSTRAP_FAILED",
   });
+  expect(failure.message).not.toContain("signature");
+  expect(failure.message).not.toContain("timestamp=");
+  expect(failure.message).not.toContain("recvWindow=");
+  expect(failure.message).not.toContain("apiKey=key");
+  expect(failure.message).not.toContain("X-MBX-APIKEY");
+  expect(failure.message).not.toContain("secret");
 
   expect(client.account.getAccountSnapshot("main-binance")).toBeUndefined();
   expect(client.account.getAccountStatus("main-binance")).toMatchObject({
@@ -540,8 +547,48 @@ test("account bootstrap failure does not create a placeholder snapshot", async (
     accountId: "main-binance",
     venue: "binance",
   });
+  expect(error.error.message).not.toContain("signature");
+  expect(error.error.message).not.toContain("timestamp=");
+  expect(error.error.message).not.toContain("recvWindow=");
+  expect(error.error.message).not.toContain("apiKey=key");
+  expect(error.error.message).not.toContain("X-MBX-APIKEY");
+  expect(error.error.message).not.toContain("secret");
 
   await errors.return?.();
+});
+
+test("Binance account bootstrap rate limit maps to rate_limited status without changing public code", async () => {
+  installBinancePrivateAccountInfra({ rateLimitBootstrap: true });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.account
+    .subscribeAccount({
+      accountId: "main-binance",
+    })
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    ready: false,
+    runtimeStatus: "degraded",
+    reason: "rate_limited",
+  });
 });
 
 test("removeAccount auto-cleans active private subscriptions and caches", async () => {
@@ -1166,7 +1213,7 @@ test("Juplend account subscribe falls back to lite vault metadata when Jup API f
   });
   expect(
     requests.filter((request) => request.url.hostname === "api.jup.ag"),
-  ).toHaveLength(2);
+  ).toHaveLength(5);
   expect(
     requests.filter(
       (request) =>
@@ -1223,7 +1270,7 @@ test("Juplend retries Jup enrichment after an earlier degraded fallback", async 
 
   expect(
     degradedRequests.filter((request) => request.url.hostname === "api.jup.ag"),
-  ).toHaveLength(2);
+  ).toHaveLength(5);
 
   degradedRequests.state.failTokenSearch = false;
   degradedRequests.state.failPrices = false;
@@ -1248,7 +1295,7 @@ test("Juplend retries Jup enrichment after an earlier degraded fallback", async 
 
   expect(
     degradedRequests.filter((request) => request.url.hostname === "api.jup.ag"),
-  ).toHaveLength(4);
+  ).toHaveLength(7);
   expect(
     secondClient.account.getBalance(`${JUPLEND_ACCOUNT_ID}-recovered`, "SOL"),
   ).toMatchObject({

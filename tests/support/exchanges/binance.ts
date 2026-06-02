@@ -307,6 +307,7 @@ export interface FetchRequestRecord {
 
 export function installBinancePrivateAccountInfra(options?: {
   failBootstrap?: boolean;
+  rateLimitBootstrap?: boolean;
   failCreateOrder?: boolean;
   failCancelOrder?: boolean;
   failCancelAllOrders?: boolean;
@@ -365,6 +366,16 @@ export function installBinancePrivateAccountInfra(options?: {
         return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
           status: 401,
           statusText: "Unauthorized",
+        });
+      }
+
+      if (options?.rateLimitBootstrap && url.pathname === "/papi/v1/account") {
+        return textResponse('{"code":-1003,"msg":"Too many requests"}', {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: {
+            "Retry-After": "2",
+          },
         });
       }
 

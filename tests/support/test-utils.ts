@@ -15,7 +15,11 @@ export function jsonResponse(body: unknown): Response {
 
 export function textResponse(
   body: string,
-  options: { status: number; statusText: string },
+  options: {
+    status: number;
+    statusText: string;
+    headers?: ResponseInit["headers"];
+  },
 ): Response {
   return new Response(body, options);
 }

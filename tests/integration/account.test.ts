@@ -4,6 +4,7 @@ import {
   BigNumber,
   createClient,
   type RegisterAccountInput,
+  type TimeProvider,
 } from "../../index.ts";
 import {
   installBinancePrivateAccountInfra,
@@ -31,6 +32,31 @@ async function waitForCondition<T>(
   }
 
   throw new Error(message);
+}
+
+function signedBootstrapRequests(
+  requests: ReturnType<typeof installBinancePrivateAccountInfra>,
+): ReturnType<typeof installBinancePrivateAccountInfra> {
+  return requests.filter((request) =>
+    [
+      "/papi/v1/balance",
+      "/papi/v1/account",
+      "/papi/v1/um/positionRisk",
+    ].includes(request.url.pathname),
+  );
+}
+
+async function withFixedDateNow<T>(
+  now: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalDateNow = Date.now;
+  Date.now = () => now;
+  try {
+    return await run();
+  } finally {
+    Date.now = originalDateNow;
+  }
 }
 
 test("account subscribe bootstraps Binance PAPI UM account data and applies updates", async () => {
@@ -200,6 +226,154 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   });
 
   await iterator.return?.();
+});
+
+test("client clock drives Binance signed request timestamps", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const clock: TimeProvider = {
+    now: () => 1710000001234,
+  };
+  const client = createClient({
+    clock,
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "clock-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "clock-binance",
+  });
+
+  const signedRequests = signedBootstrapRequests(requests);
+  expect(signedRequests).toHaveLength(3);
+  for (const request of signedRequests) {
+    expect(request.url.searchParams.get("timestamp")).toBe("1710000001234");
+    expect(request.url.searchParams.get("recvWindow")).toBe("5000");
+  }
+});
+
+test("account timestamp option takes precedence over client clock", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient({
+    clock: {
+      now: () => 1710000002222,
+    },
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "timestamp-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000003333,
+      recvWindow: 6000,
+    },
+  });
+
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "timestamp-binance",
+  });
+
+  const signedRequests = signedBootstrapRequests(requests);
+  expect(signedRequests).toHaveLength(3);
+  for (const request of signedRequests) {
+    expect(request.url.searchParams.get("timestamp")).toBe("1710000003333");
+    expect(request.url.searchParams.get("recvWindow")).toBe("6000");
+  }
+});
+
+test("default Binance signing clock uses local Date.now", async () => {
+  await withFixedDateNow(1710000004444, async () => {
+    const requests = installBinancePrivateAccountInfra();
+    const client = createClient({
+      account: {
+        streamOpenTimeoutMs: 50,
+        streamReconnectDelayMs: 5,
+        streamReconnectMaxDelayMs: 5,
+      },
+    });
+
+    await client.registerAccount({
+      accountId: "default-clock-binance",
+      venue: "binance",
+      credentials: {
+        apiKey: "key",
+        secret: "secret",
+      },
+    });
+
+    await client.start();
+    await client.account.subscribeAccount({
+      accountId: "default-clock-binance",
+    });
+
+    const signedRequests = signedBootstrapRequests(requests);
+    expect(signedRequests).toHaveLength(3);
+    for (const request of signedRequests) {
+      expect(request.url.searchParams.get("timestamp")).toBe("1710000004444");
+    }
+  });
+});
+
+test("Binance signing clock does not affect local receivedAt freshness time", async () => {
+  await withFixedDateNow(1710000005555, async () => {
+    const requests = installBinancePrivateAccountInfra();
+    const client = createClient({
+      clock: {
+        now: () => 42,
+      },
+      account: {
+        streamOpenTimeoutMs: 50,
+        streamReconnectDelayMs: 5,
+        streamReconnectMaxDelayMs: 5,
+      },
+    });
+
+    await client.registerAccount({
+      accountId: "freshness-binance",
+      venue: "binance",
+      credentials: {
+        apiKey: "key",
+        secret: "secret",
+      },
+    });
+
+    await client.start();
+    await client.account.subscribeAccount({
+      accountId: "freshness-binance",
+    });
+
+    for (const request of signedBootstrapRequests(requests)) {
+      expect(request.url.searchParams.get("timestamp")).toBe("42");
+    }
+    expect(
+      client.account.getAccountSnapshot("freshness-binance")?.receivedAt,
+    ).toBe(1710000005555);
+    expect(
+      client.account.getBalance("freshness-binance", "USDT")?.receivedAt,
+    ).toBe(1710000005555);
+  });
 });
 
 test("Binance account polling refreshes risk and mark-to-market positions", async () => {

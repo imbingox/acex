@@ -24,6 +24,11 @@ export interface Logger {
   error(msg: string, context?: Record<string, unknown>): void;
 }
 
+export interface TimeProvider {
+  /** Millisecond timestamp used for outbound request/signing timestamps. */
+  now(): number;
+}
+
 export interface MarketRuntimeOptions {
   l1InitialMessageTimeoutMs?: number;
   l1StaleAfterMs?: number;
@@ -48,6 +53,8 @@ export interface AccountRuntimeOptions {
 
 export interface CreateClientOptions {
   sandbox?: boolean;
+  /** Request/signing clock; local receivedAt/freshness clocks stay independent. */
+  clock?: TimeProvider;
   logger?: Logger;
   logLevel?: LogLevel;
   market?: MarketRuntimeOptions;

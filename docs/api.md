@@ -967,6 +967,8 @@ interface AccountRuntimeOptions {
 
 interface CreateClientOptions {
   sandbox?: boolean;   // 预留，当前不生效
+  clock?: TimeProvider;     // 注入签名/请求时钟，默认本地时钟
+  rateLimiter?: RateLimiter; // 注入限流器，默认 reactive（观测 + Retry-After 退避，不主动节流）
   logger?: Logger;     // 预留
   logLevel?: LogLevel; // 预留
   market?: MarketRuntimeOptions;

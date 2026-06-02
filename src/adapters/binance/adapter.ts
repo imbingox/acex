@@ -1,6 +1,7 @@
 import { SubscriptionMultiplexer } from "../../internal/subscription-multiplexer.ts";
 import type {
   MarketDefinition,
+  RateLimiter,
   VenueMarketCapabilities,
 } from "../../types/index.ts";
 import type {
@@ -53,8 +54,16 @@ export class BinanceMarketAdapter implements MarketAdapter {
   private multiplexer: BinanceMarketMultiplexer | undefined;
   private multiplexerConfig: BinanceMultiplexerConfig | undefined;
 
+  constructor(
+    private readonly options: {
+      readonly rateLimiter?: RateLimiter;
+    } = {},
+  ) {}
+
   async loadMarkets(): Promise<MarketDefinition[]> {
-    const markets = await loadBinanceMarkets();
+    const markets = await loadBinanceMarkets(fetch, {
+      rateLimiter: this.options.rateLimiter,
+    });
     this.definitions.clear();
 
     for (const market of markets) {

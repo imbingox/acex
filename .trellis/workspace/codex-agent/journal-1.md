@@ -666,3 +666,90 @@ PR1 合并后起 PR2。codex 实现（抽 `TimeProvider` 接口 + `CreateClientO
 
 - PR3：可插拔 `RateLimiter` seam，默认 reactive（读 `X-MBX-USED-WEIGHT-*` 跟踪用量 + 暴露 `rate_limited` + honor `Retry-After`），接 PR1 响应头/重试钩子与 D2 typed error 字段；proactive 权重桶留 opt-in（D4）。
 - 可选 nit（非阻塞）：`account.test.ts:143-149` 既有测试内联 filter 可复用 `signedBootstrapRequests` 去重，留待后续。
+
+
+## Session 19: 共享 venue 基础设施 PR3（REST 限流器 / 可插拔 RateLimiter seam）— 06-01 收尾
+
+**Date**: 2026-06-02
+**Task**: 06-01 共享 venue 基础设施 — PR3（rate limiter，收尾）
+**Branch**: `feat/venue-rate-limiter`
+
+### Summary
+
+PR2 合并后起 PR3（三件里最复杂）。codex 实现：可插拔 `RateLimiter` seam + venue-agnostic `ReactiveRateLimiter` 默认实现，建于 PR1 已暴露的 response headers / `retryAfterMs` 之上。Claude 独立核验（工作树为准 + 自跑 `lint/type-check/test` 108 pass + 逐项验 seam 合规 / 分层 / reactive 行为 / **签名安全** / 公共面）并派 **trellis-check** 广度审。双轨一致：**0 blocker**。按用户裁定：defer should-fix#1（snapshot 边界，Binance 必带 Retry-After 且 user-facing reason 走 typed kind 不受影响）；补 nit#2 对照测试（openOrders 401 → `auth_failed`，证明 rate_limited 不误触发）；trellis-check 自修 `docs/api.md`（含补 PR2 遗漏的 `clock` 文档）；跳 live smoke（签名加密未动，与 PR2 决定一致）。**06-01 三件套（REST 骨架 / TimeProvider / RateLimiter）全部完成。**
+
+### Main Changes
+
+- `src/internal/rate-limiter.ts`（新）：`ReactiveRateLimiter`，venue-agnostic（零交易所常量），hook `beforeRequest`/`afterResponse`/`onTransportError`/`getSnapshot`，可注入 `now`/`sleep`。
+- `src/adapters/binance/rate-limit.ts`（新）：`X-MBX-USED-WEIGHT-*`/`X-MBX-ORDER-COUNT-*` 解析（`Headers.get` 大小写不敏感、保留 interval、weight/orderCount 分轨），venue 层。
+- `src/types/shared.ts`：public `RateLimiter` + `RateLimit*` 类型 + `CreateClientOptions.rateLimiter?`。
+- 集成：`runtime.ts`（默认 `ReactiveRateLimiter` + 注入 market/private adapter）、`market-catalog.ts`/`private-adapter.ts`（REST 路径接 hook，scope=venue/accountId?/endpointKey）、`adapter.ts`、`coordinator.ts`（order bootstrap 补 accountId scope）。
+- reactive：happy path 不主动节流（等价）；429→`rate_limited`、418→`banned`（更长 block）；**非幂等不重放**；签名退避在 timestamp 生成前。
+- 测试：`rate-limiter.test.ts`（fake timer）+ 集成（429/418→reason `rate_limited`，401→`auth_failed`）+ fake infra 扩展；changeset `minor`；spec `adapter-contract.md` §3.17 + `docs/api.md`。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0d99377` | feat: pluggable RateLimiter seam with reactive default (REST rate limiting) |
+| `f48c061` | docs(spec): document RateLimiter seam contract (reactive default, venue-agnostic core) |
+
+### Testing
+
+- [OK] `bun run lint` / `type-check` 全绿
+- [OK] `bun run test` — 108 pass / 0 fail / 470 expect()
+- [SKIP] live smoke（沙箱无凭证；签名加密未动 + beforeRequest 为 happy-path no-op，用户裁定跳过）
+
+### Status
+
+🚧 **PR3 完成并提交**；06-01 三个 PR（REST 骨架 / TimeProvider / RateLimiter）全部完成，待 PR3 合并后整个 task 可归档。
+
+### Next Steps
+
+- PR3 合并后归档 06-01 task。
+- 已知 defer：`ReactiveRateLimiter` 无-Retry-After 的 429 在 `getSnapshot` 不可见（Binance 不触发；将来接无 Retry-After venue 时给 429 加小默认退避窗）。
+- roadmap：step 4（capability 化分派 + 清 venue 字面量 + credential validator + venue runtime options registry）/ step 5（接第一个新所 OKX/Bybit，届时按 venue 补 server-time 校准 + proactive 权重桶）。
+
+
+## Session 20: 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档
+
+**Date**: 2026-06-02
+**Task**: 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档
+**Branch**: `feat/venue-rate-limiter`
+
+### Summary
+
+PR3 (#40) review 修复 + 06-01 任务归档。createPrivateStream 传裸 account.options 致 listenKey rate-limit scope 缺 accountId（全局、跨账户退避污染），改为 { ...account.options, accountId } 与其它 5 处对齐 + 补回归测试（验证修前 fail / 修后 pass）。lint/type-check/test 全绿（109 pass）。06-01 三件套（REST 骨架 / TimeProvider / RateLimiter）全部完成并归档。
+
+### Main Changes
+
+PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
+- `private-subscription-coordinator.ts:598` 的 `createPrivateStream` 传裸 `account.options` → listenKey 的 `rateLimitScope` 拿到 `accountId=undefined`（全局），与其它 5 处（runtime order×3、coordinator refresh/bootstrapAccount/bootstrapOpenOrders）不一致，且一个账户 listenKey 遇 429/418 会让其它账户 keepalive 跟着退避。改为 `{ ...account.options, accountId: account.accountId }`。
+- 回归测试（`account.test.ts`）：注入 capture `RateLimiter` 断言 listenKey scope 带 `accountId`；已实测**修前 fail（undefined）/ 修后 pass**，是真守护。
+- 验证：`bun run lint` / `type-check` / `test` 全绿，109 pass / 0 fail。
+
+06-01「共享 venue 基础设施」三件套完成并归档：
+- PR1 #36（已合）：共享 HTTP 客户端 + D5 错误脱敏。
+- PR2 #38（已合）：统一 `TimeProvider` / 可注入签名时钟（与 freshness 时钟分离）。
+- PR3 #40（待合）：可插拔 `RateLimiter` seam + reactive 默认（venue-agnostic 核 + Binance 解析在 venue 层）。
+
+分工：codex 实现、Claude 独立核验 + trellis-check 广度审。后续 roadmap：step 4（capability 化分派 + 清 venue 字面量 + credential validator + venue runtime options registry）、step 5（接第一个新所，按 venue 补 server-time 校准 + proactive 权重桶）。
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4259cc6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

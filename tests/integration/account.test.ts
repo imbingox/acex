@@ -3,6 +3,8 @@ import {
   AcexError,
   BigNumber,
   createClient,
+  type RateLimiter,
+  type RateLimitScope,
   type RegisterAccountInput,
   type TimeProvider,
 } from "../../index.ts";
@@ -765,6 +767,40 @@ test("Binance account bootstrap rate limit maps to rate_limited status without c
   });
 });
 
+test("Binance account bootstrap ban maps to rate_limited status without changing public code", async () => {
+  installBinancePrivateAccountInfra({ banBootstrap: true });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.account
+    .subscribeAccount({
+      accountId: "main-binance",
+    })
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    ready: false,
+    runtimeStatus: "degraded",
+    reason: "rate_limited",
+  });
+});
+
 test("removeAccount auto-cleans active private subscriptions and caches", async () => {
   const requests = installBinancePrivateAccountInfra();
   const client = createClient({
@@ -1475,4 +1511,46 @@ test("Juplend retries Jup enrichment after an earlier degraded fallback", async 
   ).toMatchObject({
     asset: "SOL",
   });
+});
+
+test("listenKey rate-limit scope carries the per-account accountId", async () => {
+  installBinancePrivateAccountInfra();
+  const scopes: RateLimitScope[] = [];
+  const captureLimiter: RateLimiter = {
+    beforeRequest: ({ scope }) => {
+      scopes.push(scope);
+    },
+    afterResponse: () => {},
+    onTransportError: () => {},
+    getSnapshot: () => undefined,
+  };
+  const client = createClient({
+    rateLimiter: captureLimiter,
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+
+  const listenKeyScopes = scopes.filter((scope) =>
+    scope.endpointKey.includes("/papi/v1/listenKey"),
+  );
+  expect(listenKeyScopes.length).toBeGreaterThan(0);
+  for (const scope of listenKeyScopes) {
+    expect(scope.accountId).toBe("main-binance");
+  }
 });

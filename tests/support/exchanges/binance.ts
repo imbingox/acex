@@ -308,6 +308,10 @@ export interface FetchRequestRecord {
 export function installBinancePrivateAccountInfra(options?: {
   failBootstrap?: boolean;
   rateLimitBootstrap?: boolean;
+  banBootstrap?: boolean;
+  failOpenOrders?: boolean;
+  rateLimitOpenOrders?: boolean;
+  banOpenOrders?: boolean;
   failCreateOrder?: boolean;
   failCancelOrder?: boolean;
   failCancelAllOrders?: boolean;
@@ -375,6 +379,56 @@ export function installBinancePrivateAccountInfra(options?: {
           statusText: "Too Many Requests",
           headers: {
             "Retry-After": "2",
+            "X-MBX-USED-WEIGHT-1m": "1200",
+          },
+        });
+      }
+
+      if (options?.banBootstrap && url.pathname === "/papi/v1/account") {
+        return textResponse('{"code":-1003,"msg":"IP banned"}', {
+          status: 418,
+          statusText: "I'm a teapot",
+          headers: {
+            "Retry-After": "60",
+            "X-MBX-USED-WEIGHT-1m": "1400",
+          },
+        });
+      }
+
+      if (
+        options?.failOpenOrders &&
+        `${method} ${url.pathname}` === "GET /papi/v1/um/openOrders"
+      ) {
+        return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+          status: 401,
+          statusText: "Unauthorized",
+        });
+      }
+
+      if (
+        options?.rateLimitOpenOrders &&
+        `${method} ${url.pathname}` === "GET /papi/v1/um/openOrders"
+      ) {
+        return textResponse('{"code":-1003,"msg":"Too many requests"}', {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: {
+            "Retry-After": "2",
+            "X-MBX-ORDER-COUNT-10S": "50",
+          },
+        });
+      }
+
+      if (
+        options?.banOpenOrders &&
+        `${method} ${url.pathname}` === "GET /papi/v1/um/openOrders"
+      ) {
+        return textResponse('{"code":-1003,"msg":"IP banned"}', {
+          status: 418,
+          statusText: "I'm a teapot",
+          headers: {
+            "Retry-After": "60",
+            "X-MBX-ORDER-COUNT-10S": "55",
           },
         });
       }

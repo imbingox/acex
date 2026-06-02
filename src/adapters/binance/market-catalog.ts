@@ -2,8 +2,15 @@ import { toCanonical } from "../../internal/decimal.ts";
 import {
   type HttpClientMessages,
   httpRequest,
+  isTransportError,
 } from "../../internal/http-client.ts";
-import type { MarketDefinition, MarketType } from "../../types/index.ts";
+import type {
+  MarketDefinition,
+  MarketType,
+  RateLimiter,
+  RateLimitScope,
+} from "../../types/index.ts";
+import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
 
 type FetchLike = typeof fetch;
 
@@ -224,21 +231,55 @@ function normalizeDerivativesSymbol(
 async function requestCatalogJson<T>(
   fetchFn: FetchLike,
   url: string,
+  rateLimiter: RateLimiter | undefined,
+  endpointKey: string,
 ): Promise<T> {
-  const response = await httpRequest<T>({
-    fetchFn,
-    url,
-    timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-    parseAs: "json",
-    jsonParseMode: "response",
-    retryPolicy: {
-      idempotent: true,
-      maxAttempts: 3,
-    },
-    messages: BINANCE_CATALOG_HTTP_MESSAGES,
-  });
+  const scope: RateLimitScope = {
+    venue: "binance",
+    endpointKey,
+  };
 
-  return response.body;
+  await rateLimiter?.beforeRequest({ scope });
+
+  try {
+    const response = await httpRequest<T>({
+      fetchFn,
+      url,
+      timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+      parseAs: "json",
+      jsonParseMode: "response",
+      retryPolicy: {
+        idempotent: true,
+        maxAttempts: 3,
+      },
+      messages: BINANCE_CATALOG_HTTP_MESSAGES,
+    });
+
+    await rateLimiter?.afterResponse(
+      { scope },
+      {
+        status: response.status,
+        headers: response.headers,
+        usage: parseBinanceRateLimitUsage(response.headers),
+      },
+    );
+
+    return response.body;
+  } catch (error) {
+    if (isTransportError(error)) {
+      await rateLimiter?.onTransportError(
+        { scope },
+        {
+          status: error.status,
+          headers: error.headers,
+          retryAfterMs: error.retryAfterMs,
+          usage: parseBinanceRateLimitUsage(error.headers),
+        },
+      );
+    }
+
+    throw error;
+  }
 }
 
 function sortMarkets(
@@ -251,19 +292,26 @@ function sortMarkets(
 
 export async function loadBinanceMarkets(
   fetchFn: FetchLike = fetch,
+  options: { readonly rateLimiter?: RateLimiter } = {},
 ): Promise<BinanceMarketDefinition[]> {
   const [spot, usdm, coinm] = await Promise.all([
     requestCatalogJson<BinanceSpotExchangeInfo>(
       fetchFn,
       BINANCE_SPOT_EXCHANGE_INFO_URL,
+      options.rateLimiter,
+      "GET /api/v3/exchangeInfo",
     ),
     requestCatalogJson<BinanceDerivativesExchangeInfo>(
       fetchFn,
       BINANCE_USDM_EXCHANGE_INFO_URL,
+      options.rateLimiter,
+      "GET /fapi/v1/exchangeInfo",
     ),
     requestCatalogJson<BinanceDerivativesExchangeInfo>(
       fetchFn,
       BINANCE_COINM_EXCHANGE_INFO_URL,
+      options.rateLimiter,
+      "GET /dapi/v1/exchangeInfo",
     ),
   ]);
 

@@ -29,6 +29,58 @@ export interface TimeProvider {
   now(): number;
 }
 
+export interface RateLimitScope {
+  venue: Venue;
+  accountId?: string;
+  endpointKey: string;
+}
+
+export interface RateLimitUsage {
+  /** Exchange request-weight usage by interval key, e.g. "1m". */
+  weight?: Record<string, number>;
+  /** Exchange order-count usage by interval key, separate from request weight. */
+  orderCount?: Record<string, number>;
+}
+
+export interface RateLimitRequestContext {
+  scope: RateLimitScope;
+}
+
+export interface RateLimitResponseContext {
+  status: number;
+  headers?: Headers;
+  usage?: RateLimitUsage;
+}
+
+export interface RateLimitTransportErrorContext {
+  status?: number;
+  headers?: Headers;
+  retryAfterMs?: number;
+  usage?: RateLimitUsage;
+}
+
+export interface RateLimitSnapshot {
+  scope: RateLimitScope;
+  usage?: RateLimitUsage;
+  blockedUntil?: number;
+  retryAfterMs?: number;
+  state: "ok" | "rate_limited" | "banned";
+  updatedAt?: number;
+}
+
+export interface RateLimiter {
+  beforeRequest(ctx: RateLimitRequestContext): Promise<void> | void;
+  afterResponse(
+    ctx: RateLimitRequestContext,
+    response: RateLimitResponseContext,
+  ): Promise<void> | void;
+  onTransportError(
+    ctx: RateLimitRequestContext,
+    error: RateLimitTransportErrorContext,
+  ): Promise<void> | void;
+  getSnapshot(scope: RateLimitScope): RateLimitSnapshot | undefined;
+}
+
 export interface MarketRuntimeOptions {
   l1InitialMessageTimeoutMs?: number;
   l1StaleAfterMs?: number;
@@ -55,6 +107,7 @@ export interface CreateClientOptions {
   sandbox?: boolean;
   /** Request/signing clock; local receivedAt/freshness clocks stay independent. */
   clock?: TimeProvider;
+  rateLimiter?: RateLimiter;
   logger?: Logger;
   logLevel?: LogLevel;
   market?: MarketRuntimeOptions;

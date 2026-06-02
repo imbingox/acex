@@ -595,7 +595,7 @@ export class PrivateSubscriptionCoordinator {
         juplendPollIntervalMs: this.juplendPollIntervalMs,
         now: () => this.context.now(),
       },
-      account.options,
+      { ...account.options, accountId: account.accountId },
     );
 
     record.stream = stream;
@@ -719,7 +719,7 @@ export class PrivateSubscriptionCoordinator {
     try {
       const snapshots = await this.getAdapter(record.venue).bootstrapOpenOrders(
         account.credentials ?? {},
-        account.options,
+        { ...account.options, accountId: account.accountId },
       );
       if (!record.ordersSubscribed) {
         return;

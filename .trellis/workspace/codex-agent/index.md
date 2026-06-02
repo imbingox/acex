@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 18
+- **Total Sessions**: 20
 - **Last Active**: 2026-06-02
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~668 | Active |
+| `journal-1.md` | ~755 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-06-02 | 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档 | `4259cc6` | `feat/venue-rate-limiter` |
+| 19 | 2026-06-02 | 共享 venue 基础设施 PR3（REST 限流器 / RateLimiter seam） | `0d99377`, `f48c061` | `feat/venue-rate-limiter` |
 | 18 | 2026-06-02 | 共享 venue 基础设施 PR2（统一 TimeProvider / 可注入签名时钟） | `c3c9460`, `2382b9e` | `feat/venue-time-provider` |
 | 17 | 2026-06-02 | 共享 venue 基础设施 PR1（REST 骨架 + 错误脱敏） | `d9bacb6`, `df49fa1`, `362b6b5` | `feat/shared-venue-infrastructure` |
 | 16 | 2026-06-01 | 公共数值契约：对外 BigNumber 改 canonical decimal string | `adc9274`, `eb9a1a2`, `6219bee` | `feat/public-decimal-string-contract` |

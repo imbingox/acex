@@ -623,3 +623,46 @@ PR1 由 codex 实现（新增 venue-agnostic 的 `src/internal/http-client.ts` +
 - PR2：统一 time provider（抽 `TimeProvider` 接口、签名时间从裸 `Date.now()` 收口为可注入 `now()`；server-time 校准延后到接时钟敏感新所时按 venue 补）
 - PR3：rate limiter（消费 `retryAfterMs` 做退避 + 全局限流）
 - 可选后续：juplend 只读 fallback 路径重试放大（best-effort enrichment/price 读可降到 `maxAttempts:1`）— 当前按 PRD「safe-read retry」收着
+
+
+## Session 18: 共享 venue 基础设施 PR2（统一 TimeProvider / 可注入签名时钟）
+
+**Date**: 2026-06-02
+**Task**: 06-01 共享 venue 基础设施 — PR2（time provider）
+**Branch**: `feat/venue-time-provider`
+
+### Summary
+
+PR1 合并后起 PR2。codex 实现（抽 `TimeProvider` 接口 + `CreateClientOptions.clock` public 选项 + `BinancePrivateAdapter.signingClock` 独立注入 + 签名 `timestamp` 收口）。Claude 独立核验：因 task_id 转写丢失，改以**工作树为准** + 自跑 `lint/type-check/test`（100 pass）+ 逐项验（#7 双时钟分离 / 公共类型导出 / 默认等价 / 范围纪律 / 签名点完整性），并派 **trellis-check** 做广度审。双轨一致：**零 blocker、可进 commit**。按用户判断（签名加密逻辑未动、默认字节等价、fake-infra 已断言签名参数）跳过 live smoke。
+
+### Main Changes
+
+- `src/types/shared.ts`：新增 public `TimeProvider { now(): number }` + `CreateClientOptions.clock?`（经 `types/index.ts → src/index.ts → 根 index.ts` 对外导出）。
+- `src/client/runtime.ts`：`new BinancePrivateAdapter({ signingClock: options.clock })`。
+- `src/adapters/binance/private-adapter.ts`：新增**独立** `signingClock?` 选项；签名优先级 `accountOptions.timestamp ?? signingClock?.now() ?? Date.now()`，`recvWindow` 不变。
+- **#7 双时钟分离**：`signingClock` 只驱动签名时间，与 `receivedAt`/freshness（`context.now`、ManagedWebSocket `now`、各 adapter `receivedAt`）完全隔离；未来 server-time 校准只作用签名、不污染 §3.8。
+- D3：仅抽接口 + 默认本地时钟，**不含 server-time 校准**；不做限流（PR3）。
+- `tests/integration/account.test.ts` +4：clock 驱动签名 / accountOptions.timestamp 优先 / 默认本地 / **签名钟不污染 receivedAt**。
+- changeset `minor`；spec `adapter-contract.md` §3.8 新增「签名/请求时间」+「签名时钟 ⟂ freshness 时钟」硬约束 + index 同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c3c9460` | feat: injectable request signing clock (TimeProvider); default local clock |
+| `2382b9e` | docs(spec): document signing-time vs freshness-time separation (TimeProvider) |
+
+### Testing
+
+- [OK] `bun run lint`（biome）/ `bun run type-check`（tsc）全绿
+- [OK] `bun run test` — 100 pass / 0 fail / 454 expect()
+- [SKIP] live smoke（沙箱无凭证；签名加密未动 + 默认等价，用户裁定可跳过）
+
+### Status
+
+🚧 **PR2 完成并提交**（task 06-01 整体进行中）
+
+### Next Steps
+
+- PR3：可插拔 `RateLimiter` seam，默认 reactive（读 `X-MBX-USED-WEIGHT-*` 跟踪用量 + 暴露 `rate_limited` + honor `Retry-After`），接 PR1 响应头/重试钩子与 D2 typed error 字段；proactive 权重桶留 opt-in（D4）。
+- 可选 nit（非阻塞）：`account.test.ts:143-149` 既有测试内联 filter 可复用 `signedBootstrapRequests` 去重，留待后续。

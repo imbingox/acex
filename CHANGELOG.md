@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.4.0-beta.4
+
+### Minor Changes
+
+- 0d99377: Add a public `RateLimiter` seam via `CreateClientOptions.rateLimiter`. The default reactive limiter tracks venue-provided REST usage metadata and honors `Retry-After` after 429/418 responses without proactively throttling normal requests or replaying non-idempotent order commands.
+
 ## 0.4.0-beta.3
 
 ### Minor Changes

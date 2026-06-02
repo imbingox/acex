@@ -67,7 +67,7 @@
 - [ ] 缺 cred 仍抛 `CREDENTIALS_MISSING`；message / metadata / 时机不变。
 - [ ] **新增** coordinator 单测：websocket-like adapter → 先 ensureStream 后 bootstrap 且继续 refresh polling；polling-like adapter → 先 bootstrap 后 stream；无 `refreshAccount` 方法 → 不调度 refresh timer；失败回滚不残留 timer / listenKey。
 - [ ] 失败 reason：binance 非 rate-limit → `auth_failed`、juplend → `http_failed`、rate-limit → `rate_limited`（三组 reason 锁死）。
-- [ ] 公共类型 / 公共选项无变更（无需 changeset / 非破坏）。
+- [ ] 公共类型 / 公共选项无变更（非破坏）；含 patch changeset（无公共 API 变更，但内部 src 重构按仓库约定仍打 patch、随下次 beta 发布，见 release-publishing §3.7 + market-ws-connection-multiplexing 先例）。
 - [ ] lint / type-check / test 全绿。
 
 ## Definition of Done
@@ -82,7 +82,7 @@
 - **D2（credential validator 延后）** 仅用 `accountCapabilities.credentialsRequired` 清 juplend 特判；per-adapter validator 接口 + OKX passphrase 留到 Step 5（YAGNI，同 Step 3 延后 server-time 之克制）。
 - **D3（失败 flavor）** `coordinator:703` fallback 改为 `adapter.accountCapabilities.credentialsRequired ? "auth_failed" : "http_failed"`（adapter 经 `getAdapter(record.venue)` 取，record 无此字段）；`transportReason` 的 `rate_limited` 优先级保留。对现有两 venue 逐字节等价。
 - **D4（交付）** 单任务、3 顺序 commit、一次 PR；codex 实现 + Claude 复核。
-- **核心不变量**：对外可观测行为（拒绝的 venue/操作集合、`AcexError` code、错误时机、polling vs WS 路径）逐条等价；无公共 API / 数值 / 错误码契约变更，**无 changeset**。
+- **核心不变量**：对外可观测行为（拒绝的 venue/操作集合、`AcexError` code、错误时机、polling vs WS 路径）逐条等价；无公共 API / 数值 / 错误码契约变更，**含 patch changeset**（无公共 API / 数值 / 错误码契约变更；内部 src 重构按仓库约定仍打 patch）。
 
 ## Implementation Plan（3 commit → 1 PR，按等价风险升序）
 

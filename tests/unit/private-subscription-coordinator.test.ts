@@ -401,6 +401,8 @@ test("websocket-like account subscriptions start the stream before bootstrapping
     coordinator.subscribeAccountFeed("main-binance"),
   );
 
+  expect(trace).toContain("stream-ready");
+  expect(trace).toContain("account-bootstrap");
   expect(trace.indexOf("stream-ready")).toBeLessThan(
     trace.indexOf("account-bootstrap"),
   );
@@ -432,6 +434,8 @@ test("polling-like account subscriptions bootstrap before stream startup and do 
     coordinator.subscribeAccountFeed("main-binance"),
   );
 
+  expect(trace).toContain("bootstrap");
+  expect(trace).toContain("stream-create");
   expect(trace.indexOf("bootstrap")).toBeLessThan(
     trace.indexOf("stream-create"),
   );
@@ -525,6 +529,8 @@ test("resumeRecord preserves websocket-like stream-first account ordering", asyn
   await Bun.sleep(5);
   coordinator.unsubscribeAccountFeed("main-binance");
 
+  expect(trace).toContain("stream-ready");
+  expect(trace).toContain("account-bootstrap");
   expect(trace.indexOf("stream-ready")).toBeLessThan(
     trace.indexOf("account-bootstrap"),
   );
@@ -547,6 +553,8 @@ test("resumeRecord preserves polling-like bootstrap-first account ordering", asy
   coordinator.onCredentialsUpdated("main-binance");
   await Bun.sleep(5);
 
+  expect(trace).toContain("bootstrap");
+  expect(trace).toContain("stream-create");
   expect(trace.indexOf("bootstrap")).toBeLessThan(
     trace.indexOf("stream-create"),
   );

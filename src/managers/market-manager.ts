@@ -23,6 +23,7 @@ import type {
   FundingRateUpdatedEvent,
   L1Book,
   L1BookUpdatedEvent,
+  MarketCatalogReloadSummary,
   MarketDataStatus,
   MarketDataStreamStatus,
   MarketDefinition,
@@ -61,6 +62,13 @@ interface MarketRecord {
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
   fundingRateStream?: StreamHandle;
+}
+
+interface CatalogFetchResult {
+  venue: Venue;
+  added: string[];
+  removed: string[];
+  total: number;
 }
 
 const DEFAULT_INITIAL_L1_TIMEOUT_MS = 15_000;
@@ -114,7 +122,10 @@ export class MarketManagerImpl
   private readonly definitions = new Map<string, MarketDefinition>();
   private readonly records = new Map<string, MarketRecord>();
   private readonly loadedCatalogVenues = new Set<Venue>();
-  private readonly catalogPromises = new Map<Venue, Promise<void>>();
+  private readonly catalogPromises = new Map<
+    Venue,
+    Promise<CatalogFetchResult>
+  >();
   private readonly initialL1TimeoutMs: number;
   private readonly l1StaleAfterMs: number;
   private readonly l1ReconnectDelayMs: number;
@@ -164,6 +175,30 @@ export class MarketManagerImpl
     await Promise.all(
       [...this.adapters.keys()].map((venue) => this.loadMarketCatalog(venue)),
     );
+  }
+
+  async reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]> {
+    if (venue !== undefined) {
+      this.assertSupportedVenue(venue);
+      return [await this.reloadVenue(venue)];
+    }
+
+    const venues = [...this.adapters.keys()];
+    const settled = await Promise.allSettled(
+      venues.map((registeredVenue) => this.reloadVenue(registeredVenue)),
+    );
+    const summaries: MarketCatalogReloadSummary[] = [];
+
+    for (const result of settled) {
+      if (result.status === "fulfilled") {
+        summaries.push(result.value);
+        continue;
+      }
+
+      throw result.reason;
+    }
+
+    return summaries;
   }
 
   async subscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
@@ -438,51 +473,132 @@ export class MarketManagerImpl
       return;
     }
 
-    let catalogPromise = this.catalogPromises.get(venue);
-    if (!catalogPromise) {
-      catalogPromise = this.fetchAndStoreMarketCatalog(venue);
-      this.catalogPromises.set(venue, catalogPromise);
-    }
+    await this.fetchCatalogCoalesced(venue);
+  }
 
+  private async reloadVenue(venue: Venue): Promise<MarketCatalogReloadSummary> {
     try {
-      await catalogPromise;
+      const result = await this.fetchCatalogCoalesced(venue);
+      return { ...result, ok: true };
     } catch (error) {
-      this.catalogPromises.delete(venue);
+      if (
+        error instanceof AcexError &&
+        error.code === "MARKET_CATALOG_LOAD_FAILED"
+      ) {
+        return {
+          venue,
+          added: [],
+          removed: [],
+          total: this.countVenueMarkets(venue),
+          ok: false,
+          error,
+        };
+      }
+
       throw error;
     }
   }
 
-  private async fetchAndStoreMarketCatalog(venue: Venue): Promise<void> {
+  private async fetchCatalogCoalesced(
+    venue: Venue,
+  ): Promise<CatalogFetchResult> {
+    let catalogPromise = this.catalogPromises.get(venue);
+    if (!catalogPromise) {
+      catalogPromise = this.fetchAndStoreMarketCatalog(venue).finally(() => {
+        this.catalogPromises.delete(venue);
+      });
+      this.catalogPromises.set(venue, catalogPromise);
+    }
+
+    return await catalogPromise;
+  }
+
+  private async fetchAndStoreMarketCatalog(
+    venue: Venue,
+  ): Promise<CatalogFetchResult> {
     const adapter = this.getMarketAdapter(venue);
+    let markets: MarketDefinition[];
 
     try {
-      const markets = await adapter.loadMarkets();
-
-      for (const [key, market] of this.definitions) {
-        if (market.venue === venue) {
-          this.definitions.delete(key);
-        }
-      }
-
-      for (const market of markets) {
-        this.definitions.set(marketKey(market), market);
-      }
-
-      this.loadedCatalogVenues.add(venue);
+      markets = await adapter.loadMarkets();
     } catch (error) {
-      const wrapped = new AcexError(
-        "MARKET_CATALOG_LOAD_FAILED",
-        `Failed to load market catalog from ${venue}`,
-      );
-      this.context.publishRuntimeError(
-        "adapter",
-        error instanceof Error
-          ? error
-          : new Error("Unknown catalog load failure"),
-        { venue },
-      );
-      throw wrapped;
+      throw this.createCatalogLoadError(venue, error);
     }
+
+    const mismatchedMarket = markets.find((market) => market.venue !== venue);
+    if (mismatchedMarket) {
+      throw this.createCatalogLoadError(
+        venue,
+        new Error(
+          `Market catalog from ${venue} included ${mismatchedMarket.venue} market: ${mismatchedMarket.symbol}`,
+        ),
+      );
+    }
+
+    const previousKeys = this.getVenueMarketKeys(venue);
+
+    for (const [key, market] of this.definitions) {
+      if (market.venue === venue) {
+        this.definitions.delete(key);
+      }
+    }
+
+    for (const market of markets) {
+      this.definitions.set(marketKey(market), market);
+    }
+
+    this.loadedCatalogVenues.add(venue);
+
+    const currentKeys = this.getVenueMarketKeys(venue);
+    return {
+      venue,
+      added: this.diffMarketSymbols(venue, currentKeys, previousKeys),
+      removed: this.diffMarketSymbols(venue, previousKeys, currentKeys),
+      total: currentKeys.size,
+    };
+  }
+
+  private getVenueMarketKeys(venue: Venue): Set<string> {
+    const keys = new Set<string>();
+
+    for (const [key, market] of this.definitions) {
+      if (market.venue === venue) {
+        keys.add(key);
+      }
+    }
+
+    return keys;
+  }
+
+  private countVenueMarkets(venue: Venue): number {
+    return this.getVenueMarketKeys(venue).size;
+  }
+
+  private diffMarketSymbols(
+    venue: Venue,
+    left: Set<string>,
+    right: Set<string>,
+  ): string[] {
+    const prefix = `${venue}:`;
+    return [...left]
+      .filter((key) => !right.has(key))
+      .map((key) => key.slice(prefix.length))
+      .sort((leftSymbol, rightSymbol) => leftSymbol.localeCompare(rightSymbol));
+  }
+
+  private createCatalogLoadError(venue: Venue, error: unknown): AcexError {
+    const wrapped = new AcexError(
+      "MARKET_CATALOG_LOAD_FAILED",
+      `Failed to load market catalog from ${venue}`,
+    );
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error("Unknown catalog load failure"),
+      { venue },
+    );
+    return wrapped;
   }
 
   private async resolveMarketDefinition(input: {

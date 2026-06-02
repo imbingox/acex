@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "验证 capability 被正确用于分派:supported(命令)vs updates(订阅)未混用、内部直接读 adapter capability 而非 clone 的 public snapshot、未误改静态能力表语义。"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核对 coordinator 改造未破坏 PrivateUserDataAdapter 契约/StreamHandle 语义/错误传播;refresh polling 按 refreshAccount method 存在性判别且保留 {preserveStatus:true};transportReason 的 rate_limited 优先级未被覆盖。"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "回归重点:验证 juplend createOrder/cancelOrder/cancelAllOrders 仍抛 VENUE_NOT_SUPPORTED 且在 adapter command 之前、缺 cred 仍 CREDENTIALS_MISSING,下单命令错误语义逐条等价。"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "核对无层级反转:context.ts helper 未反向 import adapter;OrderManager 经 ClientContext 窄接口取 capability,依赖方向仍严格向下。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/type-check/test 门禁与测试结构(tests/unit、tests/integration);核对新增 Juplend 三下单拒绝测试 + coordinator 顺序/refresh/回滚单测齐备。"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核对 hasPrivateCredentials 新签名、PrivateStreamOptions 去 juplend 后无 any/宽化、显式返回类型;确认未误改公共类型。"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "守 AC'对外非破坏':确认未动公共 API/公共选项/AcexErrorCode,beta 阶段无需 changeset;若意外触及公共面,核对发布门禁义务。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 OrderManager→ClientContext→adapter capability 跨层链路在改造后完整、无断点,拒绝/失败时机与现状一致。"}
+{"file": ".trellis/tasks/06-02-venue-capability-dispatch/codex-prd-review.md", "reason": "复核验收清单来源:逐条核对 8 点修正是否落实(coordinator 双 predicate、D3 对象来源、message 未增强、startStream 等价、supported/updates 不混用、PrivateStreamOptions 无 juplend、三组 reason auth_failed/http_failed/rate_limited)+ 实现者提醒未踩坑。"}

@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "验证错误传播(§3.6 :141-152)、时间戳(§3.8)、限流(§3.10)契约未被破坏,且本任务新增的 REST 骨架/限流/time provider 契约段齐备、与 D2/D3/D4 一致。"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "核对新 src/internal/ 模块满足 Layer 0 不依赖上层的依赖方向、目录与导出约定(无中间 re-export、交易所类型不泄漏)。"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核对 typed transport error 判别联合、显式返回类型、无 any/宽化;确认未误改公共类型。"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "高敏感下单 REST 路径是回归重点:验证迁移后行为等价、非幂等命令默认不重试、交易命令错误语义不变。"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "守 AC 不破坏对外行为:beta 阶段公共 contract 敏感,确认未动公共 AcexErrorCode/公共 API(D2 本任务不扩传输码);若意外触及公共面,核对 changeset/发布门禁义务。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/type-check/test 门禁与测试结构(tests/unit、tests/integration);核对新增单测覆盖 timeout/retry/限流/time provider。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "验证 adapter 抛 transport error → manager 归一到业务码的跨层链路在迁移后完整、无断点。"}
+{"file": ".trellis/tasks/06-01-shared-venue-infrastructure/codex-prd-review.md", "reason": "审核验收清单来源:核对 D5 redaction 有单测且对外 message 无 signature/API key、PR1 行为等价矩阵齐备、per-call 幂等分类正确(下单不重试)、429/418→rate_limited 映射、签名时间 vs receivedAt 分离、live smoke/回滚策略落实。"}

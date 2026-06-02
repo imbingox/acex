@@ -177,6 +177,102 @@ test("order status enters reconnecting on disconnect and recovers after websocke
   expect(client.order.getOpenOrders("main-binance")).toHaveLength(1);
 });
 
+test("order bootstrap rate limit maps to rate_limited status without changing public code", async () => {
+  installBinancePrivateAccountInfra({ rateLimitOpenOrders: true });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.order.subscribeOrders({
+      accountId: "main-binance",
+    }),
+  ).rejects.toMatchObject({
+    code: "ORDER_BOOTSTRAP_FAILED",
+  });
+  expect(client.order.getOrderStatus("main-binance")).toMatchObject({
+    ready: false,
+    runtimeStatus: "degraded",
+    reason: "rate_limited",
+  });
+});
+
+test("order bootstrap ban maps to rate_limited status without changing public code", async () => {
+  installBinancePrivateAccountInfra({ banOpenOrders: true });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.order.subscribeOrders({
+      accountId: "main-binance",
+    }),
+  ).rejects.toMatchObject({
+    code: "ORDER_BOOTSTRAP_FAILED",
+  });
+  expect(client.order.getOrderStatus("main-binance")).toMatchObject({
+    ready: false,
+    runtimeStatus: "degraded",
+    reason: "rate_limited",
+  });
+});
+
+test("order bootstrap auth failure keeps auth_failed reason and does not over-report rate_limited", async () => {
+  installBinancePrivateAccountInfra({ failOpenOrders: true });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.order.subscribeOrders({
+      accountId: "main-binance",
+    }),
+  ).rejects.toMatchObject({
+    code: "ORDER_BOOTSTRAP_FAILED",
+  });
+  expect(client.order.getOrderStatus("main-binance")).toMatchObject({
+    ready: false,
+    runtimeStatus: "degraded",
+    reason: "auth_failed",
+  });
+});
+
 test("createOrder sends the expected Binance PAPI request and stores the returned snapshot", async () => {
   const requests = installBinancePrivateAccountInfra();
   const client = createClient();

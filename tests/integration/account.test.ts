@@ -765,6 +765,40 @@ test("Binance account bootstrap rate limit maps to rate_limited status without c
   });
 });
 
+test("Binance account bootstrap ban maps to rate_limited status without changing public code", async () => {
+  installBinancePrivateAccountInfra({ banBootstrap: true });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.account
+    .subscribeAccount({
+      accountId: "main-binance",
+    })
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
+    code: "ACCOUNT_BOOTSTRAP_FAILED",
+  });
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    ready: false,
+    runtimeStatus: "degraded",
+    reason: "rate_limited",
+  });
+});
+
 test("removeAccount auto-cleans active private subscriptions and caches", async () => {
   const requests = installBinancePrivateAccountInfra();
   const client = createClient({

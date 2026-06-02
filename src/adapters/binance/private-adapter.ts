@@ -4,11 +4,14 @@ import {
   type HttpClientMessages,
   type HttpRetryPolicy,
   httpRequest,
+  isTransportError,
 } from "../../internal/http-client.ts";
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type {
   AccountCredentials,
   PositionSide,
+  RateLimiter,
+  RateLimitScope,
   TimeProvider,
   VenueAccountCapabilities,
   VenueOrderCapabilities,
@@ -28,6 +31,7 @@ import type {
   RawRiskUpdate,
   StreamHandle,
 } from "../types.ts";
+import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type SignedRequestMethod = "GET" | "POST" | "DELETE";
@@ -203,6 +207,14 @@ function getNumberOption(
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function getStringOption(
+  options: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = options?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function signQuery(query: string, secret: string): string {
@@ -590,6 +602,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       readonly fetchFn?: FetchLike;
       readonly httpTimeoutMs?: number;
       readonly signingClock?: TimeProvider;
+      readonly rateLimiter?: RateLimiter;
     } = {},
   ) {}
 
@@ -786,7 +799,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     credentials: AccountCredentials,
     callbacks: PrivateStreamCallbacks,
     options: PrivateStreamOptions,
-    _accountOptions?: Record<string, unknown>,
+    accountOptions?: Record<string, unknown>,
   ): StreamHandle {
     let closed = false;
     let listenKey: string | undefined;
@@ -808,17 +821,19 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
 
       const key = listenKey;
       listenKey = undefined;
-      void this.closeUserDataStream(credentials, key).catch((error) => {
-        callbacks.onError(
-          error instanceof Error
-            ? error
-            : new Error("Failed to close Binance PAPI listenKey"),
-        );
-      });
+      void this.closeUserDataStream(credentials, key, accountOptions).catch(
+        (error) => {
+          callbacks.onError(
+            error instanceof Error
+              ? error
+              : new Error("Failed to close Binance PAPI listenKey"),
+          );
+        },
+      );
     };
 
     const ready = (async () => {
-      listenKey = await this.startUserDataStream(credentials);
+      listenKey = await this.startUserDataStream(credentials, accountOptions);
       if (closed) {
         closeListenKey();
         return;
@@ -829,15 +844,17 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
           return;
         }
 
-        void this.keepAliveUserDataStream(credentials, listenKey).catch(
-          (error) => {
-            callbacks.onError(
-              error instanceof Error
-                ? error
-                : new Error("Failed to keep Binance PAPI listenKey alive"),
-            );
-          },
-        );
+        void this.keepAliveUserDataStream(
+          credentials,
+          listenKey,
+          accountOptions,
+        ).catch((error) => {
+          callbacks.onError(
+            error instanceof Error
+              ? error
+              : new Error("Failed to keep Binance PAPI listenKey alive"),
+          );
+        });
       }, options.listenKeyKeepAliveMs);
 
       websocket = createManagedWebSocket<BinancePrivateMessage>({
@@ -905,6 +922,9 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     retryPolicy?: HttpRetryPolicy,
   ): Promise<T> {
     const { apiKey, secret } = requirePrivateCredentials(credentials);
+    const scope = this.rateLimitScope(method, path, accountOptions);
+    await this.options.rateLimiter?.beforeRequest({ scope });
+
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(queryParams ?? {})) {
       if (value !== undefined) {
@@ -927,31 +947,58 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
 
     const url = `${BINANCE_PAPI_REST_BASE_URL}${path}?${params.toString()}`;
     const timeoutMs = this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-    const response = await httpRequest<T>({
-      fetchFn: this.options.fetchFn,
-      url,
-      method,
-      headers: {
-        "X-MBX-APIKEY": apiKey,
-      },
-      timeoutMs,
-      parseAs: "json",
-      emptyBody: "empty_object",
-      retryPolicy: retryPolicy ?? NO_RETRY_POLICY,
-      messages: getBinancePapiHttpMessages(timeoutMs),
-    });
+    try {
+      const response = await httpRequest<T>({
+        fetchFn: this.options.fetchFn,
+        url,
+        method,
+        headers: {
+          "X-MBX-APIKEY": apiKey,
+        },
+        timeoutMs,
+        parseAs: "json",
+        emptyBody: "empty_object",
+        retryPolicy: retryPolicy ?? NO_RETRY_POLICY,
+        messages: getBinancePapiHttpMessages(timeoutMs),
+      });
 
-    return response.body;
+      await this.options.rateLimiter?.afterResponse(
+        { scope },
+        {
+          status: response.status,
+          headers: response.headers,
+          usage: parseBinanceRateLimitUsage(response.headers),
+        },
+      );
+
+      return response.body;
+    } catch (error) {
+      if (isTransportError(error)) {
+        await this.options.rateLimiter?.onTransportError(
+          { scope },
+          {
+            status: error.status,
+            headers: error.headers,
+            retryAfterMs: error.retryAfterMs,
+            usage: parseBinanceRateLimitUsage(error.headers),
+          },
+        );
+      }
+
+      throw error;
+    }
   }
 
   private async startUserDataStream(
     credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
   ): Promise<string> {
     const response = await this.userStreamRequest<BinanceListenKeyResponse>(
       "POST",
       credentials,
       undefined,
       NO_RETRY_POLICY,
+      accountOptions,
     );
     if (!response.listenKey) {
       throw new Error("Binance PAPI did not return a listenKey");
@@ -963,24 +1010,28 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   private async keepAliveUserDataStream(
     credentials: AccountCredentials,
     listenKey: string,
+    accountOptions?: Record<string, unknown>,
   ): Promise<void> {
     await this.userStreamRequest<Record<string, never>>(
       "PUT",
       credentials,
       listenKey,
       LISTEN_KEY_KEEPALIVE_RETRY_POLICY,
+      accountOptions,
     );
   }
 
   private async closeUserDataStream(
     credentials: AccountCredentials,
     listenKey: string,
+    accountOptions?: Record<string, unknown>,
   ): Promise<void> {
     await this.userStreamRequest<Record<string, never>>(
       "DELETE",
       credentials,
       listenKey,
       NO_RETRY_POLICY,
+      accountOptions,
     );
   }
 
@@ -989,8 +1040,16 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     credentials: AccountCredentials,
     listenKey?: string,
     retryPolicy: HttpRetryPolicy = NO_RETRY_POLICY,
+    accountOptions?: Record<string, unknown>,
   ): Promise<T> {
     const { apiKey } = requirePrivateCredentials(credentials);
+    const scope = this.rateLimitScope(
+      method,
+      "/papi/v1/listenKey",
+      accountOptions,
+    );
+    await this.options.rateLimiter?.beforeRequest({ scope });
+
     const params = new URLSearchParams();
     if (listenKey) {
       params.set("listenKey", listenKey);
@@ -1001,20 +1060,57 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       query ? `?${query}` : ""
     }`;
     const timeoutMs = this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
-    const response = await httpRequest<T>({
-      fetchFn: this.options.fetchFn,
-      url,
-      method,
-      headers: {
-        "X-MBX-APIKEY": apiKey,
-      },
-      timeoutMs,
-      parseAs: "json",
-      emptyBody: "empty_object",
-      retryPolicy,
-      messages: getBinancePapiHttpMessages(timeoutMs),
-    });
+    try {
+      const response = await httpRequest<T>({
+        fetchFn: this.options.fetchFn,
+        url,
+        method,
+        headers: {
+          "X-MBX-APIKEY": apiKey,
+        },
+        timeoutMs,
+        parseAs: "json",
+        emptyBody: "empty_object",
+        retryPolicy,
+        messages: getBinancePapiHttpMessages(timeoutMs),
+      });
 
-    return response.body;
+      await this.options.rateLimiter?.afterResponse(
+        { scope },
+        {
+          status: response.status,
+          headers: response.headers,
+          usage: parseBinanceRateLimitUsage(response.headers),
+        },
+      );
+
+      return response.body;
+    } catch (error) {
+      if (isTransportError(error)) {
+        await this.options.rateLimiter?.onTransportError(
+          { scope },
+          {
+            status: error.status,
+            headers: error.headers,
+            retryAfterMs: error.retryAfterMs,
+            usage: parseBinanceRateLimitUsage(error.headers),
+          },
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  private rateLimitScope(
+    method: string,
+    path: string,
+    accountOptions?: Record<string, unknown>,
+  ): RateLimitScope {
+    return {
+      venue: "binance",
+      accountId: getStringOption(accountOptions, "accountId"),
+      endpointKey: `${method} ${path}`,
+    };
   }
 }

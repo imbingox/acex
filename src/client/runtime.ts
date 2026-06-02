@@ -12,6 +12,7 @@ import type {
 import { AcexError, type AcexErrorCode } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesHealthFilter } from "../internal/filters.ts";
+import { ReactiveRateLimiter } from "../internal/rate-limiter.ts";
 import { AccountManagerImpl } from "../managers/account-manager.ts";
 import { MarketManagerImpl } from "../managers/market-manager.ts";
 import { OrderManagerImpl } from "../managers/order-manager.ts";
@@ -102,11 +103,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
 
-    const marketAdapter = new BinanceMarketAdapter();
+    const rateLimiter = options.rateLimiter ?? new ReactiveRateLimiter();
+    const marketAdapter = new BinanceMarketAdapter({ rateLimiter });
     this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
     const privateAdapters = [
       new BinancePrivateAdapter({
         signingClock: options.clock,
+        rateLimiter,
       }),
       new JuplendPrivateAdapter(
         options.account?.juplend?.rpcUrl,
@@ -341,7 +344,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     return this.getPrivateAdapter(account.venue).createOrder(
       account.credentials ?? {},
       request,
-      account.options,
+      { ...account.options, accountId: account.accountId },
     );
   }
 
@@ -356,7 +359,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     return this.getPrivateAdapter(account.venue).cancelOrder(
       account.credentials ?? {},
       request,
-      account.options,
+      { ...account.options, accountId: account.accountId },
     );
   }
 
@@ -369,7 +372,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     return this.getPrivateAdapter(account.venue).cancelAllOrders(
       account.credentials ?? {},
       request,
-      account.options,
+      { ...account.options, accountId: account.accountId },
     );
   }
 

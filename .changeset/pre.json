@@ -8,6 +8,7 @@
     "market-ws-connection-multiplexing",
     "public-decimal-string-contract",
     "redact-transport-error-secrets",
+    "venue-capability-dispatch",
     "venue-rate-limiter",
     "venue-time-provider"
   ]

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁基线：核对 lint/type-check/test 全绿、新增单测覆盖全部 AC（含 coalesce 只打一次 fetch、allSettled 单 venue 失败隔离、不碰订阅）、断言完整性"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "新增 public API/type 必带 .changeset/*.md，§3.7 矩阵 bump=minor（非 patch），summary 写用户可见行为（新增 reloadMarkets 主动刷新目录），不写内部流水账"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核对 MarketCatalogReloadSummary 无宽化/循环引用、reloadMarkets 显式返回类型、error 字段类型契约稳定"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核对三不变量（先 fetch 后原子换 / 失败保留旧目录 / 不碰订阅 records）与 catalog 错误冒泡未被 reload 破坏；catalog 失败仍 publishRuntimeError 且 definitions 不变"}

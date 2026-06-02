@@ -164,16 +164,17 @@ const LISTEN_KEY_KEEPALIVE_RETRY_POLICY: HttpRetryPolicy = {
   idempotent: true,
   maxAttempts: 3,
 };
-const BINANCE_PAPI_HTTP_MESSAGES: HttpClientMessages = {
-  http: ({ status, statusText, url, rawBody }) =>
-    `Binance PAPI request failed: ${status} ${statusText ?? ""} ${url}${
-      rawBody ? ` ${rawBody}` : ""
-    }`,
-  timeout: () =>
-    `Binance PAPI fetch timeout after ${DEFAULT_HTTP_TIMEOUT_MS}ms`,
-  aborted: () => "Binance PAPI fetch aborted",
-  parse: ({ url }) => `Binance PAPI response parse failed: ${url}`,
-};
+function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
+  return {
+    http: ({ status, statusText, url, rawBody }) =>
+      `Binance PAPI request failed: ${status} ${statusText ?? ""} ${url}${
+        rawBody ? ` ${rawBody}` : ""
+      }`,
+    timeout: () => `Binance PAPI fetch timeout after ${timeoutMs}ms`,
+    aborted: () => "Binance PAPI fetch aborted",
+    parse: ({ url }) => `Binance PAPI response parse failed: ${url}`,
+  };
+}
 
 function requirePrivateCredentials(credentials: AccountCredentials): {
   apiKey: string;
@@ -919,6 +920,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     params.set("signature", signQuery(params.toString(), secret));
 
     const url = `${BINANCE_PAPI_REST_BASE_URL}${path}?${params.toString()}`;
+    const timeoutMs = this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
     const response = await httpRequest<T>({
       fetchFn: this.options.fetchFn,
       url,
@@ -926,11 +928,11 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       headers: {
         "X-MBX-APIKEY": apiKey,
       },
-      timeoutMs: this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+      timeoutMs,
       parseAs: "json",
       emptyBody: "empty_object",
       retryPolicy: retryPolicy ?? NO_RETRY_POLICY,
-      messages: BINANCE_PAPI_HTTP_MESSAGES,
+      messages: getBinancePapiHttpMessages(timeoutMs),
     });
 
     return response.body;
@@ -992,6 +994,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     const url = `${BINANCE_PAPI_REST_BASE_URL}/papi/v1/listenKey${
       query ? `?${query}` : ""
     }`;
+    const timeoutMs = this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
     const response = await httpRequest<T>({
       fetchFn: this.options.fetchFn,
       url,
@@ -999,11 +1002,11 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       headers: {
         "X-MBX-APIKEY": apiKey,
       },
-      timeoutMs: this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+      timeoutMs,
       parseAs: "json",
       emptyBody: "empty_object",
       retryPolicy,
-      messages: BINANCE_PAPI_HTTP_MESSAGES,
+      messages: getBinancePapiHttpMessages(timeoutMs),
     });
 
     return response.body;

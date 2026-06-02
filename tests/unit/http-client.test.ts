@@ -273,6 +273,40 @@ test("httpRequest does not retry when the upstream signal is already aborted", a
   expect(attempts).toBe(0);
 });
 
+test("httpRequest abandons retry backoff immediately when the signal aborts", async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+
+  const error = await httpRequest({
+    fetchFn: async () => {
+      attempts += 1;
+      throw new Error("socket closed");
+    },
+    url: "https://example.test/read",
+    signal: controller.signal,
+    parseAs: "json",
+    retryPolicy: {
+      idempotent: true,
+      maxAttempts: 5,
+      initialDelayMs: 0,
+      jitterRatio: 0,
+      // Abort mid-backoff then never resolve: without abort-aware backoff the
+      // request would hang here instead of returning promptly.
+      sleep: () => {
+        controller.abort();
+        return new Promise<void>(() => {});
+      },
+    },
+  }).catch((caught) => caught);
+
+  expect(isTransportError(error)).toBe(true);
+  if (!isTransportError(error)) {
+    throw new Error("expected transport error");
+  }
+  expect(error.kind).toBe("network");
+  expect(attempts).toBe(1);
+});
+
 test("redaction removes secrets and complete signed query strings", () => {
   const message =
     "failed https://example.test/path?symbol=BTCUSDT&timestamp=1&recvWindow=5000&signature=abc apiKey=key secret=secret";
@@ -285,6 +319,18 @@ test("redaction removes secrets and complete signed query strings", () => {
   expect(redacted).not.toContain("signature");
   expect(redacted).not.toContain("apiKey=key");
   expect(redacted).not.toContain("secret=secret");
+});
+
+test("redaction folds signed query fragments without a URL scheme", () => {
+  const redacted = redactSecrets(
+    "/papi/v1/order?symbol=BTCUSDT&side=BUY&timestamp=1&signature=deadbeef",
+  );
+
+  expect(redacted).toContain("/papi/v1/order?query=[REDACTED]");
+  expect(redacted).not.toContain("symbol=BTCUSDT");
+  expect(redacted).not.toContain("side=BUY");
+  expect(redacted).not.toContain("signature");
+  expect(redacted).not.toContain("deadbeef");
 });
 
 test("parseRetryAfterMs supports seconds and HTTP-date values", () => {

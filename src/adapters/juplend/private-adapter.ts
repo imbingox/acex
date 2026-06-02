@@ -92,11 +92,13 @@ const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 // not mint-atomic token amounts.
 const POSITION_AMOUNT_SCALE_DECIMALS = 9;
 const VAULT_CACHE_TTL_MS = 60 * 60 * 1_000;
-const JUPLEND_HTTP_MESSAGES: HttpClientMessages = {
-  http: ({ status, statusText }) => `Juplend HTTP ${status}: ${statusText}`,
-  timeout: () => `Juplend fetch timeout after ${DEFAULT_HTTP_TIMEOUT_MS}ms`,
-  aborted: () => "Juplend fetch aborted",
-};
+function getJuplendHttpMessages(timeoutMs: number): HttpClientMessages {
+  return {
+    http: ({ status, statusText }) => `Juplend HTTP ${status}: ${statusText}`,
+    timeout: () => `Juplend fetch timeout after ${timeoutMs}ms`,
+    aborted: () => "Juplend fetch aborted",
+  };
+}
 
 interface JuplendVaultEnrichmentCacheEntry {
   loadedAt: number;
@@ -291,7 +293,7 @@ async function requestJuplendJson<T>(
       idempotent: true,
       maxAttempts: 3,
     },
-    messages: JUPLEND_HTTP_MESSAGES,
+    messages: getJuplendHttpMessages(timeoutMs),
   });
 
   return response.body;

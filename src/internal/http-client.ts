@@ -151,6 +151,15 @@ export function isTransportError(error: unknown): error is TransportError {
 
 export function redactSecrets(value: string): string {
   let redacted = value.replace(/https?:\/\/[^\s)]+/g, redactUrlMatch);
+  // Bare (non-URL) signed query fragments — e.g. a relative path like
+  // "/papi/v1/order?symbol=...&signature=..." — never match the http(s) URL
+  // branch above. Fold the whole fragment so the non-secret params riding
+  // alongside a signature do not leak; mirrors the "?query=[REDACTED]"
+  // collapse redactUrl applies to full signed URLs.
+  redacted = redacted.replace(
+    /\?[^\s)#?]*\bsignature=[^&\s)#]+/gi,
+    "?query=[REDACTED]",
+  );
   redacted = redacted.replace(
     /([?&](?:api[_-]?key|key|secret|signature|token|access_token|listen[_-]?key|passphrase)=)[^&\s)]+/gi,
     "$1[REDACTED]",
@@ -286,7 +295,7 @@ export async function httpRequest<T>(
         throw transportError;
       }
 
-      await delayBeforeRetry(attempt, options.retryPolicy);
+      await delayBeforeRetry(attempt, options.retryPolicy, options.signal);
     }
   }
 
@@ -550,6 +559,7 @@ function shouldRetry(
 async function delayBeforeRetry(
   attempt: number,
   retryPolicy: HttpRetryPolicy,
+  signal?: AbortSignal,
 ): Promise<void> {
   const sleep = retryPolicy.sleep ?? defaultSleep;
   const baseDelay = Math.min(
@@ -560,7 +570,31 @@ async function delayBeforeRetry(
   const jitterRatio = retryPolicy.jitterRatio ?? DEFAULT_JITTER_RATIO;
   const random = retryPolicy.random ?? Math.random;
   const jitter = baseDelay * jitterRatio * (random() * 2 - 1);
-  await sleep(Math.max(0, Math.round(baseDelay + jitter)));
+  const delayMs = Math.max(0, Math.round(baseDelay + jitter));
+
+  if (signal === undefined) {
+    await sleep(delayMs);
+    return;
+  }
+  if (signal.aborted) {
+    return;
+  }
+  // Race the backoff against the upstream abort so a cancel mid-backoff
+  // returns immediately instead of waiting out the full delay. The retry
+  // loop re-checks signal.aborted on the next iteration and throws.
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    signal.addEventListener("abort", finish, { once: true });
+    void Promise.resolve(sleep(delayMs)).then(finish);
+  });
 }
 
 function isAbortError(error: unknown): boolean {

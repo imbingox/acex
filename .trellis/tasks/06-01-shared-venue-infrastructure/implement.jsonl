@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核心契约:错误传播边界(§3.6 :141-152,D2 禁止 adapter/internal 构造 AcexError)、时间戳/freshness(§3.8 :160-164,D3)、WS 限流先例(§3.10,D4 reactive 口径)。三块组件都锚在此,且需补 REST 骨架/限流/time provider 契约段。"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "src/internal/ 是 Layer 0 领域无关原语、严格不依赖上层;HTTP 客户端/RateLimiter/TimeProvider 的放置位置、命名与依赖方向以此为准。"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "D2 的 typed transport error 判别联合(kind: timeout|http|network|rate_limited、retryable、status?)需遵显式返回类型、避免宽化与循环引用;本任务不扩公共 AcexErrorCode。"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "PR1 迁移触及最高敏感的下单 REST 路径;幂等感知重试(非幂等下单 POST 默认不重试)须对齐 createOrder/cancelOrder 交易命令 contract 与错误语义,保证行为等价。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "PR1 本质是把 binance private/catalog + juplend 三份重复 readJson/fetchJson 收敛成一份共享 HTTP 客户端,正是此 guide 的去重场景。"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "D2 跨层数据流:adapter 让 typed transport error 冒泡 → manager/runtime 归一到现有业务码;迁移时须保住这条 adapter→manager 链路不变形。"}
+{"file": ".trellis/tasks/06-01-shared-venue-infrastructure/codex-prd-review.md", "reason": "codex 对 PRD 的批判性审核(file:line 已核验):D5 签名 URL redaction、per-call 显式幂等分类、PR1↔PR3 429/Retry-After 职责契约、typed error 具体字段+type-guard、RateLimiter seam 接口/粒度、manager 迁移表、PR1 行为等价矩阵、测试与回滚缺口——实现时按此落具体度。"}

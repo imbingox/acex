@@ -1,5 +1,10 @@
 import { createHmac } from "node:crypto";
 import BigNumber from "bignumber.js";
+import {
+  type HttpClientMessages,
+  type HttpRetryPolicy,
+  httpRequest,
+} from "../../internal/http-client.ts";
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type {
   AccountCredentials,
@@ -25,6 +30,7 @@ import type {
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type SignedRequestMethod = "GET" | "POST" | "DELETE";
+type FetchLike = typeof fetch;
 
 interface BinancePapiBalance {
   asset?: string;
@@ -144,7 +150,31 @@ type BinancePrivateMessage =
 const BINANCE_PAPI_REST_BASE_URL = "https://papi.binance.com";
 const BINANCE_PAPI_WS_BASE_URL = "wss://fstream.binance.com/pm/ws";
 const DEFAULT_RECV_WINDOW = 5_000;
+const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 const USDM_QUOTE_ASSETS = ["FDUSD", "USDC", "BUSD", "USDT"];
+const SAFE_READ_RETRY_POLICY: HttpRetryPolicy = {
+  idempotent: true,
+  maxAttempts: 3,
+};
+const NO_RETRY_POLICY: HttpRetryPolicy = {
+  idempotent: false,
+  maxAttempts: 1,
+};
+const LISTEN_KEY_KEEPALIVE_RETRY_POLICY: HttpRetryPolicy = {
+  idempotent: true,
+  maxAttempts: 3,
+};
+function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
+  return {
+    http: ({ status, statusText, url, rawBody }) =>
+      `Binance PAPI request failed: ${status} ${statusText ?? ""} ${url}${
+        rawBody ? ` ${rawBody}` : ""
+      }`,
+    timeout: () => `Binance PAPI fetch timeout after ${timeoutMs}ms`,
+    aborted: () => "Binance PAPI fetch aborted",
+    parse: ({ url }) => `Binance PAPI response parse failed: ${url}`,
+  };
+}
 
 function requirePrivateCredentials(credentials: AccountCredentials): {
   apiKey: string;
@@ -521,21 +551,6 @@ function mapOrderUpdate(
   };
 }
 
-async function readJson<T>(response: Response, url: string): Promise<T> {
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(
-      `Binance PAPI request failed: ${response.status} ${response.statusText} ${url} ${text}`,
-    );
-  }
-
-  if (!text) {
-    return {} as T;
-  }
-
-  return JSON.parse(text) as T;
-}
-
 export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   readonly venue = "binance" as const;
   readonly readOnly = false;
@@ -569,6 +584,13 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     clientOrderId: true,
   };
 
+  constructor(
+    private readonly options: {
+      readonly fetchFn?: FetchLike;
+      readonly httpTimeoutMs?: number;
+    } = {},
+  ) {}
+
   async bootstrapAccount(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
@@ -580,18 +602,24 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         "/papi/v1/balance",
         credentials,
         accountOptions,
+        undefined,
+        SAFE_READ_RETRY_POLICY,
       ),
       this.signedRequest<BinancePapiAccount>(
         "GET",
         "/papi/v1/account",
         credentials,
         accountOptions,
+        undefined,
+        SAFE_READ_RETRY_POLICY,
       ),
       this.signedRequest<BinancePapiUmPosition[]>(
         "GET",
         "/papi/v1/um/positionRisk",
         credentials,
         accountOptions,
+        undefined,
+        SAFE_READ_RETRY_POLICY,
       ),
     ]);
 
@@ -621,12 +649,16 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         "/papi/v1/account",
         credentials,
         accountOptions,
+        undefined,
+        SAFE_READ_RETRY_POLICY,
       ),
       this.signedRequest<BinancePapiUmPosition[]>(
         "GET",
         "/papi/v1/um/positionRisk",
         credentials,
         accountOptions,
+        undefined,
+        SAFE_READ_RETRY_POLICY,
       ),
     ]);
 
@@ -643,6 +675,8 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       "/papi/v1/um/openOrders",
       credentials,
       accountOptions,
+      undefined,
+      SAFE_READ_RETRY_POLICY,
     );
 
     return orders.flatMap((order) => {
@@ -681,6 +715,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
             : `${request.reduceOnly}`,
         positionSide: encodePositionSide(request.positionSide),
       },
+      NO_RETRY_POLICY,
     );
 
     const mapped = mapOpenOrder(response, receivedAt);
@@ -709,6 +744,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         orderId: request.orderId,
         origClientOrderId: request.clientOrderId,
       },
+      NO_RETRY_POLICY,
     );
 
     const mapped = mapOpenOrder(response, receivedAt);
@@ -735,6 +771,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       {
         symbol: encodeUmSymbol(request.symbol),
       },
+      NO_RETRY_POLICY,
     );
 
     return responses.flatMap((response) => {
@@ -863,6 +900,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
     queryParams?: Record<string, string | undefined>,
+    retryPolicy?: HttpRetryPolicy,
   ): Promise<T> {
     const { apiKey, secret } = requirePrivateCredentials(credentials);
     const params = new URLSearchParams();
@@ -882,14 +920,22 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     params.set("signature", signQuery(params.toString(), secret));
 
     const url = `${BINANCE_PAPI_REST_BASE_URL}${path}?${params.toString()}`;
-    const response = await fetch(url, {
+    const timeoutMs = this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+    const response = await httpRequest<T>({
+      fetchFn: this.options.fetchFn,
+      url,
       method,
       headers: {
         "X-MBX-APIKEY": apiKey,
       },
+      timeoutMs,
+      parseAs: "json",
+      emptyBody: "empty_object",
+      retryPolicy: retryPolicy ?? NO_RETRY_POLICY,
+      messages: getBinancePapiHttpMessages(timeoutMs),
     });
 
-    return readJson<T>(response, url);
+    return response.body;
   }
 
   private async startUserDataStream(
@@ -898,6 +944,8 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     const response = await this.userStreamRequest<BinanceListenKeyResponse>(
       "POST",
       credentials,
+      undefined,
+      NO_RETRY_POLICY,
     );
     if (!response.listenKey) {
       throw new Error("Binance PAPI did not return a listenKey");
@@ -914,6 +962,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       "PUT",
       credentials,
       listenKey,
+      LISTEN_KEY_KEEPALIVE_RETRY_POLICY,
     );
   }
 
@@ -925,6 +974,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       "DELETE",
       credentials,
       listenKey,
+      NO_RETRY_POLICY,
     );
   }
 
@@ -932,6 +982,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     method: "POST" | "PUT" | "DELETE",
     credentials: AccountCredentials,
     listenKey?: string,
+    retryPolicy: HttpRetryPolicy = NO_RETRY_POLICY,
   ): Promise<T> {
     const { apiKey } = requirePrivateCredentials(credentials);
     const params = new URLSearchParams();
@@ -943,13 +994,21 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     const url = `${BINANCE_PAPI_REST_BASE_URL}/papi/v1/listenKey${
       query ? `?${query}` : ""
     }`;
-    const response = await fetch(url, {
+    const timeoutMs = this.options.httpTimeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+    const response = await httpRequest<T>({
+      fetchFn: this.options.fetchFn,
+      url,
       method,
       headers: {
         "X-MBX-APIKEY": apiKey,
       },
+      timeoutMs,
+      parseAs: "json",
+      emptyBody: "empty_object",
+      retryPolicy,
+      messages: getBinancePapiHttpMessages(timeoutMs),
     });
 
-    return readJson<T>(response, url);
+    return response.body;
   }
 }

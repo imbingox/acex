@@ -579,3 +579,47 @@ Added top-level venue capability queries, moved capability truth closer to adapt
 ### Next Steps
 
 - None - task complete
+
+
+## Session 17: 共享 venue 基础设施 PR1（REST 骨架 + 错误脱敏）
+
+**Date**: 2026-06-02
+**Task**: 06-01 共享 venue 基础设施（REST 骨架 / rate limiter / time provider）— PR1
+**Branch**: `feat/shared-venue-infrastructure`
+
+### Summary
+
+PR1 由 codex 实现（新增 venue-agnostic 的 `src/internal/http-client.ts` + 三处 adapter 迁移 + 等价矩阵 + 全套单测），Claude 独立核验（重跑 lint/type-check/test、精读 http-client 错误构造与 coordinator redaction、逐条核对等价矩阵的可疑「保持」项），并派 trellis-check 做广度审，两路一致结论：质量高、无 blocker。用户裁定后由 Claude inline 补两处：(1) `patch` changeset「错误信息不再泄漏签名/密钥」；(2) http-client 单测补 rawBody 脱敏断言。随后把 PR1 契约固化进 `adapter-contract.md`（新增「共享 HTTP 传输客户端」Scenario，7 段齐全）。限流 / 统一 time provider 明确留给 PR3 / PR2。
+
+### Main Changes
+
+- `src/internal/http-client.ts`（新增）：`httpRequest` + typed `TransportError` + `isTransportError` 鸭子 guard + `redactSecrets` / `redactUrl` / `parseRetryAfterMs`。
+- 迁移：binance market-catalog、binance private-adapter、juplend private-adapter 改走共享 client；coordinator bootstrap 错误经 `redactSecrets` 再进 public `AcexError`。
+- per-call 幂等：`NO_RETRY_POLICY`（下单/撤单）、`SAFE_READ_RETRY_POLICY`（只读 GET）、`LISTEN_KEY_KEEPALIVE_RETRY_POLICY`。
+- D5 脱敏：错误 url/message/rawBody 均不含签名密钥；venue 注入的 `messages` 回调只收到脱敏后的输入。
+- 429/418 → `rate_limited` + 解析 Retry-After，但不重试不 sleep（退避属 PR3）。
+- spec：`adapter-contract.md` 新增 Scenario §3.11–3.16 + backend `index.md` 同步。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d9bacb6` | feat(internal): add shared HTTP transport with secret redaction; migrate binance/juplend adapters |
+| `df49fa1` | docs(spec): document shared HTTP transport contract (REST skeleton, per-call idempotency, redaction) |
+| `362b6b5` | chore(task): record 06-01 shared venue infrastructure PR1 |
+
+### Testing
+
+- [OK] `bun run lint`（biome）— 58 files, no fixes
+- [OK] `bun run type-check`（tsc --noEmit）
+- [OK] `bun run test` — 94 pass / 0 fail / 423 expect()
+
+### Status
+
+🚧 **PR1 完成并提交**（task 06-01 整体进行中）
+
+### Next Steps
+
+- PR2：统一 time provider（抽 `TimeProvider` 接口、签名时间从裸 `Date.now()` 收口为可注入 `now()`；server-time 校准延后到接时钟敏感新所时按 venue 补）
+- PR3：rate limiter（消费 `retryAfterMs` 做退避 + 全局限流）
+- 可选后续：juplend 只读 fallback 路径重试放大（best-effort enrichment/price 读可降到 `maxAttempts:1`）— 当前按 PRD「safe-read retry」收着

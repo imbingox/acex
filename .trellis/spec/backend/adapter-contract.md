@@ -391,3 +391,198 @@ async loadMarkets(): Promise<MarketDefinition[]> {
 
 - 对外契约稳定
 - adapter 内部仍可用 `this.definitions` 做路由，不丢信息
+
+---
+
+## Scenario: 新增 / 迁移 adapter 的 REST 调用时，必须复用共享 HTTP 传输客户端（`src/internal/http-client.ts`）
+
+### 1. Scope / Trigger
+
+- Trigger: adapter 需要发起任何 REST 请求时——catalog 拉取（`loadBinanceMarkets`）、签名私有请求（账户 / 持仓 / 下单 / 撤单）、listenKey 创建与 keepalive、只读 polling（Juplend 借贷账户）。
+- 目标: REST 链路与 WS 链路（§3.9 ManagedWebSocket / §3.10 SubscriptionMultiplexer）对称——交易所细节由 venue 注入，统一的 timeout / 重试 / 错误分类 / **密钥脱敏**收口在一个 venue-agnostic 的 Layer 0 原语里，禁止 adapter 直接用裸 `fetch` 拼请求。
+- `httpRequest` 是 REST 侧的 `createManagedWebSocket` 对位物：venue 注入 URL / signing / headers / 文案，client 不含任何交易所特定逻辑。**限流（消费 `Retry-After` / `rate_limited` 主动退避）与统一 time provider 不在本契约**——分别留给 PR3 / PR2，本骨架只做分类与透传，不 sleep、不限流。
+
+### 2. Signatures
+
+定义在 `src/internal/http-client.ts`（引用源码，不重复展开）：
+
+```ts
+export async function httpRequest<T>(options: HttpRequestOptions): Promise<HttpClientResponse<T>>;
+
+export interface HttpRequestOptions {
+  readonly fetchFn?: FetchLike;        // 可注入，测试用 fake fetch
+  readonly url: string | URL;          // venue 拼好的完整 URL（含 query / signature）
+  readonly method?: string;
+  readonly headers?: RequestInit["headers"];
+  readonly body?: RequestInit["body"];
+  readonly signal?: AbortSignal;       // upstream 取消
+  readonly timeoutMs?: number;
+  readonly parseAs: "json" | "text" | "none";
+  readonly jsonParseMode?: "text" | "response";
+  readonly emptyBody?: "empty_object" | "empty_string" | "undefined";
+  readonly retryPolicy: HttpRetryPolicy;
+  readonly messages?: HttpClientMessages; // venue 注入错误文案
+}
+
+export interface HttpRetryPolicy {
+  readonly idempotent: boolean;        // false ⇒ 任何 kind 都不重试
+  readonly maxAttempts: number;
+  readonly initialDelayMs?: number; readonly maxDelayMs?: number;
+  readonly jitterRatio?: number; readonly random?: () => number;
+  readonly sleep?: (ms: number) => Promise<void>;
+}
+
+export class TransportError extends Error {        // 唯一对外错误形状
+  readonly isAcexTransportError = true;            // 鸭子类型标记，跨 bundle 安全
+  readonly kind: "timeout" | "http" | "network" | "rate_limited" | "parse";
+  readonly status?: number; readonly statusText?: string;
+  readonly retryAfterMs?: number;                  // 已解析的 Retry-After（PR3 才消费）
+  readonly retryable: boolean; readonly attempts: number;
+  readonly headers: Headers; readonly rawBody?: string;  // rawBody 已脱敏
+  readonly url: string;                            // 已脱敏（= redactedUrl）
+}
+
+export function isTransportError(error: unknown): error is TransportError; // 用它，不要 instanceof
+export function redactSecrets(value: string): string;
+export function redactUrl(input: string | URL): string;
+export function parseRetryAfterMs(value: string | null): number | undefined;
+```
+
+venue 侧实际注入的 `HttpRetryPolicy`（`src/adapters/binance/private-adapter.ts`）：
+
+```text
+SAFE_READ_RETRY_POLICY            idempotent:true,  maxAttempts:3   只读 GET（account / positionRisk / openOrders…）
+NO_RETRY_POLICY                   idempotent:false, maxAttempts:1   createOrder / cancelOrder / cancelAllOrders + 签名请求默认
+LISTEN_KEY_KEEPALIVE_RETRY_POLICY idempotent:true,  maxAttempts:3   listenKey PUT keepalive
+// catalog / juplend 只读 GET：inline { idempotent:true, maxAttempts:3 }
+```
+
+### 3. Contracts
+
+#### 3.11 venue 注入，client venue-agnostic
+
+- URL 拼装、签名（`timestamp` / `recvWindow` / `signature` / `X-MBX-APIKEY`）、headers、错误文案全部由 adapter 注入；`http-client.ts` 不得出现任何交易所特定字符串或分支。
+- 签名等敏感串只存在于传入的 `url` / `headers` / `body`；client 只负责发送与**脱敏后**透传。
+
+#### 3.12 per-call 幂等 = 调用点显式声明
+
+- 重试性由**调用点**通过 `retryPolicy.idempotent` 显式声明，不由 client 猜 HTTP 方法。`idempotent:false` ⇒ 任何 kind 都不重试（见 `retryableForKind`）。
+- 写操作（下单 / 撤单 / 任何 POST·DELETE 副作用请求）**必须** `NO_RETRY_POLICY`；只读 GET 用 `SAFE_READ`；listenKey keepalive 用受限重试策略。
+- 即便 `idempotent:true`，可重试的 kind 也只有 `network` / `timeout` / `http(5xx)`；`rate_limited` / `http(4xx)` / `parse` 一律 `retryable:false`。
+
+#### 3.13 抛 typed `TransportError`，不构造 `AcexError`
+
+- client 与所有 internal/adapter 代码**只抛 `TransportError`**，承接 §3.6「adapter 不得自己构造 `AcexError`」。错误码归 manager / runtime（`src/errors.ts`）。
+- 消费方用 `isTransportError(e)` 做 narrowing，**不要 `instanceof`**（跨 bundle 不可靠，故有 `isAcexTransportError` 鸭子标记）。
+
+#### 3.14 错误脱敏契约（D5，安全关键）
+
+- 对外可见的 `TransportError.message` / `TransportError.url` / `TransportError.rawBody`**都不得包含**签名或密钥：`signature`、`api[_-]?key` / `key`、`secret`、`token` / `access_token`、`listen[_-]?key`、`passphrase`。
+- 实现保证：
+  - URL 含 `signature` ⇒ 整段 query 折叠为 `?query=[REDACTED]`；含其它敏感 query key ⇒ 该值 `[REDACTED]`（`redactUrl`）。
+  - 非 2xx 与 parse 失败的 `rawBody` 在抛出点先过 `redactSecrets`（URL / `key=value` / `"key":"value"` 三种形态，并把 `signature` 键名改写为 `redacted` 以免键名本身泄漏语义）。
+  - `buildAttemptError` 传给 venue `messages` 回调的 `HttpErrorMessageInput` 中，`url` 已是 redactedUrl、`rawBody` 已脱敏——**venue 自定义文案也无法泄漏**，无需各 adapter 重复脱敏。
+- 私有订阅 bootstrap 失败路径（`PrivateSubscriptionCoordinator`）把透传进 public `AcexError` 的 message 再过一次 `redactSecrets`（`bootstrapErrorDetail`）。
+
+#### 3.15 rate_limited 分类（PR1 只分类，不退避）
+
+- `429` / `418` ⇒ `kind:"rate_limited"`，并用 `parseRetryAfterMs` 解析 `Retry-After`（支持秒数与 HTTP-date）存入 `retryAfterMs`；但 `retryable:false`，PR1 **不重试、不 sleep**。
+- 主动消费 `retryAfterMs` 做退避 / 全局限流是 **PR3** 的范畴，禁止在本骨架里 sleep。
+
+#### 3.16 body 解析与 empty body
+
+- `parseAs:"json"` 默认走 text→`JSON.parse`，解析失败 ⇒ `kind:"parse"`、`retryable:false`、`rawBody` 脱敏后保留。
+- `emptyBody:"empty_object"` 把空响应体解析成 `{}`（Binance 部分签名端点返回空 body 时保持原语义）；默认 `undefined`。
+
+### 4. Validation & Error Matrix
+
+| 场景 | `kind` | `retryable`（`idempotent:true` 时） | 备注 |
+|---|---|---|---|
+| `429` / `418` | `rate_limited` | **false** | 解析 `retryAfterMs`，但不重试不 sleep（PR3） |
+| `5xx` | `http` | **true** | 唯一可重试的 http 状态段 |
+| `4xx`（非 429/418） | `http` | false | 业务错误，重试无意义 |
+| JSON 解析失败 | `parse` | false | `rawBody` 脱敏后保留 |
+| 请求超时（本地 timeout 触发 abort） | `timeout` | **true** | `timedOut` 区分 timeout 与 upstream abort |
+| upstream `signal` 取消 | `network`(aborted) | false | 不重试，调用方主动取消 |
+| 网络/DNS 等 fetch 抛错 | `network` | **true** | |
+| `idempotent:false`（下单/撤单） | 任意 | **false** | NO_RETRY 覆盖一切 kind |
+| URL 含 `signature=...` | — | — | `url` / `message` 折叠为 `?query=[REDACTED]` |
+| body 含 `"signature":"..."` 等 | — | — | `rawBody` / `message` 脱敏为 `[REDACTED]` |
+
+### 5. Good / Base / Bad Cases
+
+#### Good
+
+下单走 `NO_RETRY_POLICY` + venue 注入签名与文案，错误天然脱敏：
+
+```ts
+// src/adapters/binance/private-adapter.ts（节选意图）
+const response = await httpRequest<OrderAck>({
+  url: signedUrl,                  // 含 signature，client 负责脱敏
+  method: "POST",
+  headers: { "X-MBX-APIKEY": apiKey },
+  parseAs: "json",
+  retryPolicy: NO_RETRY_POLICY,    // 写操作绝不重试
+  messages: BINANCE_PRIVATE_HTTP_MESSAGES, // 只收到已脱敏的 url/rawBody
+});
+```
+
+#### Base
+
+只读 catalog / polling 用 `{ idempotent:true, maxAttempts:3 }`：网络抖动可重试，但 4xx/限流立即失败，文案复刻迁移前的原始格式（如 `BINANCE_CATALOG_HTTP_MESSAGES.http` 复刻 `Binance request failed: <status> <statusText>`），保证迁移等价。
+
+#### Bad
+
+```ts
+// ❌ 绕过 client 直接 fetch：签名进日志、无 timeout、无分类
+const res = await fetch(signedUrl);
+if (!res.ok) throw new AcexError("ORDER_CREATE_FAILED", await res.text()); // 双重违约
+
+// ❌ 下单用可重试策略：网络抖动下重复下单
+retryPolicy: SAFE_READ_RETRY_POLICY, // 写操作严禁
+```
+
+问题：泄漏签名、可能重复下单、在 internal/adapter 层构造 `AcexError`（违反 §3.6 / §3.13）。
+
+### 6. Tests Required
+
+- `tests/unit/http-client.test.ts` 必须覆盖的断言点：
+  - json / text / empty(`empty_object`→`{}`) 三种 body 解析 + headers 透传。
+  - 非 2xx：`isTransportError` 为真、`kind:"rate_limited"`、`status:429`、`retryAfterMs` 解析正确、`retryable:false`；**且 `message`/`url`/`rawBody` 均不含签名密钥、含 `[REDACTED]`**（脱敏是安全关键，必须钉死 rawBody 也被脱敏，而不仅是 url/message）。
+  - parse 失败 ⇒ `kind:"parse"`、`retryable:false`。
+  - timeout / upstream abort / network 三者区分，且 `idempotent:false` 时不重试。
+- adapter 迁移到共享 client 时，必须提供**等价矩阵**：逐 REST 端点列出迁移前后的 method / 重试语义 / 错误 message 文案，标注 intended diff（如脱敏带来的 message 变化），其余必须保持等价。
+- 全套 `bun run lint && bun run type-check && bun run test` 绿。
+
+### 7. Wrong vs Correct
+
+#### Wrong — 写操作可重试 + 裸 fetch 泄漏签名
+
+```ts
+async createOrder(creds, req) {
+  const res = await fetch(`${base}/order?${sign(req)}`); // signature 进 URL
+  if (!res.ok) {
+    // res.url 含 signature，原样进错误信息 → 泄漏；且自行构造业务错误码
+    throw new AcexError("ORDER_CREATE_FAILED", `failed ${res.url}`);
+  }
+  return parse(await res.json()); // 默认会被底层重试 → 重复下单
+}
+```
+
+#### Correct — 共享 client + NO_RETRY + typed 错误 + 自动脱敏
+
+```ts
+async createOrder(creds, req) {
+  const response = await httpRequest<OrderAck>({
+    url: this.signedUrl("/papi/v1/um/order", req, creds),
+    method: "POST",
+    headers: { "X-MBX-APIKEY": creds.apiKey },
+    parseAs: "json",
+    retryPolicy: NO_RETRY_POLICY,            // 不重试
+    messages: BINANCE_PRIVATE_HTTP_MESSAGES, // 只收到脱敏输入
+  });
+  return toRawOrderUpdate(response.body);    // 失败时抛 TransportError，由 manager 映射 ORDER_CREATE_FAILED
+}
+```
+
+效果：签名永不进错误信息；写操作零重试；错误码归 manager；消费方用 `isTransportError` narrowing。

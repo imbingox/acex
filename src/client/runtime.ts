@@ -115,6 +115,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       new JuplendPrivateAdapter(
         options.account?.juplend?.rpcUrl,
         options.account?.juplend?.jupApiKey,
+        {
+          pollIntervalMs: options.account?.juplend?.pollIntervalMs,
+        },
       ),
     ];
     this.privateAdapters = new Map(

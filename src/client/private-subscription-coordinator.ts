@@ -73,7 +73,6 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamReconnectMaxDelayMs: number;
   private readonly listenKeyKeepAliveMs: number;
   private readonly binanceRiskPollIntervalMs: number;
-  private readonly juplendPollIntervalMs?: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
   constructor(
@@ -102,7 +101,6 @@ export class PrivateSubscriptionCoordinator {
       options.binance?.riskPollIntervalMs,
       DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
     );
-    this.juplendPollIntervalMs = options.juplend?.pollIntervalMs;
   }
 
   async subscribeAccountFeed(accountId: string): Promise<void> {
@@ -603,7 +601,6 @@ export class PrivateSubscriptionCoordinator {
         reconnectDelayMs: this.streamReconnectDelayMs,
         reconnectMaxDelayMs: this.streamReconnectMaxDelayMs,
         listenKeyKeepAliveMs: this.listenKeyKeepAliveMs,
-        juplendPollIntervalMs: this.juplendPollIntervalMs,
         now: () => this.context.now(),
       },
       { ...account.options, accountId: account.accountId },

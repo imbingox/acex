@@ -9,6 +9,7 @@ import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type {
   AccountCredentials,
   PositionSide,
+  TimeProvider,
   VenueAccountCapabilities,
   VenueOrderCapabilities,
 } from "../../types/index.ts";
@@ -588,6 +589,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     private readonly options: {
       readonly fetchFn?: FetchLike;
       readonly httpTimeoutMs?: number;
+      readonly signingClock?: TimeProvider;
     } = {},
   ) {}
 
@@ -911,7 +913,11 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     }
     params.set(
       "timestamp",
-      `${getNumberOption(accountOptions, "timestamp") ?? Date.now()}`,
+      `${
+        getNumberOption(accountOptions, "timestamp") ??
+        this.options.signingClock?.now() ??
+        Date.now()
+      }`,
     );
     params.set(
       "recvWindow",

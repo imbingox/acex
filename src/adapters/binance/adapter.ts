@@ -3,6 +3,7 @@ import type {
   MarketDefinition,
   RateLimiter,
   VenueMarketCapabilities,
+  VenueServerTime,
 } from "../../types/index.ts";
 import type {
   FundingRateStreamCallbacks,
@@ -16,6 +17,7 @@ import {
   type BinanceMarketDefinition,
   loadBinanceMarkets,
 } from "./market-catalog.ts";
+import { fetchBinanceServerTime } from "./server-time.ts";
 import {
   type BinanceStreamDescriptor,
   type BinanceStreamMessage,
@@ -45,6 +47,7 @@ export class BinanceMarketAdapter implements MarketAdapter {
   readonly venue = "binance" as const;
   readonly marketCapabilities: VenueMarketCapabilities = {
     catalog: "supported",
+    serverTime: "supported",
     l1Book: "supported",
     fundingRate: "market_dependent",
     marketTypes: ["spot", "swap", "future"],
@@ -71,6 +74,12 @@ export class BinanceMarketAdapter implements MarketAdapter {
     }
 
     return markets;
+  }
+
+  async fetchServerTime(): Promise<VenueServerTime> {
+    return await fetchBinanceServerTime({
+      rateLimiter: this.options.rateLimiter,
+    });
   }
 
   createL1BookStream(

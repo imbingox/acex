@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁与检查标准（lint/type-check/test、测试结构），check 阶段据此核验"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核验 fetchServerTime 是否符合 MarketAdapter 契约、HTTP 传输复用、不重试、AcexError 包装与脱敏、对称假设局限是否记录"}
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "核验 serverTime capability 真源在 adapter、runtime 聚合、clone 不被污染、Validation 矩阵与 Tests Required 是否补齐"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核验 VenueServerTime public 类型位置、显式返回类型、无类型宽化或循环引用"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "核验 .changeset/*.md 存在且 bump=minor、summary 描述用户可见能力"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "核验 adapter→manager→client 跨层数据流一致：方法签名、错误传播、capability 聚合三处对齐"}

@@ -9,6 +9,7 @@ import type {
   VenueAccountCapabilities,
   VenueMarketCapabilities,
   VenueOrderCapabilities,
+  VenueServerTime,
 } from "../types/index.ts";
 
 export interface StreamHandle {
@@ -74,6 +75,7 @@ export interface MarketAdapter {
   readonly venue: Venue;
   readonly marketCapabilities: VenueMarketCapabilities;
   loadMarkets(): Promise<MarketDefinition[]>;
+  fetchServerTime?(): Promise<VenueServerTime>;
   createL1BookStream(
     market: MarketDefinition,
     callbacks: L1BookStreamCallbacks,

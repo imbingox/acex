@@ -4,6 +4,7 @@ import { FakeWebSocket, jsonResponse, textResponse } from "../test-utils.ts";
 const SPOT_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo";
 const USDM_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
 const COINM_EXCHANGE_INFO_URL = "https://dapi.binance.com/dapi/v1/exchangeInfo";
+const USDM_SERVER_TIME_URL = "https://fapi.binance.com/fapi/v1/time";
 const PAPI_REST_BASE_URL = "https://papi.binance.com";
 
 export const BINANCE_SPOT_WS_BASE_URL = "wss://stream.binance.com:9443/ws";
@@ -287,6 +288,8 @@ export function installBinanceMarketInfra(): void {
           return jsonResponse(binanceFixtures.usdm);
         case COINM_EXCHANGE_INFO_URL:
           return jsonResponse(binanceFixtures.coinm);
+        case USDM_SERVER_TIME_URL:
+          return jsonResponse({ serverTime: 1710000000123 });
         default:
           throw new Error(`Unexpected fetch URL: ${url}`);
       }

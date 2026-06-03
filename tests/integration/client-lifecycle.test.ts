@@ -54,6 +54,7 @@ test("client exposes venue runtime capabilities without starting", () => {
     readOnly: false,
     market: {
       catalog: "supported",
+      serverTime: "supported",
       l1Book: "supported",
       fundingRate: "market_dependent",
     },
@@ -78,6 +79,9 @@ test("client exposes venue runtime capabilities without starting", () => {
     venue: "juplend",
     runtimeStatus: "available",
     readOnly: true,
+    market: {
+      serverTime: "unsupported",
+    },
     account: {
       snapshot: "supported",
       updates: "polling",
@@ -95,6 +99,7 @@ test("client exposes venue runtime capabilities without starting", () => {
       runtimeStatus: "type_only",
       market: {
         catalog: "unsupported",
+        serverTime: "unsupported",
       },
       order: {
         supported: false,

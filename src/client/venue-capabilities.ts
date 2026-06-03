@@ -42,6 +42,7 @@ const typeOnlyNotes = [
 
 const unsupportedMarket: VenueMarketCapabilities = {
   catalog: "unsupported",
+  serverTime: "unsupported",
   l1Book: "unsupported",
   fundingRate: "unsupported",
   marketTypes: [],

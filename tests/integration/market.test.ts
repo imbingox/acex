@@ -199,6 +199,24 @@ test("market catalog load failure emits an adapter error and wrapped AcexError",
   await errors.return?.();
 });
 
+test("fetchServerTime works before client start and returns latency fields", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  const result = await client.market.fetchServerTime("binance");
+
+  expect(result).toMatchObject({
+    serverTime: 1710000000123,
+  });
+  expect(Number.isFinite(result.requestSentAt)).toBe(true);
+  expect(Number.isFinite(result.responseReceivedAt)).toBe(true);
+  expect(Number.isFinite(result.roundTripMs)).toBe(true);
+  expect(result.roundTripMs).toBeGreaterThanOrEqual(0);
+  expect(result.estimatedOffsetMs).toBe(
+    result.serverTime - (result.requestSentAt + result.responseReceivedAt) / 2,
+  );
+});
+
 test("market subscribe is a ready barrier and emits standardized l1 book updates", async () => {
   installBinanceMarketInfra();
   const client = createClient({

@@ -825,3 +825,37 @@ PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
 ### Next Steps
 
 - None - task complete
+
+
+## Session 23: venue server time 接口 (client.market.fetchServerTime)
+
+**Date**: 2026-06-03
+**Task**: venue server time 接口 (client.market.fetchServerTime)
+**Branch**: `feat/venue-server-time`
+
+### Summary
+
+新增公共接口 client.market.fetchServerTime(venue) 供下游衡量延迟(RTT)+估算时钟偏差。流程：brainstorm 收敛 5 项决策 → codex 审 PRD(并入 6 条修正) → 用户拍板单调时钟/仅文档 → codex 实现 → 独立复跑门禁+逐条核验红线 → trellis-check 审计(零自修) → 提交 → 开 PR #46 → 处理 PR 评审(修 #1/#2/#4，#3 经验证为非bug跳过)。关键设计：binance 固定打 USDM /fapi/v1/time、复用共享 http-client(maxAttempts:1 不重试)、roundTripMs 用 performance.now 单调时钟而 offset 用墙钟、错误分层(adapter 抛 TransportError/Error，manager 包装 MARKET_SERVER_TIME_FETCH_FAILED)、新增 VenueMarketCapabilities.serverTime、minor changeset。测试 135 pass/0 fail。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dac87aa` | (see git log) |
+| `89b38ac` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

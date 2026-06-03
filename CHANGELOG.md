@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.4.0-beta.7
+
+### Minor Changes
+
+- dac87aa: Add `client.market.fetchServerTime(venue)` with Binance USDM server-time support, RTT measurement, estimated clock offset, venue capability reporting, and a structured failure code.
+
 ## 0.4.0-beta.6
 
 ### Minor Changes

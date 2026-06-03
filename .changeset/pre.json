@@ -11,6 +11,7 @@
     "redact-transport-error-secrets",
     "venue-capability-dispatch",
     "venue-rate-limiter",
+    "venue-server-time",
     "venue-time-provider"
   ]
 }

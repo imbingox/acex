@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 22
-- **Last Active**: 2026-06-02
+- **Total Sessions**: 23
+- **Last Active**: 2026-06-03
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~827 | Active |
+| `journal-1.md` | ~861 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 23 | 2026-06-03 | venue server time 接口 (client.market.fetchServerTime) | `dac87aa`, `89b38ac` | `feat/venue-server-time` |
 | 22 | 2026-06-02 | market catalog reload: reloadMarkets 主动刷新目录 | `65fbdb2`, `f65bab7` | `feat/market-catalog-reload` |
 | 21 | 2026-06-02 | Step 4: capability 化 private 分派，清 venue 硬编码（PR #42） | `355d8d6`, `a3aaf0e`, `f091a73`, `e61f10f`, `afa456e`, `5b9e059` | `feat/venue-capability-dispatch` |
 | 20 | 2026-06-02 | 06-01 收尾：PR3 listenKey scope review 修复 + 任务归档 | `4259cc6` | `feat/venue-rate-limiter` |

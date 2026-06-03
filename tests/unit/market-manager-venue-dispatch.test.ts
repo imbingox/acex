@@ -25,6 +25,7 @@ import type {
   Venue,
   VenueMarketCapabilities,
   VenueOrderCapabilities,
+  VenueServerTime,
 } from "../../src/types/index.ts";
 import {
   BINANCE_USDM_WS_BASE_URL,
@@ -36,7 +37,11 @@ import {
   createFakeOkxSwapMarket,
   FakeOkxMarketAdapter,
 } from "../support/exchanges/okx.ts";
-import { FakeWebSocket, waitForSocket } from "../support/test-utils.ts";
+import {
+  FakeWebSocket,
+  textResponse,
+  waitForSocket,
+} from "../support/test-utils.ts";
 
 class StubMarketContext implements ClientContext {
   readonly errors: AcexInternalError[] = [];
@@ -99,6 +104,12 @@ class StubMarketContext implements ClientContext {
 
   publishHealthEvent(event: HealthEvent): void {
     this.healthEvents.push(event);
+  }
+}
+
+class NotStartedMarketContext extends StubMarketContext {
+  override assertStarted(): void {
+    throw new AcexError("CLIENT_NOT_STARTED", "Client not started");
   }
 }
 
@@ -490,6 +501,84 @@ test("MarketManager reloadMarkets does not require a started client lifecycle", 
     { venue: "okx", ok: true, total: 1 },
   ]);
   expect(okxAdapter.loadMarketsCalls).toBe(2);
+});
+
+test("MarketManager fetchServerTime wraps Binance HTTP failures without retrying", async () => {
+  let attempts = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => {
+      attempts += 1;
+      return textResponse("binance down", {
+        status: 503,
+        statusText: "Service Unavailable",
+      });
+    },
+  });
+
+  const context = new StubMarketContext();
+  const binanceAdapter = new BinanceMarketAdapter();
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[binanceAdapter.venue, binanceAdapter]]),
+  );
+
+  await expect(manager.fetchServerTime("binance")).rejects.toMatchObject({
+    code: "MARKET_SERVER_TIME_FETCH_FAILED",
+  });
+
+  expect(attempts).toBe(1);
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]).toMatchObject({
+    source: "adapter",
+    venue: "binance",
+  });
+  expect(context.errors[0]?.error).toMatchObject({
+    name: "TransportError",
+    attempts: 1,
+  });
+});
+
+test("MarketManager fetchServerTime does not require a started client lifecycle", async () => {
+  const serverTime: VenueServerTime = {
+    serverTime: 2_000,
+    requestSentAt: 1_000,
+    responseReceivedAt: 1_020,
+    roundTripMs: 7,
+    estimatedOffsetMs: 990,
+  };
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+  }) as FakeOkxMarketAdapter & {
+    fetchServerTime(): Promise<VenueServerTime>;
+  };
+  okxAdapter.fetchServerTime = async () => serverTime;
+  const manager = new MarketManagerImpl(
+    new NotStartedMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(manager.fetchServerTime("okx")).resolves.toEqual(serverTime);
+});
+
+test("MarketManager fetchServerTime rejects venues without support", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter({ venue: "okx" });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(manager.fetchServerTime("okx")).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
+  await expect(manager.fetchServerTime("bybit")).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
+
+  expect(context.errors).toHaveLength(2);
+  expect(context.errors.map((event) => event.venue)).toEqual(["okx", "bybit"]);
+  expect(context.errors.every((event) => event.source === "client")).toBe(true);
 });
 
 test("MarketManager dispatches L1 subscriptions to the adapter for each venue", async () => {

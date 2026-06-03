@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "MarketAdapter 接口契约 + 共享 HTTP 传输客户端（src/internal/http-client.ts）REST 骨架/per-call 重试/TransportError/错误脱敏 + 时间戳语义；新增 fetchServerTime 方法与 USDM 端点调用须遵此契约，并在此文档补对称假设局限"}
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "capability 真源靠近 adapter、runtime 仅聚合、返回值 clone 要求、以及『新增 public capability 字段必须同步 docs+测试+changeset』；新增 VenueMarketCapabilities.serverTime 与 binance=supported / 其余=unsupported 须遵此"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "5 层架构与依赖方向、public 类型放 src/types/*、adapter 不泄漏交易所细节；决定 VenueServerTime 类型与 manager/adapter 各层落点"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "public 类型定义位置、显式返回类型、避免宽化；新增 VenueServerTime public 类型与方法签名须合规"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "§3.7 + bump 矩阵：新增 public API/类型/capability 字段 → minor changeset；实现须附 .changeset/*.md(minor)"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用共享 http-client 与现有 RateLimiter、AcexError，而非自写 fetch/错误类型；指导『不重试』经 HttpRetryPolicy 表达"}

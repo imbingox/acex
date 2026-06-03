@@ -36,6 +36,19 @@ export interface MarketCatalogReloadSummary {
   error?: AcexError;
 }
 
+export interface VenueServerTime {
+  /** Exchange server time in epoch milliseconds. Binance currently measures the USDM cluster. */
+  serverTime: number;
+  /** Local wall-clock timestamp captured immediately before the HTTP request is sent. */
+  requestSentAt: number;
+  /** Local wall-clock timestamp captured immediately after the HTTP response is received. */
+  responseReceivedAt: number;
+  /** Round trip duration measured with a monotonic clock, in milliseconds. */
+  roundTripMs: number;
+  /** NTP-style offset estimate: serverTime - midpoint(requestSentAt, responseReceivedAt). */
+  estimatedOffsetMs: number;
+}
+
 export interface MarketDataStatus {
   venue: Venue;
   symbol: string;
@@ -170,6 +183,7 @@ export interface MarketManager {
 
   loadMarkets(): Promise<void>;
   reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
+  fetchServerTime(venue: Venue): Promise<VenueServerTime>;
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;

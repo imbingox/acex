@@ -38,6 +38,7 @@ import type {
   SubscribeL1BookInput,
   SubscriptionActivity,
   Venue,
+  VenueServerTime,
 } from "../types/index.ts";
 
 export interface MarketManagerOptions {
@@ -199,6 +200,24 @@ export class MarketManagerImpl
     }
 
     return summaries;
+  }
+
+  async fetchServerTime(venue: Venue): Promise<VenueServerTime> {
+    const adapter = this.getMarketAdapter(venue);
+    if (!adapter.fetchServerTime) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue is not supported yet: ${venue}`,
+        { venue },
+        "client",
+      );
+    }
+
+    try {
+      return await adapter.fetchServerTime();
+    } catch (error) {
+      throw this.createServerTimeFetchError(venue, error);
+    }
   }
 
   async subscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
@@ -596,6 +615,21 @@ export class MarketManagerImpl
       error instanceof Error
         ? error
         : new Error("Unknown catalog load failure"),
+      { venue },
+    );
+    return wrapped;
+  }
+
+  private createServerTimeFetchError(venue: Venue, error: unknown): AcexError {
+    const wrapped = new AcexError(
+      "MARKET_SERVER_TIME_FETCH_FAILED",
+      `Failed to fetch server time from ${venue}`,
+    );
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error("Unknown server time fetch failure"),
       { venue },
     );
     return wrapped;

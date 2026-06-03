@@ -1,10 +1,10 @@
 # venue server time 接口用于延迟测量
 
-## Goal
+## 目标
 
 为 venue 抽象新增「获取交易所服务器时间」的统一接口，让下游能够衡量延迟（latency）并校正本地与交易所之间的时钟漂移（clock skew）。当前代码库没有任何 server-time 接口，下游只能用流式数据自带的 `receivedAt - exchangeTs` 近似估算，但这个差值混入了时钟偏差、无法分离出真实网络延迟。
 
-## What I already know
+## 已知信息
 
 - venue 核心抽象：`MarketAdapter`（`src/adapters/types.ts:73`）、`PrivateUserDataAdapter`（`src/adapters/types.ts:216`）。两者均无 server-time / ping / latency 方法。
 - 下游**不直接消费 adapter**，而是通过公共 `AcexClient`（`src/types/client.ts:128`）的 `market` / `account` / `order` manager + `getVenueCapabilities()` / `listVenueCapabilities()`。新接口需同时设计 adapter 层与 client 暴露面。
@@ -14,13 +14,13 @@
 - 实际落地的 venue：`binance`（完整）、`juplend`（Jupiter Lend，链上借贷，**无 server time 概念**）。`okx` / `bybit` / `gate` 在 `Venue` 联合类型（`src/types/shared.ts:9`）中声明但尚未实现 adapter。
 - 流式更新已带 `exchangeTs?`（交易所推送 epoch ms，可能缺失）与 `receivedAt`（本地 epoch ms），见 `src/adapters/types.ts:24-25` 等。
 
-## Assumptions (temporary)
+## 临时假设
 
 - MVP 仅实现 binance；接口设计需为其他 venue 预留，但不强制全部实现（可选方法 + capability 门控）。
 - juplend 不实现该接口（链上无统一 server time）；其 capability 标记为 unsupported。
 - 衡量延迟的核心价值在于返回值要能让下游算出 RTT 与时钟偏差，而不只是裸 server time。
 
-## Decision (ADR-lite) — 返回契约
+## 决策 (ADR-lite) — 返回契约
 
 **Context**: 任务核心目标是让下游衡量延迟；返回形态决定方法签名、capability 形态与暴露面。
 **Decision**: 采用 NTP 风格的开箱即用返回对象（选项 3）：
@@ -35,13 +35,13 @@ interface VenueServerTime {
 ```
 **Consequences**: 下游既拿结论（RTT / offset）也拿原始墙钟时间戳可自行重算；`roundTripMs` 用单调时钟（决策 A），故**不恒等于** `responseReceivedAt - requestSentAt`（墙钟差），这是有意为之——避免本地 NTP step 导致负/失真 RTT；`estimatedOffsetMs` 隐含上下行对称假设，需在契约文档注明局限；墙钟戳与现有 `exchangeTs`/`receivedAt` 约定一致。
 
-## Decision (ADR-lite) — 暴露面
+## 决策 (ADR-lite) — 暴露面
 
 **Context**: 下游通过公共 `AcexClient` 消费，需决定 server time 方法挂在哪一层。
 **Decision**: 挂在 `client.market.fetchServerTime(venue)`（`MarketManager`），与 `reloadMarkets(venue?)` 同构。adapter 侧新增**可选**方法 `MarketAdapter.fetchServerTime?(): Promise<VenueServerTime>`；不支持的 venue 不实现该方法，由 capability 标记 + manager 层兜底。
 **Consequences**: 与现有 venue-scoped REST 操作分层一致；binance time 端点为公开行情端点，归属 market 层自然；可选方法不破坏现有 adapter。
 
-## Decision (ADR-lite) — Capability 门控与不支持行为
+## 决策 (ADR-lite) — Capability 门控与不支持行为
 
 **Context**: 需让下游能预先判断 venue 是否支持 server time，并定义不支持时的行为。
 **Decision**:
@@ -49,23 +49,23 @@ interface VenueServerTime {
 - (b) `client.market.fetchServerTime(venue)` 对无 market adapter 或不支持的 venue **抛 `AcexError`**，沿用 manager 现有 `"Venue is not supported yet: ${venue}"`（`market-manager.ts:652/663`）风格。
 **Consequences**: 能力可声明可预查；错误处理与 `subscribeL1Book`/`subscribeFundingRate`/`reloadMarkets` 一致；下游 try/catch 即可。
 
-## Decision (ADR-lite) — binance 端点
+## 决策 (ADR-lite) — binance 端点
 
 **Context**: Binance 三集群各有独立 time 端点，下游关心交易集群的 RTT。
 **Decision**: MVP 固定使用 USDM 合约端点 `/fapi/v1/time`（`https://fapi.binance.com/fapi/v1/time`，返回 `{ serverTime: number }`），文档注明用的是 USDM 集群。将来如需 spot/coinm 精确测量，再加可选 `marketType?` 参数（向后兼容扩展）。
 **Consequences**: 实现最小；USDM 为本 SDK 主力集群；纯 spot 下游测到的是合约集群 RTT（差异可接受，文档说明）。
 
-## Decision (ADR-lite) — 失败/超时/重试
+## 决策 (ADR-lite) — 失败/超时/重试
 
 **Context**: server time 用于测延迟，失败/重试/错误分层直接影响 RTT 语义与契约合规。
 **Decision**:
 - **不自动重试**：单次往返。经共享 http-client（`src/internal/http-client.ts`）的 `retryPolicy: { maxAttempts: 1 }`（内部 clamp ≥1），保证 `roundTripMs` 反映一次真实往返；失败即抛。
-- **错误分层（codex 审核修正）**：adapter **只抛 `TransportError`**（HTTP 失败）或普通 `Error`（响应缺/非 number `serverTime` 的校验失败），**不得在 adapter 构造 `AcexError`**（adapter-contract.md §3.6 `:162` / §3.13 `:485-488`）。由 `MarketManager.fetchServerTime()` catch 后包装成**新增**错误码 `MARKET_SERVER_TIME_FETCH_FAILED`（加进 `src/errors.ts` 的 `AcexErrorCode`，public contract），并 `publishRuntimeError`——与 `createCatalogLoadError`（`market-manager.ts:589`）同构。
+- **错误分层（codex 审核修正）**：adapter **只抛 `TransportError`**（传输失败：HTTP / network / timeout / parse）或普通 `Error`（响应缺/非 number `serverTime` 的校验失败），**不得在 adapter 构造 `AcexError`**（adapter-contract.md §3.6 `:162` / §3.13 `:485-488`）。由 `MarketManager.fetchServerTime()` catch 后包装成**新增**错误码 `MARKET_SERVER_TIME_FETCH_FAILED`（加进 `src/errors.ts` 的 `AcexErrorCode`，public contract），并 `publishRuntimeError`——与 `createCatalogLoadError`（`market-manager.ts:589`）同构。
 - **复用共享 HTTP + rate limiter**：沿用 `requestCatalogJson` 同款骨架，传现有 `RateLimiter`（time 端点 weight=1）；脱敏沿用 http-client。
 - **超时**：复用默认 `DEFAULT_HTTP_TIMEOUT_MS = 10_000`。
 **Consequences**: 错误分层合规（adapter 抛 transport/Error、manager 定错误码）；新增 public 错误码计入 minor changeset；唯一刻意设计是「不重试」保 RTT 语义。
 
-## Decision (ADR-lite) — 时间戳采集点与时钟 seam（codex 审核新增）
+## 决策 (ADR-lite) — 时间戳采集点与时钟 seam（codex 审核新增）
 
 **Context**: RTT 正确性依赖采集点；adapter 当前无 market 级可注入时钟（`adapter.ts:57` 构造器只收 `rateLimiter`），PRD 原称「复用现有可注入时钟」不属实。
 **Decision**:
@@ -73,12 +73,12 @@ interface VenueServerTime {
 - **时钟 seam**：实现 helper 接受可选 `now?: () => number`（默认 `Date.now`）、`monotonicNow?: () => number`（默认 `performance.now`）、`fetchFn?`（默认全局 `fetch`），供确定性单测注入；不复用不存在的 adapter 级时钟。
 **Consequences**: RTT 不含限流等待、不受 NTP step 影响；单测可注入确定性墙钟/单调时钟与 fetch；`performance.now()` 在 Bun/Node 均可用。
 
-## Open Questions（已全部解决）
+## 待决问题（已全部解决）
 
 - **A. 单调时钟 RTT** → 采纳：`roundTripMs` 用 `performance.now()` 差值，`estimatedOffsetMs` 用 `Date.now()` 墙钟。
 - **B. 暴露测量源** → 不加字段，**仅强文档说明**固定测 USDM 集群；将来加 `marketType` 参数时再一并暴露 source。
 
-## Requirements
+## 需求
 
 - 公共类型新增 `VenueServerTime`（`src/types/market.ts`，public contract），字段见返回契约 ADR：`serverTime` / `requestSentAt` / `responseReceivedAt` / `roundTripMs` / `estimatedOffsetMs`（均 epoch ms / ms）。
 - `MarketAdapter` 新增可选方法 `fetchServerTime?(): Promise<VenueServerTime>`（`src/adapters/types.ts`）。
@@ -89,7 +89,7 @@ interface VenueServerTime {
 - 文档：`.trellis/spec/backend/adapter-contract.md`（新方法契约 + 对称假设局限）、`.trellis/spec/backend/venue-capabilities.md`（新增 `serverTime` 能力语义 + Validation 矩阵 + Tests Required）同步更新。
 - changeset：`.changeset/*.md`，bump = **minor**（新增 public API + public 类型字段 + 新 capability 字段）。
 
-## Acceptance Criteria
+## 验收标准
 
 - [ ] `client.market.fetchServerTime("binance")` 返回含 `serverTime` / `requestSentAt` / `responseReceivedAt` / `roundTripMs` / `estimatedOffsetMs` 的对象；`roundTripMs` 由单调时钟测得（`>= 0`、有限，不强求等于墙钟差）；`estimatedOffsetMs` 由墙钟戳派生。
 - [ ] `getVenueCapabilities("binance").market.serverTime === "supported"`；`juplend` / okx / bybit / gate 为 `"unsupported"`。
@@ -101,7 +101,7 @@ interface VenueServerTime {
 - [ ] `.changeset/*.md`（minor）已添加，summary 描述用户可见能力。
 - [ ] lint / type-check / test 全绿。
 
-## Technical Approach
+## 技术方案
 
 - **数据流**：`client.market.fetchServerTime(venue)` → `MarketManager`（venue 路由 + 不支持兜底抛 `VENUE_NOT_SUPPORTED` + catch 包装 `MARKET_SERVER_TIME_FETCH_FAILED`）→ `BinanceMarketAdapter.fetchServerTime()` → 复用 `src/internal/http-client.ts`（`maxAttempts: 1`）打 `/fapi/v1/time`。
 - **时间戳采集（codex 修正 + 决策 A）**：在 `beforeRequest()` 后、`httpRequest()` 前采集墙钟 `requestSentAt` 与单调 `startMono`；在 `httpRequest()` resolve 后采集墙钟 `responseReceivedAt` 与单调 `endMono`。`serverTime` 取自响应体；`roundTripMs = endMono - startMono`（单调）；`estimatedOffsetMs` 用墙钟戳。时钟经 helper 注入的 `now?`（默认 `Date.now`）/ `monotonicNow?`（默认 `performance.now`），**不复用不存在的 adapter 级时钟**。
@@ -109,7 +109,7 @@ interface VenueServerTime {
 - **capability 真源靠近 adapter**：binance adapter 的 `marketCapabilities` 声明 `serverTime: "supported"`，runtime 仅聚合（符合 venue-capabilities.md「capability 真源应尽量靠近 adapter」+ clone 要求；新增标量字段不影响 clone）。
 - **复用而非新写**：HTTP 走共享传输客户端；rate limiter 走现有 `RateLimiter`；脱敏沿用 http-client。
 
-## Implementation Plan (codex 修正：docs+测试+changeset 必须与 API 同 PR 落地)
+## 实现计划（codex 修正：docs+测试+changeset 必须与 API 同 PR 落地）
 
 > venue-capabilities.md `:64` 要求「新增 public capability 字段必须同步 docs、测试、changeset」。故 public API（含 `serverTime` capability 字段）+ docs + tests + changeset **必须在同一可发布单元**，不能拆成可独立 merge 的 PR。采用单一 feature PR（本切片不大），如需分阶段则用 **stacked PR 一起 merge**。
 
@@ -122,20 +122,20 @@ interface VenueServerTime {
   - `.changeset/*.md`（**minor**）。
 - 若坚持分阶段：拆成 stacked PR（骨架→binance→边角），但 **最终一起 merge**，避免中途出现「有 capability 字段但缺 docs/changeset」的可发布状态。
 
-## Definition of Done (team quality bar)
+## 完成定义（团队质量基线）
 
 - Tests added/updated（unit；binance 解析/失败/attempts=1/限流顺序/未 start；manager 不支持 venue；capability 快照）
 - Lint / typecheck / CI green
 - 契约文档（`adapter-contract.md`）与 capability 文档（`venue-capabilities.md`）同步更新
 - changeset（**minor**：新增 public API + `VenueServerTime` 类型 + `serverTime` capability 字段 + `MARKET_SERVER_TIME_FETCH_FAILED` 错误码）
 
-## Out of Scope (explicit)
+## 范围外（明确）
 
 - okx / bybit / gate 的 adapter 实现（未落地，留待各自实现时补该能力）。
 - 自动持续时钟同步 / 后台轮询校正（本任务只提供按需查询接口）。
 - 把 server time 回灌到签名 `TimeProvider`（签名时钟设计保持本地，不在本任务变更）。
 
-## Technical Notes
+## 技术备注
 
 - 核心文件：`src/types/market.ts`（`VenueServerTime` 类型 + `MarketManager` 方法）、`src/adapters/types.ts`（`MarketAdapter.fetchServerTime?`）、`src/types/client.ts`（`VenueMarketCapabilities.serverTime`）、`src/client/venue-capabilities.ts`（`unsupportedMarket` fallback）、`src/managers/market-manager.ts`（路由 + 兜底）、`src/adapters/binance/adapter.ts` + `market-catalog.ts`（binance 实现）。
 - HTTP：复用共享传输客户端 `src/internal/http-client.ts`（`requestCatalogJson` 同源），`retryPolicy: { maxAttempts: 1 }` 不重试；adapter 抛 `TransportError`/`Error`，由 manager 包装成 `AcexError`（错误码归 manager，§3.6/§3.13），脱敏沿用 http-client。

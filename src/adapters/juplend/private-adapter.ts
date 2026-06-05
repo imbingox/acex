@@ -1,5 +1,4 @@
 import BigNumber from "bignumber.js";
-import { AcexError } from "../../errors.ts";
 import {
   type HttpClientMessages,
   httpRequest,
@@ -734,28 +733,21 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
     _credentials: AccountCredentials,
     _request: CreateOrderRequest,
   ): Promise<RawOrderUpdate> {
-    throw new AcexError(
-      "VENUE_NOT_SUPPORTED",
-      "Juplend is read-only and does not support createOrder",
-    );
+    throw new Error("Juplend is read-only and does not support createOrder");
   }
 
   cancelOrder(
     _credentials: AccountCredentials,
     _request: CancelOrderRequest,
   ): Promise<RawOrderUpdate> {
-    throw new AcexError(
-      "VENUE_NOT_SUPPORTED",
-      "Juplend is read-only and does not support cancelOrder",
-    );
+    throw new Error("Juplend is read-only and does not support cancelOrder");
   }
 
   cancelAllOrders(
     _credentials: AccountCredentials,
     _request: CancelAllOrdersRequest,
   ): Promise<RawOrderUpdate[]> {
-    throw new AcexError(
-      "VENUE_NOT_SUPPORTED",
+    throw new Error(
       "Juplend is read-only and does not support cancelAllOrders",
     );
   }

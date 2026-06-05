@@ -778,11 +778,19 @@ export class MarketManagerImpl
 
     try {
       await record.l1BookStream.ready;
-    } catch {
+    } catch (error) {
       record.l1BookStream = undefined;
+      const details = buildAcexErrorDetails(
+        { venue: market.venue, symbol: market.symbol },
+        error,
+      );
       const timeoutError = new AcexError(
         "MARKET_STREAM_TIMEOUT",
         `Timed out waiting for market data: ${market.symbol}`,
+        {
+          cause: error,
+          details,
+        },
       );
       this.context.publishRuntimeError("runtime", timeoutError, {
         venue: market.venue,
@@ -806,11 +814,19 @@ export class MarketManagerImpl
 
     try {
       await record.fundingRateStream.ready;
-    } catch {
+    } catch (error) {
       record.fundingRateStream = undefined;
+      const details = buildAcexErrorDetails(
+        { venue: market.venue, symbol: market.symbol },
+        error,
+      );
       const timeoutError = new AcexError(
         "MARKET_STREAM_TIMEOUT",
         `Timed out waiting for market data: ${market.symbol}`,
+        {
+          cause: error,
+          details,
+        },
       );
       this.context.publishRuntimeError("runtime", timeoutError, {
         venue: market.venue,

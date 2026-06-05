@@ -14,7 +14,11 @@ import type {
   HealthReporter,
   ManagerLifecycle,
 } from "../client/context.ts";
-import { AcexError } from "../errors.ts";
+import {
+  AcexError,
+  buildAcexErrorDetails,
+  formatAcexErrorMessage,
+} from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
@@ -606,9 +610,17 @@ export class MarketManagerImpl
   }
 
   private createCatalogLoadError(venue: Venue, error: unknown): AcexError {
+    const details = buildAcexErrorDetails({ venue }, error);
     const wrapped = new AcexError(
       "MARKET_CATALOG_LOAD_FAILED",
-      `Failed to load market catalog from ${venue}`,
+      formatAcexErrorMessage(
+        `Failed to load market catalog from ${venue}`,
+        details,
+      ),
+      {
+        cause: error,
+        details,
+      },
     );
     this.context.publishRuntimeError(
       "adapter",
@@ -621,9 +633,17 @@ export class MarketManagerImpl
   }
 
   private createServerTimeFetchError(venue: Venue, error: unknown): AcexError {
+    const details = buildAcexErrorDetails({ venue }, error);
     const wrapped = new AcexError(
       "MARKET_SERVER_TIME_FETCH_FAILED",
-      `Failed to fetch server time from ${venue}`,
+      formatAcexErrorMessage(
+        `Failed to fetch server time from ${venue}`,
+        details,
+      ),
+      {
+        cause: error,
+        details,
+      },
     );
     this.context.publishRuntimeError(
       "adapter",
@@ -1189,7 +1209,9 @@ export class MarketManagerImpl
     metadata?: { venue?: Venue; symbol?: string },
     source: "market" | "client" = "market",
   ): AcexError {
-    const error = new AcexError(code, message);
+    const error = new AcexError(code, message, {
+      details: buildAcexErrorDetails(metadata),
+    });
     this.context.publishRuntimeError(source, error, metadata);
     return error;
   }

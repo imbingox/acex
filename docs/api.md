@@ -1458,8 +1458,30 @@ interface AcexInternalError {
   ts: number;
 }
 
+interface AcexErrorDetails {
+  venue?: Venue;
+  accountId?: string;
+  symbol?: string;
+  exchange?: {
+    code?: string;
+    message?: string;
+  };
+  transport?: {
+    kind?: "timeout" | "http" | "network" | "rate_limited" | "parse";
+    status?: number;
+    statusText?: string;
+    retryAfterMs?: number;
+    retryable?: boolean;
+    attempts?: number;
+    rawBody?: string;
+    url?: string;
+  };
+}
+
 class AcexError extends Error {
   readonly code: AcexErrorCode;
+  readonly details?: AcexErrorDetails;
+  readonly cause?: unknown;
 }
 ```
 
@@ -1475,9 +1497,22 @@ try {
 } catch (err) {
   if (err instanceof AcexError) {
     console.log(err.code, err.message);
+    console.log(err.details?.exchange?.code);
+    console.log(err.details?.exchange?.message);
   }
 }
 ```
+
+`details.exchange` 是下游读取交易所结构化拒绝原因的首选字段，例如 Binance 返回 `{ "code": -2010, "msg": "Order would immediately trigger." }` 时会映射为：
+
+```ts
+{
+  code: "-2010",
+  message: "Order would immediately trigger.",
+}
+```
+
+`details.transport` 保留已脱敏的 HTTP/transport 诊断信息，例如 `kind`、`status`、`retryAfterMs`、`attempts`、`rawBody`、`url`。`rawBody` 和 `url` 只用于排障兜底，不建议作为业务分支首选字段。`cause` 保留底层错误链，用于高级调试。
 
 完整错误码列表：
 

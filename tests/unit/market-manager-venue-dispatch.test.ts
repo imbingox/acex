@@ -523,9 +523,25 @@ test("MarketManager fetchServerTime wraps Binance HTTP failures without retrying
     new Map<Venue, MarketAdapter>([[binanceAdapter.venue, binanceAdapter]]),
   );
 
-  await expect(manager.fetchServerTime("binance")).rejects.toMatchObject({
+  const failure = await manager
+    .fetchServerTime("binance")
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
     code: "MARKET_SERVER_TIME_FETCH_FAILED",
+    details: {
+      venue: "binance",
+      transport: {
+        kind: "http",
+        status: 503,
+        statusText: "Service Unavailable",
+        rawBody: "binance down",
+      },
+    },
   });
+  expect((failure as AcexError).cause).toBeInstanceOf(Error);
+  expect((failure as AcexError).details?.exchange).toBeUndefined();
 
   expect(attempts).toBe(1);
   expect(context.errors).toHaveLength(1);

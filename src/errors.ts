@@ -1,3 +1,6 @@
+import { isTransportError } from "./internal/http-client.ts";
+import type { Venue } from "./types/shared.ts";
+
 export type AcexErrorCode =
   | "ACCOUNT_ALREADY_EXISTS"
   | "ACCOUNT_BOOTSTRAP_FAILED"
@@ -17,12 +20,162 @@ export type AcexErrorCode =
   | "ORDER_CREATE_FAILED"
   | "ORDER_INPUT_INVALID";
 
+export type AcexErrorTransportKind =
+  | "timeout"
+  | "http"
+  | "network"
+  | "rate_limited"
+  | "parse";
+
+export interface AcexExchangeErrorDetails {
+  readonly code?: string;
+  readonly message?: string;
+}
+
+export interface AcexErrorTransportDetails {
+  readonly kind?: AcexErrorTransportKind;
+  readonly status?: number;
+  readonly statusText?: string;
+  readonly retryAfterMs?: number;
+  readonly retryable?: boolean;
+  readonly attempts?: number;
+  readonly rawBody?: string;
+  readonly url?: string;
+}
+
+export interface AcexErrorDetails {
+  readonly venue?: Venue;
+  readonly accountId?: string;
+  readonly symbol?: string;
+  readonly exchange?: AcexExchangeErrorDetails;
+  readonly transport?: AcexErrorTransportDetails;
+}
+
+export interface AcexErrorOptions {
+  readonly cause?: unknown;
+  readonly details?: AcexErrorDetails;
+}
+
 export class AcexError extends Error {
   readonly code: AcexErrorCode;
+  readonly details?: AcexErrorDetails;
+  override readonly cause?: unknown;
 
-  constructor(code: AcexErrorCode, message: string) {
-    super(message);
+  constructor(
+    code: AcexErrorCode,
+    message: string,
+    options: AcexErrorOptions = {},
+  ) {
+    super(message, { cause: options.cause });
     this.name = "AcexError";
     this.code = code;
+    this.details = options.details;
+    this.cause = options.cause;
   }
+}
+
+export function buildAcexErrorDetails(
+  context?: Pick<AcexErrorDetails, "venue" | "accountId" | "symbol">,
+  cause?: unknown,
+): AcexErrorDetails | undefined {
+  const transport = buildTransportDetails(cause);
+  const exchange = parseExchangeErrorDetails(transport?.rawBody);
+  const details: AcexErrorDetails = {
+    venue: context?.venue,
+    accountId: context?.accountId,
+    symbol: context?.symbol,
+    exchange,
+    transport,
+  };
+
+  return hasDetails(details) ? details : undefined;
+}
+
+export function formatAcexErrorMessage(
+  message: string,
+  details?: AcexErrorDetails,
+): string {
+  const exchangeMessage = details?.exchange?.message?.trim();
+  if (!exchangeMessage) {
+    return message;
+  }
+
+  const venue = details?.venue;
+  const venueLabel = venue ? formatVenueLabel(venue) : "Exchange";
+  return `${message} (${venueLabel} rejected: ${exchangeMessage})`;
+}
+
+function buildTransportDetails(
+  cause: unknown,
+): AcexErrorTransportDetails | undefined {
+  if (!isTransportError(cause)) {
+    return undefined;
+  }
+
+  return pruneUndefined({
+    kind: cause.kind,
+    status: cause.status,
+    statusText: cause.statusText,
+    retryAfterMs: cause.retryAfterMs,
+    retryable: cause.retryable,
+    attempts: cause.attempts,
+    rawBody: cause.rawBody,
+    url: cause.url,
+  });
+}
+
+function parseExchangeErrorDetails(
+  rawBody: string | undefined,
+): AcexExchangeErrorDetails | undefined {
+  if (!rawBody) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return undefined;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const code = record.code;
+  const message = record.msg ?? record.message;
+
+  if (
+    (typeof code !== "string" && typeof code !== "number") ||
+    typeof message !== "string" ||
+    message.trim() === ""
+  ) {
+    return undefined;
+  }
+
+  return {
+    code: String(code),
+    message,
+  };
+}
+
+function hasDetails(details: AcexErrorDetails): boolean {
+  return Boolean(
+    details.venue ||
+      details.accountId ||
+      details.symbol ||
+      details.exchange ||
+      details.transport,
+  );
+}
+
+function formatVenueLabel(venue: Venue): string {
+  return `${venue.charAt(0).toUpperCase()}${venue.slice(1)}`;
+}
+
+function pruneUndefined<T extends Record<string, unknown>>(input: T): T {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  ) as T;
 }

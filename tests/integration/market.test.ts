@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BigNumber, createClient } from "../../index.ts";
+import { AcexError, BigNumber, createClient } from "../../index.ts";
 import {
   BINANCE_SPOT_WS_BASE_URL,
   BINANCE_USDM_MARKET_WS_BASE_URL,
@@ -185,9 +185,25 @@ test("market catalog load failure emits an adapter error and wrapped AcexError",
   const client = createClient();
   const errors = client.events.errors()[Symbol.asyncIterator]();
 
-  await expect(client.market.loadMarkets()).rejects.toMatchObject({
+  const failure = await client.market.loadMarkets().catch((error) => error);
+  expect(failure).toBeInstanceOf(AcexError);
+  if (!(failure instanceof AcexError)) {
+    throw new Error("Expected AcexError");
+  }
+  expect(failure).toMatchObject({
     code: "MARKET_CATALOG_LOAD_FAILED",
+    details: {
+      venue: "binance",
+      transport: {
+        kind: "http",
+        status: 503,
+        statusText: "Service Unavailable",
+        rawBody: "binance down",
+      },
+    },
   });
+  expect(failure.cause).toBeInstanceOf(Error);
+  expect(failure.details?.exchange).toBeUndefined();
 
   const errorEvent = await nextEvent(errors);
   expect(errorEvent).toMatchObject({

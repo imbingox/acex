@@ -779,6 +779,7 @@ export class MarketManagerImpl
     try {
       await record.l1BookStream.ready;
     } catch (error) {
+      record.l1BookStream.close();
       record.l1BookStream = undefined;
       const details = buildAcexErrorDetails(
         { venue: market.venue, symbol: market.symbol },
@@ -815,6 +816,7 @@ export class MarketManagerImpl
     try {
       await record.fundingRateStream.ready;
     } catch (error) {
+      record.fundingRateStream.close();
       record.fundingRateStream = undefined;
       const details = buildAcexErrorDetails(
         { venue: market.venue, symbol: market.symbol },

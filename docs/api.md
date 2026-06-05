@@ -1512,7 +1512,7 @@ try {
 }
 ```
 
-`details.transport` 保留已脱敏的 HTTP/transport 诊断信息，例如 `kind`、`status`、`retryAfterMs`、`attempts`、`rawBody`、`url`。`rawBody` 和 `url` 只用于排障兜底，不建议作为业务分支首选字段。`cause` 保留底层错误链，用于高级调试。
+`details.transport` 保留已脱敏的 HTTP/transport 诊断信息，例如 `kind`、`status`、`retryAfterMs`、`attempts`、`rawBody`、`url`。`rawBody` 和 `url` 只用于排障兜底，不建议作为业务分支首选字段。market stream 首包超时时，`MARKET_STREAM_TIMEOUT` 会带 `details.venue` / `details.symbol` 和底层 `cause`，通常不填 `details.venueError`。`cause` 保留底层错误链，用于高级调试。
 
 完整错误码列表：
 

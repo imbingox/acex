@@ -57,6 +57,7 @@ export interface AcexErrorDetails {
 | 下单/撤单 REST 返回 `{code,msg}` | `ORDER_*_FAILED`，保留 `cause`，填 `details.venueError.code/message` 和 `details.transport` |
 | account/order bootstrap 返回 `{code,msg}` | `ACCOUNT_BOOTSTRAP_FAILED` / `ORDER_BOOTSTRAP_FAILED`，保留 `cause`，填 `details.venueError` |
 | market catalog/server-time 返回纯文本/HTML | 不填 `details.venueError`，只填 `details.transport.rawBody/status/url` |
+| market stream 首包超时 | `MARKET_STREAM_TIMEOUT`，保留 `cause`，填 `details.venue/symbol`，不填 `details.venueError` |
 | network/timeout/parse 无可结构化交易所 body | 不填 `details.venueError`，保留 `cause` 与可用 transport metadata |
 | 本地校验错误 | 可填 `venue/accountId/symbol`，不填 `cause` / `transport` |
 | 敏感 query/body/header 出现在底层请求 | public `message`、`details.transport.url`、`details.transport.rawBody` 都不得泄漏敏感值 |
@@ -110,7 +111,7 @@ bun run test
 - `AcexError` constructor 保留 `code`、`message`、`cause`、`details`。
 - Binance-style `{code,msg}` / `{code,message}` 解析到 `details.venueError`，`code` string 化。
 - 未知 JSON、HTML、纯文本、parse/network/timeout 不填 `details.venueError`。
-- order command、market catalog/server time、account/order bootstrap 失败都保留 `cause` 和正确 details。
+- order command、market catalog/server time、market stream timeout、account/order bootstrap 失败都保留 `cause` 和正确 details。
 - public `message`、`details.transport.url`、`details.transport.rawBody` 不泄漏 `signature`、`apiKey/key`、`secret`、`token/listenKey/passphrase` 等敏感值。
 
 ### 7. Wrong vs Correct
@@ -137,4 +138,3 @@ return new AcexError(
 ```
 
 效果：保留 error event 语义，同时让直接调用命令的 SDK 用户在 `catch` 中读取 `error.details.venueError?.message`。
-

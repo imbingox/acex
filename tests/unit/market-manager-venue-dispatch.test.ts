@@ -541,7 +541,7 @@ test("MarketManager fetchServerTime wraps Binance HTTP failures without retrying
     },
   });
   expect((failure as AcexError).cause).toBeInstanceOf(Error);
-  expect((failure as AcexError).details?.exchange).toBeUndefined();
+  expect((failure as AcexError).details?.venueError).toBeUndefined();
 
   expect(attempts).toBe(1);
   expect(context.errors).toHaveLength(1);

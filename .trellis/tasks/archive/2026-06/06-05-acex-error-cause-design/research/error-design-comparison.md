@@ -101,4 +101,4 @@ Implication for Acex:
 1. 保留 `AcexErrorCode` 作为 SDK 稳定错误分类。
 2. 扩展 `AcexError` 支持 `cause`。
 3. 增加一个小型公开 `details` 对象，复制调用方常用且安全的上下文、交易所拒绝原因和 transport metadata。
-4. `details.exchange` 作为 MVP 的可选字段：adapter 或明确的 venue parser 能解析交易所错误结构时填充；不能解析时不填，由 `details.transport.rawBody` 兜底。不要在通用 `AcexError` 层猜测所有 raw body。
+4. `details.venueError` 作为 MVP 的可选字段：adapter 或明确的 venue parser 能解析交易所错误结构时填充；不能解析时不填，由 `details.transport.rawBody` 兜底。不要在通用 `AcexError` 层猜测所有 raw body。

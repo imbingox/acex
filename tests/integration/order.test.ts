@@ -207,7 +207,7 @@ test("order bootstrap rate limit maps to rate_limited status without changing pu
     details: {
       accountId: "main-binance",
       venue: "binance",
-      exchange: {
+      venueError: {
         code: "-1003",
         message: "Too many requests",
       },
@@ -260,7 +260,7 @@ test("order bootstrap ban maps to rate_limited status without changing public co
     details: {
       accountId: "main-binance",
       venue: "binance",
-      exchange: {
+      venueError: {
         code: "-1003",
         message: "IP banned",
       },
@@ -313,7 +313,7 @@ test("order bootstrap auth failure keeps auth_failed reason and does not over-re
     details: {
       accountId: "main-binance",
       venue: "binance",
-      exchange: {
+      venueError: {
         code: "-2015",
         message: "Invalid API-key",
       },
@@ -668,7 +668,7 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
       accountId: "main-binance",
       venue: "binance",
       symbol: "BTC/USDT:USDT",
-      exchange: {
+      venueError: {
         code: "-2010",
         message: "Order would immediately trigger.",
       },
@@ -704,7 +704,7 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
   await errors.return?.();
 });
 
-test("cancelOrder exposes structured exchange details on adapter failures", async () => {
+test("cancelOrder exposes structured venue error details on adapter failures", async () => {
   installBinancePrivateAccountInfra({ failCancelOrder: true });
   const client = createClient();
 
@@ -731,7 +731,7 @@ test("cancelOrder exposes structured exchange details on adapter failures", asyn
   expect(failure).toMatchObject({
     code: "ORDER_CANCEL_FAILED",
     details: {
-      exchange: {
+      venueError: {
         code: "-2011",
         message: "Unknown order sent.",
       },
@@ -743,7 +743,7 @@ test("cancelOrder exposes structured exchange details on adapter failures", asyn
   });
 });
 
-test("cancelAllOrders exposes structured exchange details on adapter failures", async () => {
+test("cancelAllOrders exposes structured venue error details on adapter failures", async () => {
   installBinancePrivateAccountInfra({ failCancelAllOrders: true });
   const client = createClient();
 
@@ -769,7 +769,7 @@ test("cancelAllOrders exposes structured exchange details on adapter failures", 
   expect(failure).toMatchObject({
     code: "ORDER_CANCEL_ALL_FAILED",
     details: {
-      exchange: {
+      venueError: {
         code: "-2011",
         message: "Unknown order sent.",
       },

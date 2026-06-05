@@ -27,7 +27,7 @@ export type AcexErrorTransportKind =
   | "rate_limited"
   | "parse";
 
-export interface AcexExchangeErrorDetails {
+export interface AcexVenueErrorDetails {
   readonly code?: string;
   readonly message?: string;
 }
@@ -47,7 +47,7 @@ export interface AcexErrorDetails {
   readonly venue?: Venue;
   readonly accountId?: string;
   readonly symbol?: string;
-  readonly exchange?: AcexExchangeErrorDetails;
+  readonly venueError?: AcexVenueErrorDetails;
   readonly transport?: AcexErrorTransportDetails;
 }
 
@@ -79,12 +79,12 @@ export function buildAcexErrorDetails(
   cause?: unknown,
 ): AcexErrorDetails | undefined {
   const transport = buildTransportDetails(cause);
-  const exchange = parseExchangeErrorDetails(transport?.rawBody);
+  const venueError = parseVenueErrorDetails(transport?.rawBody);
   const details: AcexErrorDetails = {
     venue: context?.venue,
     accountId: context?.accountId,
     symbol: context?.symbol,
-    exchange,
+    venueError,
     transport,
   };
 
@@ -95,14 +95,14 @@ export function formatAcexErrorMessage(
   message: string,
   details?: AcexErrorDetails,
 ): string {
-  const exchangeMessage = details?.exchange?.message?.trim();
-  if (!exchangeMessage) {
+  const venueErrorMessage = details?.venueError?.message?.trim();
+  if (!venueErrorMessage) {
     return message;
   }
 
   const venue = details?.venue;
   const venueLabel = venue ? formatVenueLabel(venue) : "Exchange";
-  return `${message} (${venueLabel} rejected: ${exchangeMessage})`;
+  return `${message} (${venueLabel} rejected: ${venueErrorMessage})`;
 }
 
 function buildTransportDetails(
@@ -124,9 +124,9 @@ function buildTransportDetails(
   });
 }
 
-function parseExchangeErrorDetails(
+function parseVenueErrorDetails(
   rawBody: string | undefined,
-): AcexExchangeErrorDetails | undefined {
+): AcexVenueErrorDetails | undefined {
   if (!rawBody) {
     return undefined;
   }
@@ -165,7 +165,7 @@ function hasDetails(details: AcexErrorDetails): boolean {
     details.venue ||
       details.accountId ||
       details.symbol ||
-      details.exchange ||
+      details.venueError ||
       details.transport,
   );
 }

@@ -32,7 +32,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 | [Code Organization](./code-organization.md) | 5 层架构、目录结构、接口契约、各层职责边界 | Active |
 | [Adapter Contract](./adapter-contract.md) | MarketAdapter / PrivateUserDataAdapter 接口契约、StreamHandle 语义、回调与错误传播规则、共享 HTTP 传输客户端（REST 骨架 / per-call 幂等 / typed TransportError / 错误脱敏）、签名时间 vs freshness 时间分离（可注入 TimeProvider）、可插拔限流器 seam（RateLimiter，reactive 默认） | Active |
 | [Database Guidelines](./database-guidelines.md) | 占位文档：当前仓库无数据库 / ORM / migration 层，防止 workflow 指向空路径 | Placeholder |
-| [Error Handling](./error-handling.md) | Public `AcexError` contract、`cause` / `details.exchange` / `details.transport` 语义、adapter `TransportError` 到 manager/runtime public error 的包装规则、脱敏验收 | Active |
+| [Error Handling](./error-handling.md) | Public `AcexError` contract、`cause` / `details.venueError` / `details.transport` 语义、adapter `TransportError` 到 manager/runtime public error 的包装规则、脱敏验收 | Active |
 | [Logging Guidelines](./logging-guidelines.md) | 占位文档：当前仓库无正式 logger 集成，`logger` / `logLevel` 仍为预留位 | Placeholder |
 | [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
 | [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |

@@ -1462,7 +1462,7 @@ interface AcexErrorDetails {
   venue?: Venue;
   accountId?: string;
   symbol?: string;
-  exchange?: {
+  venueError?: {
     code?: string;
     message?: string;
   };
@@ -1497,13 +1497,13 @@ try {
 } catch (err) {
   if (err instanceof AcexError) {
     console.log(err.code, err.message);
-    console.log(err.details?.exchange?.code);
-    console.log(err.details?.exchange?.message);
+    console.log(err.details?.venueError?.code);
+    console.log(err.details?.venueError?.message);
   }
 }
 ```
 
-`details.exchange` 是下游读取交易所结构化拒绝原因的首选字段，例如 Binance 返回 `{ "code": -2010, "msg": "Order would immediately trigger." }` 时会映射为：
+`details.venueError` 是下游读取交易所结构化拒绝原因的首选字段，例如 Binance 返回 `{ "code": -2010, "msg": "Order would immediately trigger." }` 时会映射为：
 
 ```ts
 {

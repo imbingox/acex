@@ -709,7 +709,7 @@ test("account bootstrap failure does not create a placeholder snapshot", async (
     details: {
       accountId: "main-binance",
       venue: "binance",
-      exchange: {
+      venueError: {
         code: "-2015",
         message: "Invalid API-key",
       },

@@ -19,7 +19,7 @@
 
 ## Open Questions
 
-* 无。已确认 MVP 采用 `cause` + 小型公开 `details`，其中 `details.exchange` 用于结构化交易所原因，`details.transport.rawBody` 仅作为无法结构化时的诊断兜底。
+* 无。已确认 MVP 采用 `cause` + 小型公开 `details`，其中 `details.venueError` 用于结构化交易所原因，`details.transport.rawBody` 仅作为无法结构化时的诊断兜底。
 
 ## Requirements (evolving)
 
@@ -66,7 +66,7 @@ new AcexError("ORDER_CREATE_FAILED", message, {
     venue,
     accountId,
     symbol,
-    exchange: {
+    venueError: {
       code: "-2010",
       message: "Account has insufficient balance...",
     },
@@ -109,7 +109,7 @@ class OrderNotFoundError extends AcexError {}
 
 ```ts
 details: {
-  exchange: {
+  venueError: {
     code: "-2010",
     message: "Account has insufficient balance...",
     normalizedReason: "insufficient_funds",
@@ -130,13 +130,13 @@ Cons:
 
 ## Recommended MVP
 
-选择 B：`AcexError` 增加 native `cause` 和小型公开 `details`，其中 `details.exchange` 属于 MVP 字段但按可解析性填充；暂不做 ccxt 式错误 taxonomy。
+选择 B：`AcexError` 增加 native `cause` 和小型公开 `details`，其中 `details.venueError` 属于 MVP 字段但按可解析性填充；暂不做 ccxt 式错误 taxonomy。
 
 字段职责：
 
 * `error.code`：SDK 稳定错误分类，用于程序分支。
 * `error.message`：人类可读摘要，用于日志和简单展示；应保留操作上下文，并在有明确交易所拒绝原因时追加短原因。
-* `error.details.exchange`：交易所返回的结构化拒绝原因，供下游精确读取。
+* `error.details.venueError`：交易所返回的结构化拒绝原因，供下游精确读取。
 * `error.details.transport`：HTTP/transport 诊断信息，作为排障和兜底。
 * `error.cause`：底层错误链，供高级调试，不作为业务逻辑首选字段。
 
@@ -144,16 +144,16 @@ Cons:
 
 | 链路 | 覆盖要求 |
 |---|---|
-| `createOrder()` / `cancelOrder()` / `cancelAllOrders()` | must cover：命令失败抛出的 `AcexError` 必须保留 `cause`，填充 `details`，Binance `{code,msg}` 响应应填 `details.exchange` |
-| `market.loadMarkets()` / catalog reload | must cover：catalog adapter 失败包装为 `MARKET_CATALOG_LOAD_FAILED` 时保留 `cause`，填充 transport 诊断；纯文本/HTML 错误不填 `details.exchange` |
+| `createOrder()` / `cancelOrder()` / `cancelAllOrders()` | must cover：命令失败抛出的 `AcexError` 必须保留 `cause`，填充 `details`，Binance `{code,msg}` 响应应填 `details.venueError` |
+| `market.loadMarkets()` / catalog reload | must cover：catalog adapter 失败包装为 `MARKET_CATALOG_LOAD_FAILED` 时保留 `cause`，填充 transport 诊断；纯文本/HTML 错误不填 `details.venueError` |
 | `market.fetchServerTime()` | must cover：server time adapter 失败包装为 `MARKET_SERVER_TIME_FETCH_FAILED` 时保留 `cause`，填充 transport 诊断 |
-| `subscribeAccount()` bootstrap | must cover：`ACCOUNT_BOOTSTRAP_FAILED` 保留底层 `cause`，Binance-style 错误可填 `details.exchange` |
-| `subscribeOrders()` bootstrap | must cover：`ORDER_BOOTSTRAP_FAILED` 保留底层 `cause`，Binance-style 错误可填 `details.exchange` |
+| `subscribeAccount()` bootstrap | must cover：`ACCOUNT_BOOTSTRAP_FAILED` 保留底层 `cause`，Binance-style 错误可填 `details.venueError` |
+| `subscribeOrders()` bootstrap | must cover：`ORDER_BOOTSTRAP_FAILED` 保留底层 `cause`，Binance-style 错误可填 `details.venueError` |
 
 ### Field Contract
 
 * `message` 只放简短人类可读摘要：SDK 操作上下文 + 可选的短交易所原因；不得拼入 rawBody、URL、headers、credentials、signature。
-* `details.exchange` 只放 SDK 明确识别出的交易所错误结构；`code` 必须 string 化，`message` 必须是交易所返回的人类可读原因。
+* `details.venueError` 只放 SDK 明确识别出的交易所错误结构；`code` 必须 string 化，`message` 必须是交易所返回的人类可读原因。
 * `details.transport` 只复制已脱敏的 transport metadata；`url` 必须来自 `TransportError.url`，`rawBody` 必须来自 `TransportError.rawBody`。
 * `details.transport.rawBody` 可以在底层响应体存在时复制，用于诊断；下游业务读取交易所原因时不应优先依赖它。
 * `cause` 类型保持为 `unknown`；可保留原始 `TransportError` 或普通 `Error`，但不是业务分支 API。
@@ -165,11 +165,11 @@ export interface AcexErrorDetails {
   readonly venue?: Venue;
   readonly accountId?: string;
   readonly symbol?: string;
-  readonly exchange?: AcexExchangeErrorDetails;
+  readonly venueError?: AcexVenueErrorDetails;
   readonly transport?: AcexErrorTransportDetails;
 }
 
-export interface AcexExchangeErrorDetails {
+export interface AcexVenueErrorDetails {
   readonly code?: string;
   readonly message?: string;
 }
@@ -198,7 +198,7 @@ new AcexError(
       venue: "binance",
       accountId: "main-binance",
       symbol: "BTC/USDT:USDT",
-      exchange: {
+      venueError: {
         code: "-2010",
         message: "Account has insufficient balance...",
       },
@@ -212,9 +212,9 @@ new AcexError(
 );
 ```
 
-`details.exchange` 应由 adapter 或明确的 venue parser 显式提取，不在 `AcexError` 通用层猜测所有 raw body。无法解析时不填 `details.exchange`，下游可再用 `details.transport.rawBody` 做诊断兜底。
+`details.venueError` 应由 adapter 或明确的 venue parser 显式提取，不在 `AcexError` 通用层猜测所有 raw body。无法解析时不填 `details.venueError`，下游可再用 `details.transport.rawBody` 做诊断兜底。
 
-用户确认：该分层可接受。下游业务读取交易所拒绝原因时首选 `error.details.exchange?.message` / `error.details.exchange?.code`；只有网络失败、超时、HTML/纯文本错误页、未知 JSON 结构、JSON 解析失败等不能结构化识别的场景，才退回查看 `error.details.transport?.rawBody`。
+用户确认：该分层可接受。下游业务读取交易所拒绝原因时首选 `error.details.venueError?.message` / `error.details.venueError?.code`；只有网络失败、超时、HTML/纯文本错误页、未知 JSON 结构、JSON 解析失败等不能结构化识别的场景，才退回查看 `error.details.transport?.rawBody`。
 
 ### Exchange Parser Contract
 
@@ -227,7 +227,7 @@ MVP parser 只支持明确的 Binance-style JSON object：
 
 * `code` 可以是 string 或 number，输出时统一转成 string。
 * `msg` / `message` 必须是非空 string。
-* 只解析顶层 object；数组、嵌套结构、未知字段名、HTML、纯文本、空 body、parse/network/timeout 错误都不填 `details.exchange`。
+* 只解析顶层 object；数组、嵌套结构、未知字段名、HTML、纯文本、空 body、parse/network/timeout 错误都不填 `details.venueError`。
 * 不做 `normalizedReason`、不新增 `InsufficientFunds` / `OrderNotFound` 等 taxonomy。
 
 ### Security Contract
@@ -245,9 +245,9 @@ MVP parser 只支持明确的 Binance-style JSON object：
 * [x] 推荐一个 MVP 设计，明确字段、兼容性和覆盖范围。
 * [x] PRD 记录研究结论和最终选择。
 * [x] `AcexError` constructor 支持 `{ cause, details }`，且 `code` / `message` 现有用法保持兼容。
-* [x] order command 失败可在 reject 的 `AcexError.details.exchange` 读取 Binance `{code,msg}`。
-* [x] market catalog/server time 失败保留 `cause` 与 `details.transport`，不可结构化 body 不填 `details.exchange`。
-* [x] account/order bootstrap 失败保留 `cause` 与可解析的 `details.exchange`。
+* [x] order command 失败可在 reject 的 `AcexError.details.venueError` 读取 Binance `{code,msg}`。
+* [x] market catalog/server time 失败保留 `cause` 与 `details.transport`，不可结构化 body 不填 `details.venueError`。
+* [x] account/order bootstrap 失败保留 `cause` 与可解析的 `details.venueError`。
 * [x] 安全测试覆盖 message/url/rawBody 不泄漏敏感值。
 * [x] `docs/api.md` 更新错误处理示例。
 

@@ -6,7 +6,7 @@ export type {
   AcexErrorOptions,
   AcexErrorTransportDetails,
   AcexErrorTransportKind,
-  AcexExchangeErrorDetails,
+  AcexVenueErrorDetails,
 } from "./errors.ts";
 export { AcexError } from "./errors.ts";
 export * from "./types/index.ts";

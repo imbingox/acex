@@ -12,7 +12,7 @@ test("AcexError preserves code, cause, and details", () => {
     venue: "binance" as const,
     accountId: "main-binance",
     symbol: "BTC/USDT:USDT",
-    exchange: {
+    venueError: {
       code: "-2010",
       message: "Order would immediately trigger.",
     },
@@ -31,7 +31,7 @@ test("AcexError preserves code, cause, and details", () => {
   expect(error.details).toBe(details);
 });
 
-test("buildAcexErrorDetails extracts Binance-style exchange errors", () => {
+test("buildAcexErrorDetails extracts Binance-style venue errors", () => {
   const cause = new TransportError("Binance PAPI request failed", {
     kind: "http",
     status: 400,
@@ -55,7 +55,7 @@ test("buildAcexErrorDetails extracts Binance-style exchange errors", () => {
     venue: "binance",
     accountId: "main-binance",
     symbol: "BTC/USDT:USDT",
-    exchange: {
+    venueError: {
       code: "-2010",
       message: "Order would immediately trigger.",
     },
@@ -74,7 +74,7 @@ test("buildAcexErrorDetails extracts Binance-style exchange errors", () => {
   );
 });
 
-test("buildAcexErrorDetails does not infer exchange details from unknown bodies", () => {
+test("buildAcexErrorDetails does not infer venue errors from unknown bodies", () => {
   const cause = new TransportError("Binance request failed", {
     kind: "http",
     status: 503,
@@ -87,7 +87,7 @@ test("buildAcexErrorDetails does not infer exchange details from unknown bodies"
 
   const details = buildAcexErrorDetails({ venue: "binance" }, cause);
 
-  expect(details?.exchange).toBeUndefined();
+  expect(details?.venueError).toBeUndefined();
   expect(details?.transport).toMatchObject({
     kind: "http",
     status: 503,

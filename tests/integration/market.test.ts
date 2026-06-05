@@ -203,7 +203,7 @@ test("market catalog load failure emits an adapter error and wrapped AcexError",
     },
   });
   expect(failure.cause).toBeInstanceOf(Error);
-  expect(failure.details?.exchange).toBeUndefined();
+  expect(failure.details?.venueError).toBeUndefined();
 
   const errorEvent = await nextEvent(errors);
   expect(errorEvent).toMatchObject({

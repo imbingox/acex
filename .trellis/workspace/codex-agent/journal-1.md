@@ -859,3 +859,36 @@ PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
 ### Next Steps
 
 - None - task complete
+
+
+## Session 24: AcexError 根因透传
+
+**Date**: 2026-06-05
+**Task**: AcexError 根因透传
+**Branch**: `feat/acex-error-details`
+
+### Summary
+
+扩展公开 AcexError 错误契约，新增 cause/details、结构化交易所错误原因和脱敏 transport 诊断信息；覆盖 order、market、account/order bootstrap 包装点，补充 tests/docs/changeset/spec，并创建 PR #48。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d874b29` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

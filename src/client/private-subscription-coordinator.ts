@@ -2,8 +2,12 @@ import type {
   PrivateUserDataAdapter,
   StreamHandle,
 } from "../adapters/types.ts";
-import { AcexError } from "../errors.ts";
-import { isTransportError, redactSecrets } from "../internal/http-client.ts";
+import {
+  AcexError,
+  buildAcexErrorDetails,
+  formatAcexErrorMessage,
+} from "../errors.ts";
+import { isTransportError } from "../internal/http-client.ts";
 import type {
   AccountRuntimeOptions,
   PrivateRuntimeReason,
@@ -53,14 +57,6 @@ function transportReason(
   return isTransportError(error) && error.kind === "rate_limited"
     ? "rate_limited"
     : fallback;
-}
-
-function bootstrapErrorDetail(error: unknown): string {
-  if (!(error instanceof Error) || !error.message) {
-    return "";
-  }
-
-  return ` (${redactSecrets(error.message)})`;
 }
 
 export class PrivateSubscriptionCoordinator {
@@ -260,6 +256,7 @@ export class PrivateSubscriptionCoordinator {
       throw new AcexError(
         "VENUE_NOT_SUPPORTED",
         `Venue is not supported yet: ${account.venue}`,
+        { details: buildAcexErrorDetails({ venue: account.venue }) },
       );
     }
 
@@ -272,6 +269,7 @@ export class PrivateSubscriptionCoordinator {
       throw new AcexError(
         "VENUE_NOT_SUPPORTED",
         `Venue is not supported yet: ${venue}`,
+        { details: buildAcexErrorDetails({ venue }) },
       );
     }
 
@@ -503,6 +501,12 @@ export class PrivateSubscriptionCoordinator {
       throw new AcexError(
         "CREDENTIALS_MISSING",
         `Account credentials are required for private subscriptions: ${account.accountId}`,
+        {
+          details: buildAcexErrorDetails({
+            accountId: account.accountId,
+            venue: account.venue,
+          }),
+        },
       );
     }
 
@@ -716,10 +720,23 @@ export class PrivateSubscriptionCoordinator {
           ),
         },
       );
-      const reason = bootstrapErrorDetail(error);
+      const details = buildAcexErrorDetails(
+        {
+          accountId: record.accountId,
+          venue: record.venue,
+        },
+        error,
+      );
       throw new AcexError(
         "ACCOUNT_BOOTSTRAP_FAILED",
-        `Failed to bootstrap account data: ${record.accountId}${reason}`,
+        formatAcexErrorMessage(
+          `Failed to bootstrap account data: ${record.accountId}`,
+          details,
+        ),
+        {
+          cause: error,
+          details,
+        },
       );
     }
   }
@@ -766,9 +783,23 @@ export class PrivateSubscriptionCoordinator {
           reason: transportReason(error, "auth_failed"),
         },
       );
+      const details = buildAcexErrorDetails(
+        {
+          accountId: record.accountId,
+          venue: record.venue,
+        },
+        error,
+      );
       throw new AcexError(
         "ORDER_BOOTSTRAP_FAILED",
-        `Failed to bootstrap order data: ${record.accountId}`,
+        formatAcexErrorMessage(
+          `Failed to bootstrap order data: ${record.accountId}`,
+          details,
+        ),
+        {
+          cause: error,
+          details,
+        },
       );
     }
   }

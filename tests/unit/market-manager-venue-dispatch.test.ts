@@ -341,6 +341,60 @@ test("MarketManager reloadMarkets leaves existing L1 and funding subscriptions r
   ).toMatchObject({ fundingRate: "0.0002", version: 2 });
 });
 
+test("MarketManager closes failed initial market streams before dropping them", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const l1Subscribe = manager
+    .subscribeL1Book({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+  const l1Stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  const l1Cause = new Error("l1 ready failed");
+  l1Stream.rejectReady(l1Cause);
+
+  const l1Failure = await l1Subscribe;
+  expect(l1Failure).toBeInstanceOf(AcexError);
+  expect(l1Failure).toMatchObject({
+    code: "MARKET_STREAM_TIMEOUT",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+  expect(l1Failure.cause).toBe(l1Cause);
+  expect(l1Stream.closeCalls).toBe(1);
+
+  const fundingSubscribe = manager
+    .subscribeFundingRate({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+  const fundingStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+  const fundingCause = new Error("funding ready failed");
+  fundingStream.rejectReady(fundingCause);
+
+  const fundingFailure = await fundingSubscribe;
+  expect(fundingFailure).toBeInstanceOf(AcexError);
+  expect(fundingFailure).toMatchObject({
+    code: "MARKET_STREAM_TIMEOUT",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+  expect(fundingFailure.cause).toBe(fundingCause);
+  expect(fundingStream.closeCalls).toBe(1);
+});
+
 test("MarketManager coalesces concurrent reloadMarkets calls for the same venue", async () => {
   const okxAdapter = new FakeOkxMarketAdapter();
   const manager = new MarketManagerImpl(
@@ -523,9 +577,25 @@ test("MarketManager fetchServerTime wraps Binance HTTP failures without retrying
     new Map<Venue, MarketAdapter>([[binanceAdapter.venue, binanceAdapter]]),
   );
 
-  await expect(manager.fetchServerTime("binance")).rejects.toMatchObject({
+  const failure = await manager
+    .fetchServerTime("binance")
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
     code: "MARKET_SERVER_TIME_FETCH_FAILED",
+    details: {
+      venue: "binance",
+      transport: {
+        kind: "http",
+        status: 503,
+        statusText: "Service Unavailable",
+        rawBody: "binance down",
+      },
+    },
   });
+  expect((failure as AcexError).cause).toBeInstanceOf(Error);
+  expect((failure as AcexError).details?.venueError).toBeUndefined();
 
   expect(attempts).toBe(1);
   expect(context.errors).toHaveLength(1);

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { BigNumber, createClient } from "../../index.ts";
+import { AcexError, BigNumber, createClient } from "../../index.ts";
 import {
   BINANCE_SPOT_WS_BASE_URL,
   BINANCE_USDM_MARKET_WS_BASE_URL,
@@ -185,9 +185,25 @@ test("market catalog load failure emits an adapter error and wrapped AcexError",
   const client = createClient();
   const errors = client.events.errors()[Symbol.asyncIterator]();
 
-  await expect(client.market.loadMarkets()).rejects.toMatchObject({
+  const failure = await client.market.loadMarkets().catch((error) => error);
+  expect(failure).toBeInstanceOf(AcexError);
+  if (!(failure instanceof AcexError)) {
+    throw new Error("Expected AcexError");
+  }
+  expect(failure).toMatchObject({
     code: "MARKET_CATALOG_LOAD_FAILED",
+    details: {
+      venue: "binance",
+      transport: {
+        kind: "http",
+        status: 503,
+        statusText: "Service Unavailable",
+        rawBody: "binance down",
+      },
+    },
   });
+  expect(failure.cause).toBeInstanceOf(Error);
+  expect(failure.details?.venueError).toBeUndefined();
 
   const errorEvent = await nextEvent(errors);
   expect(errorEvent).toMatchObject({
@@ -302,6 +318,53 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   });
 
   await iterator.return?.();
+});
+
+test("market stream timeout exposes cause and market context details", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      l1InitialMessageTimeoutMs: 25,
+      l1StaleAfterMs: 50,
+    },
+  });
+  const errors = client.events.errors()[Symbol.asyncIterator]();
+
+  await client.start();
+  const subscribePromise = client.market
+    .subscribeL1Book({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
+
+  const failure = await subscribePromise;
+  expect(failure).toBeInstanceOf(AcexError);
+  if (!(failure instanceof AcexError)) {
+    throw new Error("Expected AcexError");
+  }
+  expect(failure).toMatchObject({
+    code: "MARKET_STREAM_TIMEOUT",
+    details: {
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+  expect(failure.cause).toBeInstanceOf(Error);
+  expect(failure.details?.venueError).toBeUndefined();
+
+  const errorEvent = await nextEvent(errors);
+  expect(errorEvent).toMatchObject({
+    source: "runtime",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  expect(errorEvent.error).toBe(failure);
+
+  await errors.return?.();
 });
 
 test("l1 book snapshots canonicalize decimal string output", async () => {

@@ -9,7 +9,11 @@ import type {
   PrivateUserDataAdapter,
   RawOrderUpdate,
 } from "../adapters/types.ts";
-import { AcexError, type AcexErrorCode } from "../errors.ts";
+import {
+  AcexError,
+  type AcexErrorCode,
+  buildAcexErrorDetails,
+} from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesHealthFilter } from "../internal/filters.ts";
 import { ReactiveRateLimiter } from "../internal/rate-limiter.ts";
@@ -431,7 +435,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     message: string,
     metadata?: Omit<AcexInternalError, "error" | "source" | "ts">,
   ): AcexError {
-    const error = new AcexError(code, message);
+    const error = new AcexError(code, message, {
+      details: buildAcexErrorDetails(metadata),
+    });
     this.errorBus.publish({
       source: "client",
       ts: this.now(),

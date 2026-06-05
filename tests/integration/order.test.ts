@@ -195,13 +195,34 @@ test("order bootstrap rate limit maps to rate_limited status without changing pu
   });
   await client.start();
 
-  await expect(
-    client.order.subscribeOrders({
+  const failure = await client.order
+    .subscribeOrders({
       accountId: "main-binance",
-    }),
-  ).rejects.toMatchObject({
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
     code: "ORDER_BOOTSTRAP_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      venueError: {
+        code: "-1003",
+        message: "Too many requests",
+      },
+      transport: {
+        kind: "rate_limited",
+        status: 429,
+        statusText: "Too Many Requests",
+        retryAfterMs: 2000,
+      },
+    },
   });
+  expect((failure as AcexError).cause).toBeInstanceOf(Error);
+  expect((failure as AcexError).message).toContain(
+    "Binance rejected: Too many requests",
+  );
   expect(client.order.getOrderStatus("main-binance")).toMatchObject({
     ready: false,
     runtimeStatus: "degraded",
@@ -227,13 +248,34 @@ test("order bootstrap ban maps to rate_limited status without changing public co
   });
   await client.start();
 
-  await expect(
-    client.order.subscribeOrders({
+  const failure = await client.order
+    .subscribeOrders({
       accountId: "main-binance",
-    }),
-  ).rejects.toMatchObject({
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
     code: "ORDER_BOOTSTRAP_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      venueError: {
+        code: "-1003",
+        message: "IP banned",
+      },
+      transport: {
+        kind: "rate_limited",
+        status: 418,
+        statusText: "I'm a teapot",
+        retryAfterMs: 60000,
+      },
+    },
   });
+  expect((failure as AcexError).cause).toBeInstanceOf(Error);
+  expect((failure as AcexError).message).toContain(
+    "Binance rejected: IP banned",
+  );
   expect(client.order.getOrderStatus("main-binance")).toMatchObject({
     ready: false,
     runtimeStatus: "degraded",
@@ -259,13 +301,33 @@ test("order bootstrap auth failure keeps auth_failed reason and does not over-re
   });
   await client.start();
 
-  await expect(
-    client.order.subscribeOrders({
+  const failure = await client.order
+    .subscribeOrders({
       accountId: "main-binance",
-    }),
-  ).rejects.toMatchObject({
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
     code: "ORDER_BOOTSTRAP_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      venueError: {
+        code: "-2015",
+        message: "Invalid API-key",
+      },
+      transport: {
+        kind: "http",
+        status: 401,
+        statusText: "Unauthorized",
+      },
+    },
   });
+  expect((failure as AcexError).cause).toBeInstanceOf(Error);
+  expect((failure as AcexError).message).toContain(
+    "Binance rejected: Invalid API-key",
+  );
   expect(client.order.getOrderStatus("main-binance")).toMatchObject({
     ready: false,
     runtimeStatus: "degraded",
@@ -585,18 +647,49 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
 
   await client.start();
 
-  await expect(
-    client.order.createOrder({
+  const failure = await client.order
+    .createOrder({
       accountId: "main-binance",
       symbol: "BTC/USDT:USDT",
       side: "buy",
       type: "limit",
       price: "101000.00",
       amount: "0.010",
-    }),
-  ).rejects.toMatchObject({
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  if (!(failure instanceof AcexError)) {
+    throw new Error("Expected AcexError");
+  }
+  expect(failure).toMatchObject({
     code: "ORDER_CREATE_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      venueError: {
+        code: "-2010",
+        message: "Order would immediately trigger.",
+      },
+      transport: {
+        kind: "http",
+        status: 400,
+        statusText: "Bad Request",
+        retryable: false,
+        attempts: 1,
+      },
+    },
   });
+  expect(failure.cause).toBeInstanceOf(Error);
+  expect(failure.message).toContain(
+    "Binance rejected: Order would immediately trigger.",
+  );
+  expect(failure.message).not.toContain("signature");
+  expect(failure.details?.transport?.rawBody).toBe(
+    '{"code":-2010,"msg":"Order would immediately trigger."}',
+  );
+  expect(failure.details?.transport?.url).toContain("?query=[REDACTED]");
 
   const error = await nextEvent(errors);
   expect(error).toMatchObject({
@@ -609,6 +702,83 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
   expect(error.error).not.toBeInstanceOf(AcexError);
 
   await errors.return?.();
+});
+
+test("cancelOrder exposes structured venue error details on adapter failures", async () => {
+  installBinancePrivateAccountInfra({ failCancelOrder: true });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+
+  const failure = await client.order
+    .cancelOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "1001",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
+    code: "ORDER_CANCEL_FAILED",
+    details: {
+      venueError: {
+        code: "-2011",
+        message: "Unknown order sent.",
+      },
+      transport: {
+        kind: "http",
+        status: 400,
+      },
+    },
+  });
+});
+
+test("cancelAllOrders exposes structured venue error details on adapter failures", async () => {
+  installBinancePrivateAccountInfra({ failCancelAllOrders: true });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+
+  const failure = await client.order
+    .cancelAllOrders({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
+    code: "ORDER_CANCEL_ALL_FAILED",
+    details: {
+      venueError: {
+        code: "-2011",
+        message: "Unknown order sent.",
+      },
+      transport: {
+        kind: "http",
+        status: 400,
+      },
+    },
+  });
 });
 
 test("createOrder rejects missing Binance credentials before sending adapter commands", async () => {

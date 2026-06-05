@@ -700,9 +700,28 @@ test("account bootstrap failure does not create a placeholder snapshot", async (
       accountId: "main-binance",
     })
     .catch((error) => error);
+  expect(failure).toBeInstanceOf(AcexError);
+  if (!(failure instanceof AcexError)) {
+    throw new Error("Expected AcexError");
+  }
   expect(failure).toMatchObject({
     code: "ACCOUNT_BOOTSTRAP_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      venueError: {
+        code: "-2015",
+        message: "Invalid API-key",
+      },
+      transport: {
+        kind: "http",
+        status: 401,
+        statusText: "Unauthorized",
+      },
+    },
   });
+  expect(failure.cause).toBeInstanceOf(Error);
+  expect(failure.message).toContain("Binance rejected: Invalid API-key");
   expect(failure.message).not.toContain("signature");
   expect(failure.message).not.toContain("timestamp=");
   expect(failure.message).not.toContain("recvWindow=");

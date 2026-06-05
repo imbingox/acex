@@ -8,7 +8,11 @@ import type {
   PrivateOrderDataConsumer,
   PrivateSubscriptionState,
 } from "../client/context.ts";
-import { AcexError } from "../errors.ts";
+import {
+  AcexError,
+  buildAcexErrorDetails,
+  formatAcexErrorMessage,
+} from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
@@ -656,7 +660,8 @@ export class OrderManagerImpl
       symbol?: string;
     },
   ): AcexError {
-    const error = new AcexError(code, message);
+    const details = buildAcexErrorDetails(metadata);
+    const error = new AcexError(code, message, { details });
     this.context.publishRuntimeError("order", error, metadata);
     return error;
   }
@@ -683,6 +688,10 @@ export class OrderManagerImpl
       error instanceof Error ? error : new Error(message),
       metadata,
     );
-    return new AcexError(code, message);
+    const details = buildAcexErrorDetails(metadata, error);
+    return new AcexError(code, formatAcexErrorMessage(message, details), {
+      cause: error,
+      details,
+    });
   }
 }

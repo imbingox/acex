@@ -1,36 +1,36 @@
-# acex 使用手册
+# @imbingox/acex API 使用手册
 
-本手册是 `@imbingox/acex` 的对外参考文档。安装与项目定位见 [README](../README.md)。
+本文面向 SDK 下游调用方：策略服务、风控面板、交易执行器和数据采集进程。目标是说明如何正确持有 `AcexClient`、查询当前 runtime 能力、订阅状态型数据、执行订单命令，以及在接入时处理错误和限制。
 
 ## 目录
 
-1. [关于 acex](#1-关于-acex)
-2. [快速上手](#2-快速上手)
-3. [核心概念](#3-核心概念)
-4. [Client 生命周期](#4-client-生命周期)
-5. [MarketManager](#5-marketmanager)
-6. [AccountManager](#6-accountmanager)
-7. [OrderManager](#7-ordermanager)
-8. [健康与错误事件](#8-健康与错误事件)
-9. [数据类型参考](#9-数据类型参考)
-10. [错误处理](#10-错误处理)
-11. [当前限制](#11-当前限制)
+- [1. 当前能力](#1-当前能力)
+- [2. 快速接入](#2-快速接入)
+- [3. 核心概念](#3-核心概念)
+- [4. Client 生命周期](#4-client-生命周期)
+- [5. MarketManager](#5-marketmanager)
+- [6. AccountManager](#6-accountmanager)
+- [7. OrderManager](#7-ordermanager)
+- [8. 健康与错误事件](#8-健康与错误事件)
+- [9. 数据类型速查](#9-数据类型速查)
+- [10. 错误处理](#10-错误处理)
+- [11. 当前限制](#11-当前限制)
 
-## 1. 关于 acex
+## 1. 当前能力
 
-`acex` 是一个面向交易场景的 **状态型** SDK：调用方只持有一个 `AcexClient`，通过统一的 `market` / `account` / `order` manager 读取最新快照、消费增量事件、观察健康状态，并执行下单/撤单命令。SDK 内部维护本地缓存、ready barrier 和 websocket 生命周期，调用方不需要自己做这些事。
+`@imbingox/acex` 是状态型多 venue SDK。调用方创建一个 `AcexClient`，通过 `market` / `account` / `order` 三个 manager 读取最新快照、消费事件流、执行命令；SDK 内部维护本地缓存、ready barrier、WebSocket 生命周期、自动重连、REST timeout / retry / 错误脱敏和 reactive rate limiter。
 
-SDK 的心智模型是一组三元语义：
+当前 runtime 落地：
 
-| 动作 | 语义 |
-|---|---|
-| `subscribe*()` | 让 SDK 开始持续维护这份数据。`await` 返回时，对应 `get*()` 已可用 |
-| `get*()` | 读取本地快照。不走网络、不阻塞 |
-| `events.*()` | 订阅增量事件流。只消费，不会隐式触发 `subscribe` |
+| Venue | Market | Account | Order |
+|---|---|---|---|
+| `binance` | Spot / USDⓈ-M / COIN-M catalog；L1 Book；永续 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
+| `juplend` | 不支持 | Jupiter Lend 只读账户 polling | 不支持，read-only |
+| `okx` / `bybit` / `gate` | 类型占位 | 类型占位 | 类型占位 |
 
-当前 MVP 阶段覆盖：Binance 现货与 USDⓈ-M / COIN-M 合约的 L1 Book、Binance 永续合约 Funding Rate，Binance PAPI UM 私有链路的账户与订单，Juplend 只读借贷账户视图，以及第一版下单/撤单命令。详见 [§11 当前限制](#11-当前限制)。
+## 2. 快速接入
 
-## 2. 快速上手
+### 2.1 安装和初始化
 
 ```bash
 bun add @imbingox/acex
@@ -40,6 +40,17 @@ bun add @imbingox/acex
 import { createClient } from "@imbingox/acex";
 
 const client = createClient();
+
+await client.start();
+// ... use client.market / client.account / client.order
+await client.stop();
+```
+
+`createClient()` 不建立网络连接。`start()` 后才能调用订阅类方法；`loadMarkets()`、`reloadMarkets()`、`fetchServerTime()` 和 capability 查询不要求 client 已 start。
+
+### 2.2 订阅 Binance L1 Book
+
+```ts
 await client.start();
 
 await client.market.subscribeL1Book({
@@ -51,7 +62,8 @@ const book = client.market.getL1Book({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
-console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
+
+console.log(book?.bidPrice, book?.askPrice, book?.status.freshness);
 
 for await (const event of client.market.events.l1BookUpdates({
   venue: "binance",
@@ -60,33 +72,46 @@ for await (const event of client.market.events.l1BookUpdates({
   console.log(event.snapshot.bidPrice);
   break;
 }
-
-await client.stop();
 ```
 
-同一个 client 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户。`account.binance.riskPollIntervalMs` 只配置 Binance 风险/仓位校准间隔；`account.juplend.pollIntervalMs` / `rpcUrl` / `jupApiKey` 只配置 Juplend polling、RPC 和 Jup API，不会把 client 限定为某个 venue：
+`subscribeL1Book()` 会等待该 logical subscription 的首条有效数据到达后才 resolve。首条数据超时会抛 `MARKET_STREAM_TIMEOUT`。
+
+### 2.3 注册 Binance 交易账户
 
 ```ts
-const client = createClient({
-  account: {
-    binance: {
-      riskPollIntervalMs: 5_000,
-    },
-    juplend: {
-      pollIntervalMs: 30_000,
-      rpcUrl: process.env.SOL_HELIUS_RPC,
-      jupApiKey: process.env.JUP_API,
-    },
-  },
-});
-await client.start();
-
 await client.registerAccount({
   accountId: "main-binance",
   venue: "binance",
   credentials: {
     apiKey: process.env.BINANCE_PAPI_API_KEY,
     secret: process.env.BINANCE_PAPI_SECRET,
+  },
+  options: {
+    recvWindow: 5_000,
+  },
+});
+
+await client.start();
+
+await client.account.subscribeAccount({ accountId: "main-binance" });
+await client.order.subscribeOrders({ accountId: "main-binance" });
+
+const risk = client.account.getRiskSnapshot("main-binance");
+const openOrders = client.order.getOpenOrders("main-binance");
+```
+
+Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护。
+
+### 2.4 注册 Juplend 只读账户
+
+```ts
+const client = createClient({
+  account: {
+    juplend: {
+      pollIntervalMs: 30_000,
+      rpcUrl: process.env.SOL_HELIUS_RPC,
+      jupApiKey: process.env.JUP_API,
+    },
   },
 });
 
@@ -99,6 +124,16 @@ await client.registerAccount({
   },
 });
 
+await client.start();
+await client.account.subscribeAccount({ accountId: "jup-loop-a" });
+
+const balances = client.account.getBalances("jup-loop-a");
+const risk = client.account.getRiskSnapshot("jup-loop-a");
+```
+
+也可以用已知 vault + position 直接读取单仓，不扫全钱包：
+
+```ts
 await client.registerAccount({
   accountId: "jup-loop-direct",
   venue: "juplend",
@@ -107,109 +142,92 @@ await client.registerAccount({
     positionId: "<nft-position-id>",
   },
 });
-
-await client.account.subscribeAccount({ accountId: "main-binance" });
-await client.account.subscribeAccount({ accountId: "jup-loop-a" });
-
-const binanceRisk = client.account.getRiskSnapshot("main-binance");
-const juplendRisk = client.account.getRiskSnapshot("jup-loop-a");
-
-console.log(binanceRisk?.riskRatio);
-console.log(juplendRisk?.riskRatio);
 ```
 
-需要账户或订单能力时，在 `start()` 前后任意时刻 `registerAccount()`：
+Juplend 不需要私钥，不支持 supply / borrow / repay / withdraw。`accountId` 是 SDK 内的逻辑账户名，不是钱包地址。
+
+### 2.5 下单和撤单
 
 ```ts
-const client = createClient();
-await client.start();
-
-await client.registerAccount({
+const order = await client.order.createOrder({
   accountId: "main-binance",
-  venue: "binance",
-  credentials: {
-    apiKey: process.env.BINANCE_PAPI_API_KEY,
-    secret: process.env.BINANCE_PAPI_SECRET,
-  },
+  symbol: "BTC/USDT:USDT",
+  side: "buy",
+  type: "limit",
+  price: "60000",
+  amount: "0.001",
+  postOnly: true,
+  clientOrderId: "strategy-001",
+  positionSide: "long",
 });
 
-await client.account.subscribeAccount({ accountId: "main-binance" });
-await client.order.subscribeOrders({ accountId: "main-binance" });
+const canceled = await client.order.cancelOrder({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+  clientOrderId: "strategy-001",
+});
 
-await client.stop();
+const batch = await client.order.cancelAllOrders({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
 ```
+
+下单命令由 `accountId` 对应的 venue 决定，不在 order input 里再传 venue。Juplend 和 type-only venue 会被 runtime 拒绝。
 
 ## 3. 核心概念
 
-### 3.1 状态型 SDK
+### 3.1 Stateful client
 
-SDK 本地维护最新快照。读快照用 `get*()`，**不会** 触发网络请求。这意味着：
+`AcexClient` 是长生命周期对象。manager 内部持有快照、状态、事件总线和订阅句柄。下游服务应复用同一个 client，而不是每次读取都重新创建。
 
-- `get*()` 返回 `undefined` 表示「从未订阅」或「首次快照还没到」
-- 跨 symbol 做决策（套利、对冲）时，在事件回调里用 `get*()` 拿各 symbol 最新值，比读 `event.snapshot` 更一致
+### 3.2 Ready barrier
 
-### 3.2 subscribe 是 ready barrier
+订阅方法 resolve 之后，相关 getter 应已有第一份可读快照：
 
 ```ts
-await client.market.subscribeL1Book({ venue, symbol });
-// await 返回之后，getL1Book({ venue, symbol }) 一定已经有值
+await client.market.subscribeL1Book({ venue: "binance", symbol });
+const snapshot = client.market.getL1Book({ venue: "binance", symbol });
 ```
 
-`subscribe*()` 会等首条可用快照到达后才 resolve。超时则抛出 `MARKET_STREAM_TIMEOUT`。默认超时 15s，可通过 `CreateClientOptions.market.l1InitialMessageTimeoutMs` 调整。
+如果首条数据迟迟不到，订阅 promise 会 reject。稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。
 
-### 3.2.1 subscribe / unsubscribe 行为
+### 3.3 Decimal string
 
-- 同一个 `(venue, symbol)` 反复调用 `subscribe*()` 是幂等的：已存在的流不会重复创建，只会继续等待原有流进入 ready
-- `unsubscribe*()` 可以和 `subscribe*()` 动态交替调用；退订后该 stream 停止维护，但 `get*()` 仍可读到最后一份快照
-- `unsubscribe*()` 对未订阅目标是安全的 no-op
-- 退订后再次 `subscribe*()` 会重新恢复该 stream 的维护与更新
-- `subscribeL1Book()` 和 `subscribeFundingRate()` 彼此独立；退订其中一个不会影响另一个
-
-### 3.3 event vs snapshot
-
-`event.snapshot` 是事件发生那一刻的快照。由于事件是异步消费的，你在 `for await` 处理时，SDK 内部状态可能已经更新到下一版。因此：
-
-- 单 symbol 场景，直接用 `event.snapshot` 即可
-- 跨 symbol 决策场景，把事件当触发器，用 `get*()` 读所有 symbol 的当下值
-
-### 3.4 activity vs freshness vs runtime status
-
-| 字段 | 语义 | 出现在 |
-|---|---|---|
-| `activity` | `"active"` 表示 SDK 仍在维护；`"inactive"` 表示已退订或未订阅 | 所有 `*DataStatus` |
-| `freshness` | market 数据的新鲜度：`"fresh"` / `"stale"` / `"reconciling"` | `MarketDataStatus` |
-| `runtimeStatus` | 私有链路运行态：`"bootstrap_pending"` / `"healthy"` / `"degraded"` / `"reconnecting"` / `"reconciling"` / `"stopped"` | `AccountDataStatus`、`OrderDataStatus` |
-
-退订后 `activity` 变为 `"inactive"`，但最后一份快照仍可读——不要把它当实时值。
-
-### 3.5 Decimal string 约定
-
-输出侧的价格、数量、金额统一是 canonical 十进制 string：无损、无科学计数法、不补尾零。SDK 仍 re-export `BigNumber`（来自 [bignumber.js](https://github.com/MikeMcl/bignumber.js)）作为可选工具；需要运算时由调用方显式解析：
+所有 public snapshot / market 数值字段都是 canonical decimal string：无损、无科学计数法、不补尾零。SDK 仍 re-export `BigNumber` 作为下游计算工具：
 
 ```ts
 import { BigNumber } from "@imbingox/acex";
 
-const book = client.market.getL1Book({ venue, symbol });
-const spread = new BigNumber(book!.askPrice).minus(new BigNumber(book!.bidPrice));
-console.log(spread.toFixed());
+const book = client.market.getL1Book({ venue: "binance", symbol });
+const spread = new BigNumber(book!.askPrice).minus(book!.bidPrice);
 ```
 
-不要用 `parseFloat()` 解析输出字段，否则会退回 JS 浮点精度。输入侧保持宽进严出：`createOrder()` 的 `price` / `amount` 是 decimal string，`normalizeOrderInput()` 的 `DecimalInput` 仍接受 string / number / `BigNumber`，但公共输出一律是 canonical decimal string。
+不要用 `parseFloat()` 处理金额、数量、价格和比率。`createOrder()` 的 `price` / `amount` 必须传 decimal string；`normalizeOrderInput()` 的 `DecimalInput` 可接受 string / number / `BigNumber`。
+
+### 3.4 状态字段
+
+常见状态字段：
+
+| 字段 | 语义 |
+|---|---|
+| `activity` | `"active"` 表示当前订阅活跃；`"inactive"` 表示已退订或停止 |
+| `ready` | 是否已有首份可读数据 |
+| `freshness` | market stream 新鲜度：`"fresh"` / `"stale"` / `"reconciling"` |
+| `runtimeStatus` | private stream 状态：`"bootstrap_pending"` / `"healthy"` / `"degraded"` / `"reconnecting"` / `"reconciling"` / `"stopped"` |
+| `reason` | 状态原因，如 `credentials_missing`、`http_failed`、`rate_limited`、`ws_disconnected` |
+
+退订后旧快照仍可读，但不再代表实时值。
 
 ## 4. Client 生命周期
 
 ### 4.1 `createClient(options?)`
 
 ```ts
-function createClient(options?: CreateClientOptions): AcexClient;
-```
-
-只创建对象，不建立任何网络连接。`CreateClientOptions` 见 [§9 数据类型参考](#9-数据类型参考)。
-
-运行时真正生效的配置当前是 `market.*` 与 `account.*`：
-
-```ts
 const client = createClient({
+  clock: {
+    now: () => Date.now(),
+  },
   market: {
     l1InitialMessageTimeoutMs: 15_000,
     l1StaleAfterMs: 15_000,
@@ -227,116 +245,57 @@ const client = createClient({
     juplend: {
       pollIntervalMs: 30_000,
       rpcUrl: process.env.SOL_HELIUS_RPC,
+      jupApiKey: process.env.JUP_API,
     },
   },
 });
 ```
 
-`sandbox`、`logger`、`logLevel` 是预留位，当前不生效。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 reactive limiter。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
 ### 4.2 `start()` / `stop()`
 
 ```ts
 await client.start();
-// ...
 await client.stop();
-await client.stop({ graceful: true, timeoutMs: 5_000 });
 ```
 
-Client 状态机：`idle → starting → running → stopping → stopped`，可通过 `client.getStatus()` 读取。`start()` / `stop()` 都幂等。
-
-在 `start()` 之前调 `subscribe*()` 会直接失败，抛 `CLIENT_NOT_STARTED`。
+状态机是 `idle → starting → running → stopping → stopped`。`start()` 和 `stop()` 幂等。`stop(options?)` 的 `graceful` / `timeoutMs` 当前是预留参数，不要依赖它们提供额外 drain 语义。
 
 ### 4.3 Venue capabilities
 
 ```ts
 const binance = client.getVenueCapabilities("binance");
-const allVenues = client.listVenueCapabilities();
+const all = client.listVenueCapabilities();
 ```
 
-`getVenueCapabilities()` / `listVenueCapabilities()` 不需要 `start()`，也不会建立网络连接。返回值表达的是 **当前 SDK runtime 已实现能力**，不是交易所官网完整能力，也不会检查 API key 是否开通交易权限。
+Capability 查询不访问网络，不要求 `start()`。返回值表达当前 SDK runtime 已实现能力，不代表交易所官网完整能力，也不检查 API key 权限。
 
-典型用途是在 UI 或策略启动前预检查 venue 能力：
+当前摘要：
+
+| Venue | runtimeStatus | readOnly | 关键能力 |
+|---|---|---:|---|
+| `binance` | `available` | false | market catalog / server time / L1；funding rate 为 `market_dependent`；order supported |
+| `juplend` | `available` | true | account polling + lending；order reason 为 `read_only` |
+| `okx` / `bybit` / `gate` | `type_only` | false | runtime 未接入，order reason 为 `not_implemented` |
+
+下游应先查 capability 再展示或启用功能：
 
 ```ts
 if (!client.getVenueCapabilities("juplend").order.supported) {
-  // Juplend 是只读 lending 账户，不能通过 OrderManager 下单
+  // 不展示下单按钮
 }
 ```
 
-当前 venue 级能力摘要：
-
-| Venue | runtimeStatus | readOnly | Market | Account | Order |
-|---|---|---:|---|---|---|
-| `binance` | `available` | false | catalog / L1 支持；funding rate 为 `market_dependent` | WebSocket 私有账户流 | 支持 `limit` / `market` 下单、撤单、按 symbol 全撤 |
-| `juplend` | `available` | true | 不支持 | polling 只读 lending 账户 | 不支持，`reason = "read_only"` |
-| `okx` / `bybit` / `gate` | `type_only` | false | 当前未实现 | 当前未实现 | 当前未实现，`reason = "not_implemented"` |
-
-第一版只提供 venue 级查询，不提供 symbol/market 级 capability。像 funding rate 这类依赖 market type 的能力会用 `market_dependent` 表达，具体 symbol 仍以实际 `subscribeFundingRate()` / `MARKET_FUNDING_RATE_UNSUPPORTED` 为准。
-
-Binance 的 `order.supported = true` 只表示当前 SDK 有 Binance 订单命令链路；第一版命令固定走 Binance PAPI UM，主要面向 USDⓈ-M symbol，不代表 Binance spot、COIN-M 或交割合约都可通过 `OrderManager` 下单。需要按具体 symbol 预检时，应等后续 market-level capability。
-
-### 4.4 账户注册
+### 4.4 账户管理
 
 ```ts
-await client.registerAccount({
-  accountId: "main-binance",
-  venue: "binance",
-  credentials: { apiKey, secret },
-});
-
+await client.registerAccount(input);
 await client.updateAccountCredentials("main-binance", { apiKey, secret });
-
 await client.removeAccount("main-binance");
 ```
 
-`RegisterAccountInput` 是按 `venue` 区分的 union。不同 venue 的初始化参数不同，TypeScript 会在注册时提示/校验：
-
-```ts
-await client.registerAccount({
-  accountId: "main-binance",
-  venue: "binance",
-  credentials: { apiKey, secret },
-  options: {
-    recvWindow: 5000,
-    timestamp: Date.now(),
-  },
-});
-
-await client.registerAccount({
-  accountId: "jup-loop-a",
-  venue: "juplend",
-  options: {
-    walletAddress,
-    positionId: "101", // 可选；不传则聚合该钱包全部 Juplend positions
-  },
-});
-
-await client.registerAccount({
-  accountId: "jup-loop-direct",
-  venue: "juplend",
-  options: {
-    vaultId: "1",
-    positionId: "101", // 直接读取单个 vault 内的 NFT position
-  },
-});
-```
-
-约束：
-
-- `accountId` 在单个 `AcexClient` 实例内全局唯一。重复注册抛 `ACCOUNT_ALREADY_EXISTS`
-- 凭证校验发生在 `subscribeAccount()` / `subscribeOrders()` 时，不是注册时
-- `updateAccountCredentials()` 可以在私有订阅活跃时调用，SDK 会按需重建私有链路
-- `removeAccount()` 比 `unsubscribeAccount()` 更彻底：账户配置、凭证、账户级缓存都会清理
-- Juplend 的 `accountId` 是自定义逻辑账户名；可传 `options.walletAddress` 聚合钱包全部仓位，或传 `options.vaultId + options.positionId` 直接读取单个仓位
-- Juplend 不要求 `credentials`；原生 read 默认读取 `SOL_HELIUS_RPC`，也可通过 `account.juplend.rpcUrl` 显式覆盖；token metadata / price 优先读取 `account.juplend.jupApiKey` 或环境变量 `JUP_API`
-
-### 4.5 `getStatus()` / `getHealth()`
-
-```ts
-client.getStatus();   // ClientStatus
-client.getHealth();   // ClientHealthSnapshot（聚合所有 market/account/order 状态）
-```
+`RegisterAccountInput` 按 venue 区分。CEX venue 使用 `AccountCredentials`；Juplend 必须显式提供 `walletAddress` 或 `vaultId + positionId`。虽然 public `Venue` 包含 type-only venue，但注册成功不代表该 venue runtime 能订阅或下单，仍以 capability 和实际调用结果为准。
 
 ## 5. MarketManager
 
@@ -346,6 +305,8 @@ interface MarketManager {
 
   loadMarkets(): Promise<void>;
   reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
+  fetchServerTime(venue: Venue): Promise<VenueServerTime>;
+
   listMarkets(venue?: Venue): MarketDefinition[];
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
@@ -367,245 +328,45 @@ interface MarketManager {
 
 ### 5.1 Market catalog
 
-```ts
-await client.market.loadMarkets();
-const reloadSummaries = await client.market.reloadMarkets("binance");
-
-const all = client.market.listMarkets();
-const binanceOnly = client.market.listMarkets("binance");
-
-const btcPerp = client.market.getMarket("binance", "BTC/USDT:USDT");
-const allBtcPerp = client.market.getMarkets("BTC/USDT:USDT");
-```
-
-`getMarkets(symbol)` 严格按完整统一 symbol 匹配。
-
-`loadMarkets()` 会懒加载并缓存当前已注册 venue 的市场目录；已加载过的 venue 不会重复拉取。`reloadMarkets(venue?)` 用于主动刷新市场目录：传入 `venue` 时只刷新该 venue，省略时刷新所有已注册 market adapter。它和 `loadMarkets()` 一样不要求 client 已 `start()`，因此可在 `start()` 前或 `stop()` 后调用。
-
-`reloadMarkets()` 返回每个 venue 的刷新摘要：
-
-```ts
-type MarketCatalogReloadSummary = {
-  venue: Venue;
-  added: string[];
-  removed: string[];
-  total: number;
-  ok: boolean;
-  error?: AcexError;
-};
-```
-
-`added` / `removed` 是本次刷新相对旧目录变化的 symbol 列表，`total` 是刷新后该 venue 的目录数量。catalog 拉取失败时，对应 summary 为 `ok: false`，`error.code = "MARKET_CATALOG_LOAD_FAILED"`，旧目录会保留，方法不会因为该 venue 的 catalog 失败而 reject；未注册 runtime adapter 的合法 venue（例如当前 market adapter 未接入的 `bybit`）仍会抛 `VENUE_NOT_SUPPORTED`。
-
-如果刷新会新增 symbol，调用方应先 `await client.market.reloadMarkets(venue)`，再按 summary 订阅新增 symbol。已加载 venue 上的后台 reload 不会阻塞并发 `subscribe*()`；reload 完成前订阅新增 symbol 仍可能按旧目录返回 `MARKET_NOT_FOUND`。
-
-`MarketDefinition` 见 [§9](#9-数据类型参考)。价格/数量相关字段（`priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional`）都是 canonical decimal string；需要运算时用 `new BigNumber(field)` 自行解析。
-
-归一化下单价格和数量：
+`loadMarkets()` 懒加载所有已实现 market runtime 的 venue 目录；`reloadMarkets(venue?)` 主动刷新目录，返回新增/移除/总数/错误摘要。订阅方法会自动确保对应 venue 的 catalog 已加载。
 
 ```ts
 await client.market.loadMarkets();
-
-const normalized = client.market.normalizeOrderInput({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-  price: "101000.123456789",
-  amount: "0.010987654321",
-});
-
-if (normalized.accepted) {
-  await client.order.createOrder({
-    accountId: "main-binance",
-    symbol: "BTC/USDT:USDT",
-    side: "buy",
-    type: "limit",
-    price: normalized.price,
-    amount: normalized.amount,
-  });
-}
+const markets = client.market.listMarkets("binance");
+const market = client.market.getMarket("binance", "BTC/USDT:USDT");
 ```
 
-`normalizeOrderInput()` 会按该 market 的 `priceStep` / `amountStep` 向下取整，返回 decimal string，避免浮点科学计数法；并基于归一化后的值检查 `minAmount` / `minNotional`。
+`MarketDefinition` 里的 `priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional` 都是 decimal string。
 
-如果归一化后的结果不满足最小下单条件，接口不会抛错，而是返回 `accepted: false` 和 `rejectReason`，调用方应避免继续下单：
+### 5.2 订单输入归一
 
 ```ts
 const normalized = client.market.normalizeOrderInput({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
-  price: "1000.09",
-  amount: "0.0049",
+  price: "60000.123",
+  amount: "0.001234",
 });
 
-// 示例返回：
-// {
-//   price: "1000",
-//   amount: "0.004",
-//   rawPrice: "1000.09",
-//   rawAmount: "0.0049",
-//   adjusted: true,
-//   accepted: false,
-//   rejectReason: "notional_below_min",
-//   priceStep: "0.1",
-//   amountStep: "0.001",
-//   minAmount: "0.001",
-//   minNotional: "5"
-// }
-```
-
-`rejectReason` 当前可能是：`price_not_positive`、`amount_not_positive`、`amount_below_min`、`notional_below_min`。
-
-**统一 symbol 约定：**
-
-| 格式 | 含义 | 示例 |
-|---|---|---|
-| `BASE/QUOTE` | 现货 | `BTC/USDT` |
-| `BASE/QUOTE:SETTLE` | USDⓈ-M 永续 | `BTC/USDT:USDT` |
-| `BASE/USD:BASE` | COIN-M 永续 | `BTC/USD:BTC` |
-| `BASE/USD:BASE-YYYYMMDD` | COIN-M 交割 | `BTC/USD:BTC-20250627` |
-
-`subscribeL1Book()` 内部会自动确保 catalog 已加载，所以不必手动先 `loadMarkets()`；只在需要枚举或读取精度字段时主动调用。
-
-### 5.2 L1 Book
-
-```ts
-await client.market.subscribeL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-
-const book = client.market.getL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-
-if (book) {
-  const spread = new BigNumber(book.askPrice).minus(new BigNumber(book.bidPrice));
-  console.log(`spread=${spread.toFixed()}`);
+if (!normalized.accepted) {
+  console.log(normalized.rejectReason);
 }
 ```
 
-消费增量事件：
+`normalizeOrderInput()` 会按 `priceStep` / `amountStep` 向下取整，并检查 `minAmount` / `minNotional`。它不会自动帮你下单，调用方需要把归一后的 string 放入 `createOrder()`。
+
+### 5.3 Server time
 
 ```ts
-for await (const event of client.market.events.l1BookUpdates({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-})) {
-  console.log(event.snapshot.bidPrice);
-}
+const time = await client.market.fetchServerTime("binance");
+console.log(time.serverTime, time.roundTripMs, time.estimatedOffsetMs);
 ```
 
-不传 filter 会拿到所有 symbol 的更新：
+当前 Binance server time 测量源固定为 USDⓈ-M REST `/fapi/v1/time`。失败会包装为 `MARKET_SERVER_TIME_FETCH_FAILED`。
 
-```ts
-for await (const event of client.market.events.l1BookUpdates()) {
-  console.log(event.venue, event.symbol);
-}
-```
+### 5.4 Funding rate
 
-**事件当触发器模式**（跨 symbol 决策推荐）：
-
-```ts
-const pairs = [
-  { venue: "binance", symbol: "BTC/USDT:USDT" },
-  { venue: "binance", symbol: "BTC/USD:BTC" },
-];
-
-for (const pair of pairs) await client.market.subscribeL1Book(pair);
-
-for await (const _ of client.market.events.l1BookUpdates()) {
-  const books = pairs.map((p) => ({ ...p, book: client.market.getL1Book(p) }));
-  if (books.some((b) => !b.book)) continue;
-  // 用 books 里的最新值做决策
-}
-```
-
-退订：
-
-```ts
-await client.market.unsubscribeL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-```
-
-退订后最后一份快照仍可读，但 `getMarketStatus().activity` 变为 `"inactive"`。
-
-L1 Book 支持动态重复 `subscribe` / `unsubscribe`；对同一个 market 重复 `subscribeL1Book()` 不会重复开流，退订后再次订阅会恢复维护。
-
-### 5.3 Funding Rate
-
-Funding Rate 当前通过 Binance mark price websocket 实时更新，仅支持永续合约（`MarketDefinition.type === "swap"`）。订阅 spot 或交割合约会抛出 `MARKET_FUNDING_RATE_UNSUPPORTED`。
-
-```ts
-await client.market.subscribeFundingRate({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-
-const funding = client.market.getFundingRate({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-
-if (funding) {
-  console.log(funding.fundingRate);
-  console.log(funding.markPrice);
-  console.log(funding.indexPrice);
-  console.log(funding.nextFundingTime);
-  console.log(funding.status.freshness);
-}
-```
-
-消费增量事件：
-
-```ts
-for await (const event of client.market.events.fundingRateUpdates({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-})) {
-  console.log(event.snapshot.fundingRate);
-}
-```
-
-字段映射来自 Binance mark price stream：`r` → `fundingRate`，`p` → `markPrice`，`i` → `indexPrice`，`T` → `nextFundingTime`，`E` → `exchangeTs`。
-
-Funding Rate 也支持动态重复 `subscribe` / `unsubscribe`；对同一个 market 重复 `subscribeFundingRate()` 不会重复开流，退订后再次订阅会恢复维护。
-
-### 5.4 订阅状态
-
-```ts
-const status = client.market.getMarketStatus({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-
-if (status) {
-  status.activity;       // "active" | "inactive"
-  status.ready;          // 首次 ready 是否完成
-  status.freshness;      // "fresh" | "stale" | "reconciling"
-  status.lastReceivedAt; // 最后收到数据的时间
-  status.reason;         // "ws_disconnected" | "heartbeat_timeout" | "reconciling"
-}
-```
-
-`getMarketStatus()` 是 `(venue, symbol)` 级聚合状态：同一个 market 下任意 active stream（例如 L1 Book 或 Funding Rate）变 stale，聚合状态也会 stale。更精确的下游判断应优先读取快照自带的 stream 级状态：
-
-```ts
-const book = client.market.getL1Book({ venue, symbol });
-book?.status.freshness; // 只代表 L1 Book stream
-
-const funding = client.market.getFundingRate({ venue, symbol });
-funding?.status.freshness; // 只代表 Funding Rate stream
-```
-
-`freshness` 区分两种异常：
-
-- `ws_disconnected`：底层连接已断
-- `heartbeat_timeout`：连接仍在但长时间没收到消息
-
-自动重连由 SDK 负责，调用方不需要手工处理。
+Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 
 ## 6. AccountManager
 
@@ -626,76 +387,21 @@ interface AccountManager {
 }
 ```
 
-### 6.1 订阅与退订
+`AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，数组视图用 `getBalances()`。
 
-```ts
-await client.account.subscribeAccount({ accountId: "main-binance" });
-await client.account.unsubscribeAccount({ accountId: "main-binance" });
-```
+Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh 的组合。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
 
-- 调用前需要先 `registerAccount()`
-- 凭证不足抛 `CREDENTIALS_MISSING`
-- bootstrap 失败抛 `ACCOUNT_BOOTSTRAP_FAILED`
-
-### 6.2 读快照
-
-```ts
-const snapshot = client.account.getAccountSnapshot("main-binance");
-// AccountSnapshot.balances 是 Record<string, BalanceSnapshot>（按 asset 索引）
-
-const balances = client.account.getBalances("main-binance");
-// BalanceSnapshot[]（数组视图）
-
-const usdt = client.account.getBalance("main-binance", "USDT");
-// BalanceSnapshot | undefined
-
-const positions = client.account.getPositions("main-binance");
-const btcPosition = client.account.getPosition({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  side: "long", // 双向持仓时必传；单向持仓可省略
-});
-
-const risk = client.account.getRiskSnapshot("main-binance");
-```
-
-所有数量字段（`free` / `used` / `total` / `size` / `entryPrice` / `netEquity` / `riskEquity` / ...）都是 canonical decimal string；需要运算时用 `new BigNumber(field)` 自行解析。
-
-`RiskSnapshot.netEquity` 表示不含风控折算的净资产价值；`riskEquity` 表示抵押系数或清算阈值折算后的风控净权益。Binance 使用 `actualEquity` / `accountEquity` 映射这两个字段；Juplend 使用 `totalCollateralUsd - totalDebtUsd` / `Σ(suppliedValue × liquidationThreshold) - totalDebtUsd`。
-
-> **注意**：`AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，不是数组；需要数组视图用 `getBalances()`。
-
-### 6.3 事件
+Account 事件用于消费余额、仓位、风险或全量快照替换：
 
 ```ts
 for await (const event of client.account.events.updates({
   accountId: "main-binance",
 })) {
-  switch (event.type) {
-    case "balance.updated":
-      console.log(event.asset, event.snapshot.free);
-      break;
-    case "position.updated":
-      console.log(event.symbol, event.snapshot.size);
-      break;
-    case "risk.updated":
-      console.log(event.snapshot.riskRatio);
-      break;
-    case "account.snapshot_replaced":
-      // 私有链路重连/重对账后的全量替换
-      break;
+  if (event.type === "risk.updated") {
+    console.log(event.snapshot.riskRatio);
   }
+  break;
 }
-```
-
-### 6.4 订阅状态
-
-```ts
-const status = client.account.getAccountStatus("main-binance");
-status?.runtimeStatus;
-// "bootstrap_pending" | "healthy" | "degraded" | "reconnecting" | "reconciling" | "stopped"
-status?.reason;
-// "credentials_missing" | "auth_failed" | "http_failed" | "rate_limited" | "ws_disconnected" | "heartbeat_timeout" | "reconciling"
 ```
 
 ## 7. OrderManager
@@ -717,284 +423,246 @@ interface OrderManager {
 }
 ```
 
-### 7.1 订阅订单流
+### 7.1 支持范围
 
-```ts
-await client.order.subscribeOrders({ accountId: "main-binance" });
-await client.order.unsubscribeOrders({ accountId: "main-binance" });
-```
+- `createOrder()` 支持 `limit` / `market`
+- `limit` 可传 `postOnly: true`，Binance PAPI UM 映射为 `timeInForce=GTX`
+- `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
+- `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
+- hedge mode 下必须显式传 `positionSide: "long" | "short"`
 
-- 需要先 `registerAccount()`
-- 凭证不足抛 `CREDENTIALS_MISSING`
-- bootstrap（open orders 拉取）失败抛 `ORDER_BOOTSTRAP_FAILED`
+### 7.2 精度限制
 
-### 7.2 读快照
+`createOrder()` 不会自动纠偏。调用方应先用 `MarketDefinition.priceStep`、`amountStep`、`minAmount`、`minNotional` 和 `normalizeOrderInput()` 处理输入。交易所拒单会包装成 `ORDER_CREATE_FAILED`。
 
-```ts
-const openOrders = client.order.getOpenOrders("main-binance");
-const btcOrders = client.order.getOpenOrders("main-binance", "BTC/USDT:USDT");
-
-const order = client.order.getOrder({
-  accountId: "main-binance",
-  orderId: "12345",
-  // 或 clientOrderId: "my-order-1"
-});
-
-const status = client.order.getOrderStatus("main-binance");
-```
-
-### 7.3 下单
-
-`createOrder()` 第一版支持 `limit` / `market` 两种类型。`price` / `amount` 是 decimal string。
-
-```ts
-const limit = await client.order.createOrder({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  side: "buy",
-  type: "limit",
-  price: "71830.6",
-  amount: "0.001",
-  clientOrderId: "my-order-1", // 可选
-  reduceOnly: false,           // 可选
-  postOnly: true,              // 可选：仅限 limit，Binance 映射为 GTX
-});
-
-const market = await client.order.createOrder({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  side: "sell",
-  type: "market",
-  amount: "0.001",
-});
-```
-
-**双向持仓模式（hedge mode）必须显式传 `positionSide`**：
-
-```ts
-const hedge = await client.order.createOrder({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  side: "buy",
-  type: "limit",
-  price: "71900.9",
-  amount: "0.001",
-  positionSide: "long", // "long" | "short"
-});
-```
-
-单向持仓模式可以省略 `positionSide`，返回的 snapshot 通常归一成 `"net"`。
-
-`postOnly` 仅对 `limit` 单有效；当前 Binance PAPI UM adapter 会把普通 limit 单映射为 `timeInForce=GTC`，把 `postOnly: true` 映射为 `timeInForce=GTX`。
-
-失败时抛 `ORDER_CREATE_FAILED`；输入本身不合法（比如 limit 单缺 price）抛 `ORDER_INPUT_INVALID`。
-
-### 7.4 撤单
-
-```ts
-const canceled = await client.order.cancelOrder({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT",
-  orderId: "12345",
-  // 或 clientOrderId: "my-order-1"
-});
-
-const batch = await client.order.cancelAllOrders({
-  accountId: "main-binance",
-  symbol: "BTC/USDT:USDT", // 当前必填，不支持账户级全撤
-});
-```
-
-`cancelOrder()` 要求 `orderId` / `clientOrderId` 至少一个，否则本地校验失败抛 `ORDER_INPUT_INVALID`。命令失败抛 `ORDER_CANCEL_FAILED` / `ORDER_CANCEL_ALL_FAILED`。
-
-### 7.5 命令结果 vs 事件流
-
-- `createOrder()` / `cancelOrder()` resolve 的是 **REST 成功后标准化的 `OrderSnapshot`**
-- `events.updates()` 是订单的 **后续生命周期变化流**，不是唯一 ack 来源
-
-也就是说，命令 resolve 不代表订单已终结。想追踪完整生命周期（部分成交 → 完全成交 / 撤销 / 拒绝）要同时消费事件。
-
-### 7.6 事件
+Order 事件用于消费订单状态变化和 open orders 全量替换：
 
 ```ts
 for await (const event of client.order.events.updates({
   accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
 })) {
-  switch (event.type) {
-    case "order.updated":
-      console.log("更新", event.snapshot.status, event.snapshot.filled);
-      break;
-    case "order.filled":
-      console.log("全部成交", event.snapshot.avgFillPrice);
-      break;
-    case "order.canceled":
-      console.log("已撤单");
-      break;
-    case "order.rejected":
-      console.log("被拒绝");
-      break;
-    case "order.snapshot_replaced":
-      // 私有链路重连/重对账后的全量订单集合替换
-      break;
+  if (event.type === "order.filled") {
+    console.log(event.snapshot.filled);
   }
+  break;
 }
 ```
-
-### 7.7 Binance PAPI UM 精度约束
-
-`price` / `amount` 必须满足 `MarketDefinition.priceStep`、`amountStep`、`minAmount`、`minNotional`。**SDK 第一版不自动纠偏**——调用方自己用这些字段做字符串格式化。违反约束的订单会被交易所拒绝，SDK 对外表现为对应命令失败。
 
 ## 8. 健康与错误事件
 
-### 8.1 `getHealth()`
-
 ```ts
 const health = client.getHealth();
-// {
-//   clientStatus: "running",
-//   markets: MarketDataStatus[],
-//   accounts: AccountDataStatus[],
-//   orders: OrderDataStatus[],
-//   updatedAt: 1710000000000,
-// }
-```
 
-### 8.2 `events.health()`
+for await (const event of client.events.health({ venue: "binance" })) {
+  console.log(event.type);
+  break;
+}
 
-```ts
-for await (const event of client.events.health()) {
-  switch (event.type) {
-    case "client.status_changed":
-      console.log("client", event.status);
-      break;
-    case "market.status_changed":
-      console.log("market", event.venue, event.symbol, event.status.activity);
-      break;
-    case "account.status_changed":
-      console.log("account", event.accountId, event.status.runtimeStatus);
-      break;
-    case "order.status_changed":
-      console.log("order", event.accountId, event.status.runtimeStatus);
-      break;
-  }
+for await (const error of client.events.errors()) {
+  console.error(error.source, error.error);
+  break;
 }
 ```
 
-可以用 `HealthEventFilter` 过滤：
+`getHealth()` 聚合 client、market、account、order 的当前状态。`events.health(filter)` 只返回满足 filter 的事件；如果事件没有 filter 请求的字段，会被过滤掉。
+
+## 9. 数据类型速查
+
+以下类型均从 `@imbingox/acex` 根入口导出；以 package public types 为准。这里列常用形状，完整字段可由 TypeScript 自动补全。
 
 ```ts
-// 只看 market 范围
-for await (const e of client.events.health({ scope: "market" })) { /* ... */ }
-
-// 只看某个 venue
-for await (const e of client.events.health({ venue: "binance" })) { /* ... */ }
-
-// 只看某个 account
-for await (const e of client.events.health({ accountId: "main-binance" })) { /* ... */ }
-```
-
-### 8.3 `events.errors()`
-
-```ts
-for await (const err of client.events.errors()) {
-  console.error(`[${err.source}] ${err.error.message}`, {
-    venue: err.venue,
-    accountId: err.accountId,
-    symbol: err.symbol,
-  });
-}
-```
-
-`AcexInternalError.source` 枚举：`"client" | "market" | "account" | "order" | "adapter" | "runtime"`。适合桥接到日志或告警系统。
-
-## 9. 数据类型参考
-
-所有 public 类型都从包顶层 import：
-
-```ts
-import type {
-  Venue, ClientStatus, CreateClientOptions, VenueCapabilities,
-  VenueRuntimeStatus, VenueCapabilitySupport, VenueCapabilityReason,
-  FundingRateCapability, PrivateUpdateCapability,
-  CancelAllOrdersCapability, PositionSideCapability,
-  OrderTimeInForceCapability,
-  AccountCredentials,
-  MarketDefinition, L1Book, FundingRateSnapshot, MarketDataStatus,
-  MarketDataStreamStatus,
-  BalanceSnapshot, PositionSnapshot, RiskSnapshot, AccountSnapshot,
-  AccountDataStatus, CreateOrderInput, CancelOrderInput, CancelAllOrdersInput,
-  OrderSnapshot, OrderDataStatus, OrderSide, OrderStatus, PositionSide,
-  MarketEvent, AccountEvent, OrderEvent, HealthEvent,
-  AcexInternalError,
-} from "@imbingox/acex";
-import { BigNumber, AcexError } from "@imbingox/acex";
-```
-
-### 9.1 基础
-
-```ts
-const SUPPORTED_VENUES = ["binance", "okx", "bybit", "gate", "juplend"] as const;
-type Venue = (typeof SUPPORTED_VENUES)[number];
-
+type Venue = "binance" | "okx" | "bybit" | "gate" | "juplend";
 type ClientStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
-type VenueRuntimeStatus = "available" | "type_only" | "reserved";
-type VenueCapabilitySupport = "supported" | "unsupported";
-type VenueCapabilityReason =
-  | "not_implemented" | "read_only"
-  | "market_type_unsupported" | "sdk_reserved";
+type MarketType = "spot" | "swap" | "future";
+type PositionSide = "long" | "short" | "net";
+type CreateOrderType = "limit" | "market";
+type OrderSide = "buy" | "sell";
+type OrderStatus =
+  | "open"
+  | "partially_filled"
+  | "filled"
+  | "canceled"
+  | "rejected"
+  | "expired";
+
+type PrivateRuntimeReason =
+  | "credentials_missing"
+  | "auth_failed"
+  | "http_failed"
+  | "rate_limited"
+  | "ws_disconnected"
+  | "heartbeat_timeout"
+  | "reconciling";
 
 type SubscriptionActivity = "active" | "inactive";
 type MarketFreshness = "fresh" | "stale" | "reconciling";
 type PrivateRuntimeStatus =
-  | "bootstrap_pending" | "healthy" | "degraded"
-  | "reconnecting" | "reconciling" | "stopped";
-type PrivateRuntimeReason =
-  | "credentials_missing" | "auth_failed" | "http_failed" | "rate_limited"
-  | "ws_disconnected" | "heartbeat_timeout" | "reconciling";
-
-type OrderSide = "buy" | "sell";
-type OrderStatus =
-  | "open" | "partially_filled" | "filled"
-  | "canceled" | "rejected" | "expired";
-type PositionSide = "long" | "short" | "net";
-type CreateOrderType = "limit" | "market";
-type MarketType = "spot" | "swap" | "future";
+  | "bootstrap_pending"
+  | "healthy"
+  | "degraded"
+  | "reconnecting"
+  | "reconciling"
+  | "stopped";
 ```
 
-### 9.2 Client 配置
+```ts
+interface VenueCapabilities {
+  venue: Venue;
+  runtimeStatus: "available" | "type_only" | "reserved";
+  readOnly: boolean;
+  notes: string[];
+  market: {
+    catalog: "supported" | "unsupported";
+    serverTime: "supported" | "unsupported";
+    l1Book: "supported" | "unsupported";
+    fundingRate: "supported" | "unsupported" | "market_dependent";
+    marketTypes: MarketType[];
+  };
+  account: {
+    register: "supported" | "unsupported";
+    snapshot: "supported" | "unsupported";
+    updates: "websocket" | "polling" | "unsupported";
+    balances: "supported" | "unsupported";
+    positions: "supported" | "unsupported";
+    risk: "supported" | "unsupported";
+    lending: "supported" | "unsupported";
+    credentialsRequired: boolean;
+  };
+  order: {
+    supported: boolean;
+    openOrders: "supported" | "unsupported";
+    updates: "websocket" | "polling" | "unsupported";
+    create: "supported" | "unsupported";
+    cancel: "supported" | "unsupported";
+    cancelAll: "symbol" | "account" | "unsupported";
+    orderTypes: CreateOrderType[];
+    timeInForce: Array<"gtc" | "post_only">;
+    postOnly: boolean;
+    reduceOnly: boolean;
+    positionSide: "optional" | "required_for_hedge" | "unsupported";
+    clientOrderId: boolean;
+    reason?:
+      | "not_implemented"
+      | "read_only"
+      | "market_type_unsupported"
+      | "sdk_reserved";
+  };
+}
+```
 
 ```ts
-interface MarketRuntimeOptions {
-  l1InitialMessageTimeoutMs?: number; // 默认 15_000
-  l1StaleAfterMs?: number;            // 默认 15_000
-  l1ReconnectDelayMs?: number;        // 默认 1_000
-  l1ReconnectMaxDelayMs?: number;     // 默认 10_000
-}
-
-interface AccountRuntimeOptions {
-  streamOpenTimeoutMs?: number;
-  streamReconnectDelayMs?: number;
-  streamReconnectMaxDelayMs?: number;
-  listenKeyKeepAliveMs?: number;
-  binance?: {
-    riskPollIntervalMs?: number; // 默认 5_000
-  };
-  juplend?: {
-    pollIntervalMs?: number;
-    rpcUrl?: string;
-    jupApiKey?: string;
-  };
-}
-
 interface CreateClientOptions {
-  sandbox?: boolean;   // 预留，当前不生效
-  clock?: TimeProvider;     // 注入签名/请求时钟，默认本地时钟
-  rateLimiter?: RateLimiter; // 注入限流器，默认 reactive（观测 + Retry-After 退避，不主动节流）
-  logger?: Logger;     // 预留
-  logLevel?: LogLevel; // 预留
-  market?: MarketRuntimeOptions;
-  account?: AccountRuntimeOptions;
+  sandbox?: boolean;
+  clock?: { now(): number };
+  rateLimiter?: RateLimiter;
+  logger?: Logger;
+  logLevel?: "debug" | "info" | "warn" | "error";
+  market?: {
+    l1InitialMessageTimeoutMs?: number;
+    l1StaleAfterMs?: number;
+    l1ReconnectDelayMs?: number;
+    l1ReconnectMaxDelayMs?: number;
+  };
+  account?: {
+    streamOpenTimeoutMs?: number;
+    streamReconnectDelayMs?: number;
+    streamReconnectMaxDelayMs?: number;
+    listenKeyKeepAliveMs?: number;
+    binance?: {
+      riskPollIntervalMs?: number;
+    };
+    juplend?: {
+      pollIntervalMs?: number;
+      rpcUrl?: string;
+      jupApiKey?: string;
+    };
+  };
 }
+
+interface RateLimitScope {
+  venue: Venue;
+  accountId?: string;
+  endpointKey: string;
+}
+
+interface RateLimitUsage {
+  weight?: Record<string, number>;
+  orderCount?: Record<string, number>;
+}
+
+interface RateLimitRequestContext {
+  scope: RateLimitScope;
+}
+
+interface RateLimitResponseContext {
+  status: number;
+  headers?: Headers;
+  usage?: RateLimitUsage;
+}
+
+interface RateLimitTransportErrorContext {
+  status?: number;
+  headers?: Headers;
+  retryAfterMs?: number;
+  usage?: RateLimitUsage;
+}
+
+interface RateLimitSnapshot {
+  scope: RateLimitScope;
+  usage?: RateLimitUsage;
+  blockedUntil?: number;
+  retryAfterMs?: number;
+  state: "ok" | "rate_limited" | "banned";
+  updatedAt?: number;
+}
+
+interface RateLimiter {
+  beforeRequest(ctx: RateLimitRequestContext): Promise<void> | void;
+  afterResponse(
+    ctx: RateLimitRequestContext,
+    response: RateLimitResponseContext,
+  ): Promise<void> | void;
+  onTransportError(
+    ctx: RateLimitRequestContext,
+    error: RateLimitTransportErrorContext,
+  ): Promise<void> | void;
+  getSnapshot(scope: RateLimitScope): RateLimitSnapshot | undefined;
+}
+
+interface Logger {
+  debug(msg: string, context?: Record<string, unknown>): void;
+  info(msg: string, context?: Record<string, unknown>): void;
+  warn(msg: string, context?: Record<string, unknown>): void;
+  error(msg: string, context?: Record<string, unknown>): void;
+}
+
+type RegisterAccountInput =
+  | {
+      accountId: string;
+      venue: "binance" | "okx" | "bybit" | "gate";
+      credentials?: AccountCredentials;
+      options?: {
+        timestamp?: number;
+        recvWindow?: number;
+      };
+    }
+  | {
+      accountId: string;
+      venue: "juplend";
+      credentials?: AccountCredentials;
+      options:
+        | {
+            walletAddress: string;
+            vaultId?: string;
+            positionId?: string;
+          }
+        | {
+            walletAddress?: string;
+            vaultId: string;
+            positionId: string;
+          };
+    };
 
 interface AccountCredentials {
   apiKey?: string;
@@ -1002,119 +670,13 @@ interface AccountCredentials {
   password?: string;
   extra?: Record<string, string>;
 }
-
-interface BinanceAccountOptions {
-  timestamp?: number;
-  recvWindow?: number;
-}
-
-type JuplendAccountOptions =
-  | {
-      walletAddress: string;
-      vaultId?: string;
-      positionId?: string;
-    }
-  | {
-      walletAddress?: string;
-      vaultId: string;
-      positionId: string;
-    };
-
-type RegisterAccountInput =
-  | {
-      accountId: string;
-      venue: "binance" | "okx" | "bybit" | "gate";
-      credentials?: AccountCredentials;
-      options?: BinanceAccountOptions;
-    }
-  | {
-      accountId: string;
-      venue: "juplend";
-      credentials?: AccountCredentials;
-      options: JuplendAccountOptions;
-    };
-
-interface RegisterAccountResult {
-  accountId: string;
-  venue: Venue;
-}
-
-interface StopOptions {
-  graceful?: boolean;
-  timeoutMs?: number;
-}
 ```
-
-### 9.2.1 Venue Capabilities
-
-```ts
-type FundingRateCapability =
-  | VenueCapabilitySupport
-  | "market_dependent";
-
-type PrivateUpdateCapability =
-  | "websocket"
-  | "polling"
-  | "unsupported";
-
-type CancelAllOrdersCapability =
-  | "symbol"
-  | "account"
-  | "unsupported";
-
-type PositionSideCapability =
-  | "optional"
-  | "required_for_hedge"
-  | "unsupported";
-
-type OrderTimeInForceCapability = "gtc" | "post_only";
-
-interface VenueCapabilities {
-  venue: Venue;
-  runtimeStatus: VenueRuntimeStatus;
-  readOnly: boolean;
-  notes: string[];
-  market: {
-    catalog: VenueCapabilitySupport;
-    l1Book: VenueCapabilitySupport;
-    fundingRate: FundingRateCapability;
-    marketTypes: MarketType[];
-  };
-  account: {
-    register: VenueCapabilitySupport;
-    snapshot: VenueCapabilitySupport;
-    updates: PrivateUpdateCapability;
-    balances: VenueCapabilitySupport;
-    positions: VenueCapabilitySupport;
-    risk: VenueCapabilitySupport;
-    lending: VenueCapabilitySupport;
-    credentialsRequired: boolean;
-  };
-  order: {
-    supported: boolean;
-    openOrders: VenueCapabilitySupport;
-    updates: PrivateUpdateCapability;
-    create: VenueCapabilitySupport;
-    cancel: VenueCapabilitySupport;
-    cancelAll: CancelAllOrdersCapability;
-    orderTypes: CreateOrderType[];
-    timeInForce: OrderTimeInForceCapability[];
-    postOnly: boolean;
-    reduceOnly: boolean;
-    positionSide: PositionSideCapability;
-    clientOrderId: boolean;
-    reason?: VenueCapabilityReason;
-  };
-}
-```
-
-### 9.3 Market
 
 ```ts
 interface MarketDefinition {
   venue: Venue;
-  symbol: string;           // 统一 symbol
-  id: string;               // 交易所原始 symbol
+  symbol: string;
+  id: string;
   type: MarketType;
   base: string;
   quote: string;
@@ -1134,45 +696,12 @@ interface MarketDefinition {
   raw: Record<string, unknown>;
 }
 
-interface MarketKeyInput {
-  venue: Venue;
-  symbol: string;
-}
-
-type DecimalInput = string | number | BigNumber;
-
-type NormalizeOrderInputRejectReason =
-  | "price_not_positive"
-  | "amount_not_positive"
-  | "amount_below_min"
-  | "notional_below_min";
-
-interface NormalizeOrderInputInput extends MarketKeyInput {
-  price: DecimalInput;
-  amount: DecimalInput;
-}
-
-interface NormalizedOrderInput {
-  price: string;
-  amount: string;
-  rawPrice: string;
-  rawAmount: string;
-  adjusted: boolean;
-  accepted: boolean;
-  rejectReason?: NormalizeOrderInputRejectReason;
-  priceStep: string;
-  amountStep: string;
-  minAmount?: string;
-  minNotional?: string;
-}
-
-interface SubscribeL1BookInput extends MarketKeyInput {}
-
-interface SubscribeFundingRateInput extends MarketKeyInput {}
-
-interface MarketEventFilter {
-  venue?: Venue;
-  symbol?: string;
+interface VenueServerTime {
+  serverTime: number;
+  requestSentAt: number;
+  responseReceivedAt: number;
+  roundTripMs: number;
+  estimatedOffsetMs: number;
 }
 
 interface L1Book {
@@ -1182,21 +711,6 @@ interface L1Book {
   bidSize: string;
   askPrice: string;
   askSize: string;
-  exchangeTs?: number;
-  receivedAt: number;
-  updatedAt: number;
-  version: number;
-  status: MarketDataStreamStatus;
-}
-
-interface FundingRateSnapshot {
-  venue: Venue;
-  symbol: string;
-  fundingRate: string;
-  nextFundingTime?: number;
-  markPrice?: string;
-  indexPrice?: string;
-  exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
   version: number;
@@ -1213,22 +727,24 @@ interface MarketDataStreamStatus {
   reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 }
 
-interface MarketDataStatus {
+interface MarketDataStatus extends MarketDataStreamStatus {
   venue: Venue;
   symbol: string;
-  activity: SubscriptionActivity;
-  ready: boolean;
-  freshness?: MarketFreshness;
-  lastReceivedAt?: number;
-  lastReadyAt?: number;
-  inactiveSince?: number;
-  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 }
-```
 
-### 9.4 Account
+interface FundingRateSnapshot {
+  venue: Venue;
+  symbol: string;
+  fundingRate: string;
+  nextFundingTime?: number;
+  markPrice?: string;
+  indexPrice?: string;
+  receivedAt: number;
+  updatedAt: number;
+  version: number;
+  status: MarketDataStreamStatus;
+}
 
-```ts
 interface BalanceSnapshot {
   accountId: string;
   venue: Venue;
@@ -1236,20 +752,14 @@ interface BalanceSnapshot {
   free: string;
   used: string;
   total: string;
-  exchangeTs?: number;
-  receivedAt: number;
-  updatedAt: number;
-  seq: number;
-  lending?: LendingBalanceFacet;
-}
-
-interface LendingBalanceFacet {
-  supplied: string;
-  borrowed: string;
-  interest: string;
-  netAsset: string;
-  supplyAPY?: string;
-  borrowAPY?: string;
+  lending?: {
+    supplied: string;
+    borrowed: string;
+    interest: string;
+    netAsset: string;
+    supplyAPY?: string;
+    borrowAPY?: string;
+  };
 }
 
 interface PositionSnapshot {
@@ -1263,10 +773,6 @@ interface PositionSnapshot {
   unrealizedPnl?: string;
   leverage?: string;
   liquidationPrice?: string;
-  exchangeTs?: number;
-  receivedAt: number;
-  updatedAt: number;
-  seq: number;
 }
 
 interface RiskSnapshot {
@@ -1276,33 +782,22 @@ interface RiskSnapshot {
   riskEquity?: string;
   riskRatio?: string;
   riskLeverage?: string;
-  initialMargin?: string;
-  maintenanceMargin?: string;
-  exchangeTs?: number;
-  receivedAt: number;
-  updatedAt: number;
-  seq: number;
-  lending?: LendingRiskFacet;
-}
-
-interface LendingRiskFacet {
-  marginLevel?: string;
-  healthFactor?: string;
-  ltv?: string;
-  liquidationThreshold?: string;
-  totalCollateralUSD?: string;
-  totalDebtUSD?: string;
+  lending?: {
+    marginLevel?: string;
+    healthFactor?: string;
+    ltv?: string;
+    liquidationThreshold?: string;
+    totalCollateralUSD?: string;
+    totalDebtUSD?: string;
+  };
 }
 
 interface AccountSnapshot {
   accountId: string;
   venue: Venue;
-  balances: Record<string, BalanceSnapshot>; // 按 asset 索引
+  balances: Record<string, BalanceSnapshot>;
   positions: PositionSnapshot[];
   risk?: RiskSnapshot;
-  exchangeTs?: number;
-  receivedAt: number;
-  updatedAt: number;
 }
 
 interface AccountDataStatus {
@@ -1311,25 +806,19 @@ interface AccountDataStatus {
   activity: SubscriptionActivity;
   ready: boolean;
   runtimeStatus?: PrivateRuntimeStatus;
-  lastReceivedAt?: number;
-  lastReadyAt?: number;
-  inactiveSince?: number;
   reason?: PrivateRuntimeReason;
 }
 ```
 
-### 9.5 Order
-
 ```ts
-// limit / market 两个 variant
 type CreateOrderInput =
   | {
       accountId: string;
       symbol: string;
       side: OrderSide;
       type: "limit";
-      price: string;   // decimal string
-      amount: string;  // decimal string
+      price: string;
+      amount: string;
       postOnly?: boolean;
       clientOrderId?: string;
       reduceOnly?: boolean;
@@ -1340,7 +829,7 @@ type CreateOrderInput =
       symbol: string;
       side: OrderSide;
       type: "market";
-      amount: string;  // decimal string
+      amount: string;
       clientOrderId?: string;
       reduceOnly?: boolean;
       positionSide?: PositionSide;
@@ -1358,12 +847,6 @@ interface CancelAllOrdersInput {
   symbol: string;
 }
 
-interface GetOrderInput {
-  accountId: string;
-  orderId?: string;
-  clientOrderId?: string;
-}
-
 interface OrderSnapshot {
   accountId: string;
   venue: Venue;
@@ -1371,20 +854,13 @@ interface OrderSnapshot {
   clientOrderId?: string;
   symbol: string;
   side: OrderSide;
-  type: string;              // 交易所原始 type 字符串
+  type: string;
   status: OrderStatus;
   price?: string;
-  triggerPrice?: string;
   amount: string;
   filled: string;
   remaining?: string;
-  reduceOnly?: boolean;
   positionSide?: PositionSide;
-  avgFillPrice?: string;
-  exchangeTs?: number;
-  receivedAt: number;
-  updatedAt: number;
-  seq: number;
 }
 
 interface OrderDataStatus {
@@ -1393,158 +869,81 @@ interface OrderDataStatus {
   activity: SubscriptionActivity;
   ready: boolean;
   runtimeStatus?: PrivateRuntimeStatus;
-  lastReceivedAt?: number;
-  lastReadyAt?: number;
-  inactiveSince?: number;
   reason?: PrivateRuntimeReason;
 }
 ```
 
-### 9.6 事件
-
 ```ts
-// Market
 type MarketEvent =
   | { type: "l1_book.updated"; venue: Venue; symbol: string; snapshot: L1Book; ts: number }
   | { type: "funding_rate.updated"; venue: Venue; symbol: string; snapshot: FundingRateSnapshot; ts: number }
   | { type: "market.status_changed"; venue: Venue; symbol: string; status: MarketDataStatus; ts: number };
 
-// Account
 type AccountEvent =
-  | { type: "balance.updated"; accountId: string; venue: Venue; ts: number; asset: string; snapshot: BalanceSnapshot }
-  | { type: "position.updated"; accountId: string; venue: Venue; ts: number; symbol: string; snapshot: PositionSnapshot }
-  | { type: "risk.updated"; accountId: string; venue: Venue; ts: number; snapshot: RiskSnapshot }
-  | { type: "account.snapshot_replaced"; accountId: string; venue: Venue; ts: number; snapshot: AccountSnapshot };
+  | { type: "balance.updated"; accountId: string; venue: Venue; asset: string; snapshot: BalanceSnapshot; ts: number }
+  | { type: "position.updated"; accountId: string; venue: Venue; symbol: string; snapshot: PositionSnapshot; ts: number }
+  | { type: "risk.updated"; accountId: string; venue: Venue; snapshot: RiskSnapshot; ts: number }
+  | { type: "account.snapshot_replaced"; accountId: string; venue: Venue; snapshot: AccountSnapshot; ts: number };
 
-// Order
 type OrderEvent =
-  | { type: "order.updated"; accountId: string; venue: Venue; symbol: string; ts: number; snapshot: OrderSnapshot }
-  | { type: "order.filled"; accountId: string; venue: Venue; symbol: string; ts: number; snapshot: OrderSnapshot }
-  | { type: "order.canceled"; accountId: string; venue: Venue; symbol: string; ts: number; snapshot: OrderSnapshot }
-  | { type: "order.rejected"; accountId: string; venue: Venue; symbol: string; ts: number; snapshot: OrderSnapshot }
-  | { type: "order.snapshot_replaced"; accountId: string; venue: Venue; ts: number; snapshot: OrderSnapshot[] };
-
-// Health
-type HealthEvent =
-  | { type: "client.status_changed"; status: ClientStatus; ts: number }
-  | { type: "market.status_changed"; venue: Venue; symbol: string; status: MarketDataStatus; ts: number }
-  | { type: "account.status_changed"; accountId: string; venue: Venue; status: AccountDataStatus; ts: number }
-  | { type: "order.status_changed"; accountId: string; venue: Venue; status: OrderDataStatus; ts: number };
-```
-
-过滤器：
-
-```ts
-interface MarketEventFilter  { venue?: Venue; symbol?: string; }
-interface AccountEventFilter { accountId?: string; venue?: Venue; symbol?: string; }
-interface OrderEventFilter   { accountId?: string; venue?: Venue; symbol?: string; }
-interface HealthEventFilter  {
-  scope?: "client" | "market" | "account" | "order";
-  venue?: Venue;
-  accountId?: string;
-  symbol?: string;
-}
-```
-
-### 9.7 错误
-
-```ts
-interface AcexInternalError {
-  source: "client" | "market" | "account" | "order" | "adapter" | "runtime";
-  venue?: Venue;
-  accountId?: string;
-  symbol?: string;
-  error: Error;
-  ts: number;
-}
-
-interface AcexErrorDetails {
-  venue?: Venue;
-  accountId?: string;
-  symbol?: string;
-  venueError?: {
-    code?: string;
-    message?: string;
-  };
-  transport?: {
-    kind?: "timeout" | "http" | "network" | "rate_limited" | "parse";
-    status?: number;
-    statusText?: string;
-    retryAfterMs?: number;
-    retryable?: boolean;
-    attempts?: number;
-    rawBody?: string;
-    url?: string;
-  };
-}
-
-class AcexError extends Error {
-  readonly code: AcexErrorCode;
-  readonly details?: AcexErrorDetails;
-  readonly cause?: unknown;
-}
+  | { type: "order.updated"; accountId: string; venue: Venue; symbol: string; snapshot: OrderSnapshot; ts: number }
+  | { type: "order.filled"; accountId: string; venue: Venue; symbol: string; snapshot: OrderSnapshot; ts: number }
+  | { type: "order.canceled"; accountId: string; venue: Venue; symbol: string; snapshot: OrderSnapshot; ts: number }
+  | { type: "order.rejected"; accountId: string; venue: Venue; symbol: string; snapshot: OrderSnapshot; ts: number }
+  | { type: "order.snapshot_replaced"; accountId: string; venue: Venue; snapshot: OrderSnapshot[]; ts: number };
 ```
 
 ## 10. 错误处理
 
-可预期错误统一通过 `AcexError` 抛出，`code` 字段可用于分支判断：
+可预期错误统一抛 `AcexError`：
 
 ```ts
 import { AcexError } from "@imbingox/acex";
 
 try {
   await client.market.subscribeL1Book({ venue: "binance", symbol: "X/Y:Z" });
-} catch (err) {
-  if (err instanceof AcexError) {
-    console.log(err.code, err.message);
-    console.log(err.details?.venueError?.code);
-    console.log(err.details?.venueError?.message);
+} catch (error) {
+  if (error instanceof AcexError) {
+    console.log(error.code);
+    console.log(error.details?.venueError?.code);
+    console.log(error.details?.transport?.status);
   }
 }
 ```
 
-`details.venueError` 是下游读取交易所结构化拒绝原因的首选字段，例如 Binance 返回 `{ "code": -2010, "msg": "Order would immediately trigger." }` 时会映射为：
+`details.venueError` 是读取交易所结构化拒绝原因的首选字段；`details.transport` 保存已脱敏的 HTTP / transport 诊断信息；`cause` 保留底层错误链。
 
-```ts
-{
-  code: "-2010",
-  message: "Order would immediately trigger.",
-}
-```
-
-`details.transport` 保留已脱敏的 HTTP/transport 诊断信息，例如 `kind`、`status`、`retryAfterMs`、`attempts`、`rawBody`、`url`。`rawBody` 和 `url` 只用于排障兜底，不建议作为业务分支首选字段。market stream 首包超时时，`MARKET_STREAM_TIMEOUT` 会带 `details.venue` / `details.symbol` 和底层 `cause`，通常不填 `details.venueError`。`cause` 保留底层错误链，用于高级调试。
-
-完整错误码列表：
+完整错误码：
 
 | Code | 典型场景 |
 |---|---|
-| `CLIENT_NOT_STARTED` | 未 `start()` 就调用 `subscribe*()` |
-| `VENUE_NOT_SUPPORTED` | venue 当前未实现，或 Juplend 这类只读 venue 被用于下单 |
-| `MARKET_CATALOG_LOAD_FAILED` | `loadMarkets()` 拉取失败 |
+| `CLIENT_NOT_STARTED` | 未 start 就调用订阅方法 |
+| `VENUE_NOT_SUPPORTED` | venue runtime 未实现，或 read-only venue 被用于下单 |
+| `MARKET_CATALOG_LOAD_FAILED` | market catalog 拉取失败 |
+| `MARKET_SERVER_TIME_FETCH_FAILED` | server time 请求失败或响应结构不合法 |
+| `MARKET_INACTIVE` | catalog 中 market 不活跃 |
+| `MARKET_FUNDING_RATE_UNSUPPORTED` | 指定 market 不支持 funding rate |
 | `MARKET_NOT_FOUND` | 指定 symbol 不存在 |
-| `MARKET_INACTIVE` | 指定 symbol 在 catalog 中但不可交易 |
-| `MARKET_FUNDING_RATE_UNSUPPORTED` | 指定 market 不支持资金费率订阅 |
 | `MARKET_STREAM_TIMEOUT` | market stream 首条消息超时 |
-| `ACCOUNT_ALREADY_EXISTS` | 重复注册同一个 `accountId` |
-| `ACCOUNT_NOT_FOUND` | `accountId` 未注册或已被移除 |
-| `ACCOUNT_BOOTSTRAP_FAILED` | `subscribeAccount()` 过程中账户快照拉取失败，例如 Juplend HTTP/API 失败、缺 `options.walletAddress`，或 direct 模式下缺失/提供了无效的 `options.vaultId`、`options.positionId` |
-| `CREDENTIALS_MISSING` | 私有订阅 / 下单缺必要凭证，例如 Binance 缺 `apiKey/secret` |
-| `ORDER_BOOTSTRAP_FAILED` | `subscribeOrders()` 过程中 open orders 拉取失败 |
-| `ORDER_INPUT_INVALID` | 下单/撤单本地输入校验失败（如缺 price、缺 id） |
-| `ORDER_CREATE_FAILED` | 交易所拒单 / REST 报错 |
+| `ACCOUNT_ALREADY_EXISTS` | 重复注册 accountId |
+| `ACCOUNT_BOOTSTRAP_FAILED` | account bootstrap 失败 |
+| `ACCOUNT_NOT_FOUND` | accountId 未注册或已移除 |
+| `CREDENTIALS_MISSING` | private 订阅或下单缺凭证 |
+| `ORDER_BOOTSTRAP_FAILED` | open orders bootstrap 失败 |
+| `ORDER_INPUT_INVALID` | 本地订单输入校验失败 |
+| `ORDER_CREATE_FAILED` | 下单 REST 失败或交易所拒单 |
 | `ORDER_CANCEL_FAILED` | 撤单失败 |
 | `ORDER_CANCEL_ALL_FAILED` | 批量撤单失败 |
 
 ## 11. 当前限制
 
-- **Venue**：market/order 运行时只支持 `binance`；account 运行时支持 `binance` 与只读 `juplend`。`okx` / `bybit` / `gate` 仅在 `SUPPORTED_VENUES` 类型里声明，未接入
-- **市场数据**：真实落地 Binance L1 Book（Spot + USDⓈ-M + COIN-M）和 Binance 永续 Funding Rate
-- **私有链路**：Binance PAPI UM 使用 listenKey/WebSocket；Juplend 使用 HTTP polling，只提供账户只读视图
-- **Juplend 写操作**：不支持 supply / borrow / repay / withdraw，不支持 `OrderManager` 下单撤单
-- **Juplend 数据源**：账户主数据来自 `@jup-ag/lend-read` 原生 position read；token metadata / spot price 优先来自 Jup 官方 `Tokens V2 + Price V3`，lite vault metadata 只做 fallback
-- **Funding Rate**：仅永续合约支持，来自 mark price websocket；不支持现货和交割合约
-- **下单类型**：`createOrder()` 仅支持 `limit` / `market`；条件单、改单不支持
-- **撤单范围**：`cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
-- **双向持仓**：hedge mode 下 `createOrder()` 必须显式传 `positionSide`
-- **精度纠偏**：SDK 不自动按 `priceStep` / `amountStep` / `minNotional` 调整下单输入
-- **Client options**：`sandbox` / `logger` / `logLevel` 是预留位，当前不生效
+- market/order runtime 当前只支持 `binance`
+- account runtime 支持 `binance` 和只读 `juplend`
+- `okx` / `bybit` / `gate` 只在 `Venue` 类型中声明
+- Funding Rate 仅支持 Binance 永续合约
+- Binance order 命令固定走 PAPI UM，venue 级 `order.supported = true` 不代表 spot、COIN-M 或交割合约都能下单
+- `cancelAllOrders()` 必须带 `symbol`，不支持账户级全撤
+- `createOrder()` 不支持条件单、改单
+- SDK 不自动纠偏订单精度；下游应使用 `normalizeOrderInput()`
+- Juplend 只读，不支持链上写操作和 `OrderManager`
+- `sandbox`、`logger`、`logLevel` 为预留位

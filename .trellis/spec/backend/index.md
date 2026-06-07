@@ -13,7 +13,7 @@ Layer 4  公开 API          src/index.ts, src/errors.ts
 Layer 3  编排层            src/client/{runtime, create-client, context, private-subscription-coordinator, venue-capabilities}.ts
 Layer 2  领域层            src/managers/{market, account, order}-manager.ts
 Layer 1  适配层            src/adapters/{types, binance/*, juplend/*}
-Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket, filters}.ts
+Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, http-client, managed-websocket, rate-limiter, subscription-multiplexer}.ts
          类型定义          src/types/*（跨层共享）
 ```
 
@@ -21,7 +21,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 - **Manager 持有领域状态**（record Map、事件总线、工厂方法），不是空壳 facade。
 - **Manager 通过 `ClientContext` 接口**访问 runtime 服务，不依赖具体类。
 - **交易所适配器封装交易所细节**，对外只暴露标准 `MarketAdapter` 接口。
-- **Runtime 是薄编排器**（~280 行），只做生命周期、账户注册、健康聚合。
+- **Runtime 是编排器**，只做生命周期、账户注册、adapter registry、capability 聚合、健康聚合与 manager/coordinator 分派；领域状态仍归 manager。
 
 ---
 
@@ -30,7 +30,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Code Organization](./code-organization.md) | 5 层架构、目录结构、接口契约、各层职责边界 | Active |
-| [Adapter Contract](./adapter-contract.md) | MarketAdapter / PrivateUserDataAdapter 接口契约、StreamHandle 语义、回调与错误传播规则、共享 HTTP 传输客户端（REST 骨架 / per-call 幂等 / typed TransportError / 错误脱敏）、签名时间 vs freshness 时间分离（可注入 TimeProvider）、可插拔限流器 seam（RateLimiter，reactive 默认） | Active |
+| [Adapter Contract](./adapter-contract.md) | MarketAdapter / PrivateUserDataAdapter 接口契约、新 venue 接入顺序、StreamHandle 语义、回调与错误传播规则、共享 HTTP 传输客户端（REST 骨架 / per-call 幂等 / typed TransportError / 错误脱敏）、签名时间 vs freshness 时间分离（可注入 TimeProvider）、可插拔限流器 seam（RateLimiter，reactive 默认） | Active |
 | [Database Guidelines](./database-guidelines.md) | 占位文档：当前仓库无数据库 / ORM / migration 层，防止 workflow 指向空路径 | Placeholder |
 | [Error Handling](./error-handling.md) | Public `AcexError` contract、`cause` / `details.venueError` / `details.transport` 语义、adapter `TransportError` 到 manager/runtime public error 的包装规则、脱敏验收 | Active |
 | [Logging Guidelines](./logging-guidelines.md) | 占位文档：当前仓库无正式 logger 集成，`logger` / `logLevel` 仍为预留位 | Placeholder |
@@ -46,11 +46,12 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 
 - `src/index.ts` 直接从实际位置导出，**无中间 re-export 文件**。
 - `src/types/*` 只放 public contract，不放实现。
-- `src/internal/*` 只放领域无关原语，不能依赖上层。
+- `src/internal/*` 只放领域无关原语，当前包括事件总线、decimal canonical 化、filter、HTTP 传输、WebSocket 生命周期、reactive rate limiter、订阅多路复用；不能依赖上层。
 - `src/adapters/*` 封装交易所特定实现，交易所特定类型不泄漏到外部。
 - `src/managers/*` 各自持有领域状态，实现 `ManagerLifecycle` + `HealthReporter<T>` 接口。
 - `src/client/runtime.ts` 只做编排，实现 `AcexClient` + `ClientContext` 接口。
 - `src/client/context.ts` 定义内部契约接口（`ClientContext`、`ManagerLifecycle`、`AccountAwareManager`、`HealthReporter<T>`）。
+- `docs/` 下的文档只面向 SDK 使用方；adapter 接入流程、runtime 分层、基础设施 contract 和路线图式开发规则沉淀到 `.trellis/spec/backend/`。
 - 项目级默认检查命令统一使用 `bun run lint`、`bun run type-check`、`bun run test`；`bun run test` 只包含 `tests/unit/` + `tests/integration/`，不包含 soak/live。
 - 测试结构固定为 `tests/unit/`、`tests/integration/`、`tests/soak/`、`tests/support/`；交易所专用 fixture 放在 `tests/support/exchanges/<exchange>.ts`。
 

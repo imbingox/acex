@@ -48,36 +48,38 @@ interface BalanceSnapshot {
   accountId: string;
   venue: Venue;
   asset: string;
-  free: BigNumber;
-  used: BigNumber;
-  total: BigNumber;
+  free: string;
+  used: string;
+  total: string;
   lending?: LendingBalanceFacet;
 }
 
 interface LendingBalanceFacet {
-  supplied: BigNumber;
-  borrowed: BigNumber;
-  interest: BigNumber;
-  netAsset: BigNumber;
-  supplyAPY?: BigNumber;
-  borrowAPY?: BigNumber;
+  supplied: string;
+  borrowed: string;
+  interest: string;
+  netAsset: string;
+  supplyAPY?: string;
+  borrowAPY?: string;
 }
 
 interface RiskSnapshot {
   accountId: string;
   venue: Venue;
-  netEquity?: BigNumber;
-  riskEquity?: BigNumber;
-  riskRatio?: BigNumber;
+  netEquity?: string;
+  riskEquity?: string;
+  riskRatio?: string;
+  riskLeverage?: string;
   lending?: LendingRiskFacet;
 }
 
 interface LendingRiskFacet {
-  healthFactor?: BigNumber;
-  ltv?: BigNumber;
-  liquidationThreshold?: BigNumber;
-  totalCollateralUSD?: BigNumber;
-  totalDebtUSD?: BigNumber;
+  marginLevel?: string;
+  healthFactor?: string;
+  ltv?: string;
+  liquidationThreshold?: string;
+  totalCollateralUSD?: string;
+  totalDebtUSD?: string;
 }
 ```
 
@@ -92,6 +94,7 @@ interface LendingRiskFacet {
 - RPC config: `AccountRuntimeOptions.juplend.rpcUrl` 可选；未显式配置时默认读取环境变量 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。
 - Jup API config: `AccountRuntimeOptions.juplend.jupApiKey` 可选；未显式配置时默认读取环境变量 `JUP_API`，用于请求 Jup 官方 `Tokens V2 + Price V3`。
 - Balance aggregation: 多个 matching positions 按 `asset` 聚合成 `AccountSnapshot.balances: Record<asset, BalanceSnapshot>`。
+- Public decimal contract: 所有公开数量 / 金额 / 比率字段都必须是 canonical decimal string；adapter 和 manager 内部可用 BigNumber 计算，但不得把 BigNumber 对象暴露到 `BalanceSnapshot`、`RiskSnapshot` 或 lending facets。
 - Quantity mapping: `lend-read` 返回的是 exchange-price-adjusted amount，不是 mint atomic amount。当前 ACEX 按固定 `1e9` scale 还原用户可见数量：`supplied = supply / 1e9`；`borrowed = borrow / 1e9`。`dustBorrow` 作为单独字段保留在 SDK 原始语义里，不重复并入公开 debt 数量。
 - Risk aggregation: `netEquity = totalCollateralUsd - totalDebtUsd`；`riskEquity = Σ(collateralUsd × liquidationThreshold) - totalDebtUsd`；`riskRatio = totalDebtUsd / Σ(collateralUsd × liquidationThreshold)`，分母为 0 时返回 `undefined`。
 - Threshold normalization: `liquidationThreshold = 850` 解释为 `0.85`；小于等于 1 的值按小数原样使用。

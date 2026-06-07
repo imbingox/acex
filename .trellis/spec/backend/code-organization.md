@@ -26,9 +26,12 @@ src/
 │
 ├── internal/                             # Layer 0: 基础设施
 │   ├── async-event-bus.ts
+│   ├── decimal.ts                        # canonical decimal string 转换
+│   ├── filters.ts
+│   ├── http-client.ts                    # REST timeout / retry / TransportError / redaction
 │   ├── managed-websocket.ts
-│   ├── subscription-multiplexer.ts       # 通用订阅多路复用原语（venue-agnostic）
-│   └── filters.ts
+│   ├── rate-limiter.ts                   # 默认 reactive RateLimiter
+│   └── subscription-multiplexer.ts       # 通用订阅多路复用原语（venue-agnostic）
 │
 ├── adapters/                             # Layer 1: 交易所适配器
 │   ├── types.ts                          # MarketAdapter / PrivateUserDataAdapter 接口契约
@@ -50,7 +53,7 @@ src/
     ├── context.ts                        # ClientContext 接口 + 生命周期接口
     ├── private-subscription-coordinator.ts
     ├── venue-capabilities.ts             # capability 聚合 helper
-    └── runtime.ts                        # AcexClientImpl（薄编排器）
+    └── runtime.ts                        # AcexClientImpl（编排器）
 ```
 
 层级依赖方向：
@@ -60,7 +63,7 @@ Layer 4  公开 API          src/index.ts, src/errors.ts
 Layer 3  编排层            src/client/{runtime, create-client, context, private-subscription-coordinator, venue-capabilities}.ts
 Layer 2  领域层            src/managers/{market, account, order}-manager.ts
 Layer 1  适配层            src/adapters/{types, binance/*, juplend/*}
-Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket, subscription-multiplexer, filters}.ts
+Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, http-client, managed-websocket, rate-limiter, subscription-multiplexer}.ts
          类型定义          src/types/*（跨层共享）
 ```
 
@@ -70,8 +73,16 @@ Layer 0  基础设施          src/internal/{async-event-bus, managed-websocket,
 
 ```ts
 // src/index.ts — 直接从实际位置导出，无中间层
+export { BigNumber } from "bignumber.js";
 export { createClient } from "./client/create-client.ts";
-export type { AcexErrorCode } from "./errors.ts";
+export type {
+  AcexErrorCode,
+  AcexErrorDetails,
+  AcexErrorOptions,
+  AcexErrorTransportDetails,
+  AcexErrorTransportKind,
+  AcexVenueErrorDetails,
+} from "./errors.ts";
 export { AcexError } from "./errors.ts";
 export * from "./types/index.ts";
 ```
@@ -94,7 +105,7 @@ export * from "./types/index.ts";
 #### 3.3 `src/internal/*` 只放领域无关原语
 
 - 可被多个领域复用，且不携带 market/account/order 语义的能力。
-- 当前包括：`async-event-bus.ts`（异步事件总线）、`managed-websocket.ts`（WebSocket 生命周期管理）、`subscription-multiplexer.ts`（venue-agnostic 订阅多路复用：连接池化 + 重连重放 + per-subscription ready/stale + 控制帧限速，靠注入的 `VenueStreamProtocol` 策略隔离交易所细节）、`filters.ts`（事件过滤器匹配函数）。
+- 当前包括：`async-event-bus.ts`（异步事件总线）、`decimal.ts`（canonical decimal string 转换）、`filters.ts`（事件过滤器匹配函数）、`http-client.ts`（REST timeout / retry / typed `TransportError` / redaction）、`managed-websocket.ts`（WebSocket 生命周期管理）、`rate-limiter.ts`（默认 reactive limiter）、`subscription-multiplexer.ts`（venue-agnostic 订阅多路复用：连接池化 + 重连重放 + per-subscription ready/stale + 控制帧限速，靠注入的 `VenueStreamProtocol` 策略隔离交易所细节）。
 - **不能依赖上层任何模块**（只能依赖 `src/types/*`）。
 
 #### 3.4 `src/adapters/*` 封装交易所特定实现
@@ -119,16 +130,18 @@ export * from "./types/index.ts";
   - `AccountAwareManager`（仅 account/order）：`onAccountRemoved()` / `onCredentialsUpdated()`
 - Record 类型（如 `MarketRecord`）内联定义在各自 manager 文件中，不共享。
 
-#### 3.6 `src/client/*` 是薄编排层
+#### 3.6 `src/client/*` 是编排层
 
 - `create-client.ts`：工厂函数，只创建 `AcexClientImpl`。
 - `context.ts`：定义 `ClientContext` 接口、`ManagerLifecycle`、`AccountAwareManager`、`HealthReporter<T>`，以及 `RegisteredAccountRecord` 和凭证工具函数。
-- `runtime.ts`：`AcexClientImpl` 实现 `AcexClient` + `ClientContext`，只做：
+- `runtime.ts`：`AcexClientImpl` 实现 `AcexClient` + `ClientContext`，只做跨领域编排，不持有 market/account/order 领域快照：
   - Client 状态管理（idle → running → stopped）
-  - 账户注册表
+  - 账户注册表与 adapter registry（`marketAdapters` / `privateAdapters`）
+  - Venue capability 聚合与 clone 返回
   - 跨域事件总线（healthBus、errorBus）
   - 生命周期协调（调用 manager 的 lifecycle 方法）
   - Health 聚合（调用 manager 的 `getStatuses()`）
+  - manager / private coordinator 分派（private 订阅、order command、credentials/account remove）
 - `private-subscription-coordinator.ts`：每账户一条 private user stream 的编排器，只做：
   - 复用 account / order 共用的 private stream
   - 协调 adapter bootstrap、reconnect、credentials refresh、account remove
@@ -219,7 +232,7 @@ bun run lint
 #### Wrong — God Class
 
 ```ts
-// src/client/runtime.ts (1050+ 行)
+// 旧的 God Class 形态
 export class AcexClientImpl {
   // 持有所有状态：market/account/order records + 8 条事件总线
   // 所有工厂方法、所有 publish 方法、所有 WS 流管理
@@ -271,7 +284,7 @@ export class MarketManagerImpl
 ```
 
 ```ts
-// src/client/runtime.ts (~450 行，薄编排器)
+// src/client/runtime.ts（当前编排器形态）
 export class AcexClientImpl implements AcexClient, ClientContext {
   constructor(options: CreateClientOptions = {}) {
     const marketAdapter = new BinanceMarketAdapter();

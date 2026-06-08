@@ -892,3 +892,36 @@ PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
 ### Next Steps
 
 - None - task complete
+
+
+## Session 25: Binance TradFi public market data
+
+**Date**: 2026-06-08
+**Task**: Binance TradFi public market data
+**Branch**: `feat/binance-tradfi-public-market`
+
+### Summary
+
+修复 Binance TRADIFI_PERPETUAL 合约分类，补充 AAPL/USDT public market-data fixture 与 L1/funding 订阅测试，更新 SDK 文档、API 文档和 adapter contract spec，并完成子代理 review 与验证。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `153e2d8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

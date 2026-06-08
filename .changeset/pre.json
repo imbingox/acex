@@ -6,6 +6,7 @@
   },
   "changesets": [
     "acex-error-details",
+    "binance-tradfi-public-market",
     "market-catalog-reload",
     "market-ws-connection-multiplexing",
     "public-decimal-string-contract",

@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.4.0-beta.9
+
+### Patch Changes
+
+- 153e2d8: Binance public market catalog now treats `TRADIFI_PERPETUAL` USDⓈ-M symbols as perpetual swaps, so TradFi Perps such as `AAPLUSDT` normalize to `AAPL/USDT:USDT` and support the existing L1 book and funding-rate public WebSocket subscriptions.
+
 ## 0.4.0-beta.8
 
 ### Minor Changes

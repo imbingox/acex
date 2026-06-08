@@ -24,7 +24,7 @@
 
 | Venue | Market | Account | Order |
 |---|---|---|---|
-| `binance` | Spot / USDⓈ-M / COIN-M catalog；L1 Book；永续 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
+| `binance` | Spot / USDⓈ-M / COIN-M catalog（含 TradFi Perps）；L1 Book；永续 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
 | `juplend` | 不支持 | Jupiter Lend 只读账户 polling | 不支持，read-only |
 | `okx` / `bybit` / `gate` | 类型占位 | 类型占位 | 类型占位 |
 
@@ -338,6 +338,8 @@ const market = client.market.getMarket("binance", "BTC/USDT:USDT");
 
 `MarketDefinition` 里的 `priceStep`、`amountStep`、`contractSize`、`minAmount`、`minNotional` 都是 decimal string。
 
+Binance TradFi Perps 会按 USDⓈ-M 永续合约暴露，例如 `AAPLUSDT` 归一为 `AAPL/USDT:USDT`，可使用同一套 L1 Book 与 Funding Rate 订阅接口。
+
 ### 5.2 订单输入归一
 
 ```ts
@@ -366,7 +368,7 @@ console.log(time.serverTime, time.roundTripMs, time.estimatedOffsetMs);
 
 ### 5.4 Funding rate
 
-Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
+Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`，包括 Binance TradFi Perps）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 
 ## 6. AccountManager
 
@@ -940,7 +942,7 @@ try {
 - market/order runtime 当前只支持 `binance`
 - account runtime 支持 `binance` 和只读 `juplend`
 - `okx` / `bybit` / `gate` 只在 `Venue` 类型中声明
-- Funding Rate 仅支持 Binance 永续合约
+- Funding Rate 仅支持 Binance 永续合约，包括 Binance TradFi Perps
 - Binance order 命令固定走 PAPI UM，venue 级 `order.supported = true` 不代表 spot、COIN-M 或交割合约都能下单
 - `cancelAllOrders()` 必须带 `symbol`，不支持账户级全撤
 - `createOrder()` 不支持条件单、改单

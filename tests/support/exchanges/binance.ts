@@ -66,6 +66,34 @@ const binanceFixtures = {
   usdm: {
     symbols: [
       {
+        symbol: "AAPLUSDT",
+        status: "TRADING",
+        contractType: "TRADIFI_PERPETUAL",
+        deliveryDate: Date.UTC(2100, 11, 25),
+        baseAsset: "AAPL",
+        quoteAsset: "USDT",
+        marginAsset: "USDT",
+        pricePrecision: 5,
+        quantityPrecision: 2,
+        underlyingType: "EQUITY",
+        underlyingSubType: ["TradFi"],
+        filters: [
+          {
+            filterType: "PRICE_FILTER",
+            tickSize: "0.01000",
+          },
+          {
+            filterType: "LOT_SIZE",
+            minQty: "0.01",
+            stepSize: "0.01",
+          },
+          {
+            filterType: "MIN_NOTIONAL",
+            notional: "5",
+          },
+        ],
+      },
+      {
         symbol: "BTCUSDT",
         status: "TRADING",
         contractType: "PERPETUAL",

@@ -112,7 +112,9 @@ function inferContractType(
   contractType: string | undefined,
   deliveryDate: number | undefined,
 ): MarketType {
-  if (contractType === "PERPETUAL") {
+  // Binance TradFi perpetuals expose a far-future deliveryDate, so the
+  // contractType is authoritative for perpetual classification.
+  if (contractType === "PERPETUAL" || contractType === "TRADIFI_PERPETUAL") {
     return "swap";
   }
 

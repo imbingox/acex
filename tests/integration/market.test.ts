@@ -56,6 +56,7 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
   await client.market.loadMarkets();
 
   expect(client.market.listMarkets().map((market) => market.symbol)).toEqual([
+    "AAPL/USDT:USDT",
     "BTC/USD:BTC",
     "BTC/USD:BTC-20250627",
     "BTC/USDT",
@@ -88,6 +89,30 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
     minNotional: new BigNumber("5").toFixed(),
   });
   expect(client.market.getMarkets("BTC/USDT:USDT")).toEqual([btcUsdtSwap]);
+
+  const aaplUsdtSwap = client.market.getMarket("binance", "AAPL/USDT:USDT");
+  expect(aaplUsdtSwap).toBeDefined();
+  if (!aaplUsdtSwap) {
+    throw new Error("Expected AAPL/USDT:USDT market");
+  }
+
+  expect(aaplUsdtSwap).toMatchObject({
+    symbol: "AAPL/USDT:USDT",
+    id: "AAPLUSDT",
+    type: "swap",
+    settle: "USDT",
+    linear: true,
+    contract: true,
+    active: true,
+    priceStep: new BigNumber("0.01000").toFixed(),
+    amountStep: new BigNumber("0.01").toFixed(),
+    minNotional: new BigNumber("5").toFixed(),
+    raw: {
+      contractType: "TRADIFI_PERPETUAL",
+      underlyingType: "EQUITY",
+    },
+  });
+  expect(aaplUsdtSwap.expiry).toBeUndefined();
 
   expect(client.market.getMarket("binance", "BTC/USD:BTC")).toMatchObject({
     type: "swap",
@@ -504,6 +529,121 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
   });
 
   await iterator.return?.();
+});
+
+test("binance tradfi perpetual supports l1 book and funding subscriptions", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1StaleAfterMs: 50,
+    },
+  });
+  const l1Iterator = client.market.events
+    .l1BookUpdates({
+      venue: "binance",
+      symbol: "AAPL/USDT:USDT",
+    })
+    [Symbol.asyncIterator]();
+  const fundingIterator = client.market.events
+    .fundingRateUpdates({
+      venue: "binance",
+      symbol: "AAPL/USDT:USDT",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const l1SubscribePromise = client.market.subscribeL1Book({
+    venue: "binance",
+    symbol: "AAPL/USDT:USDT",
+  });
+  const l1Socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(l1Socket, "SUBSCRIBE", [
+    "aaplusdt@bookTicker",
+  ]);
+  l1Socket.emitJson({
+    e: "bookTicker",
+    s: "AAPLUSDT",
+    b: "308.32000",
+    B: "0.33",
+    a: "308.33000",
+    A: "8.54",
+    T: 1710000000100,
+  });
+
+  await l1SubscribePromise;
+
+  const fundingSubscribePromise = client.market.subscribeFundingRate({
+    venue: "binance",
+    symbol: "AAPL/USDT:USDT",
+  });
+  const fundingSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(fundingSocket, "SUBSCRIBE", [
+    "aaplusdt@markPrice",
+  ]);
+  fundingSocket.emitJson({
+    e: "markPriceUpdate",
+    E: 1710000000200,
+    s: "AAPLUSDT",
+    p: "308.32554074",
+    i: "308.38886179",
+    r: "0.00000000",
+    T: 1710028800000,
+  });
+
+  await fundingSubscribePromise;
+
+  const book = client.market.getL1Book({
+    venue: "binance",
+    symbol: "AAPL/USDT:USDT",
+  });
+  const fundingRate = client.market.getFundingRate({
+    venue: "binance",
+    symbol: "AAPL/USDT:USDT",
+  });
+
+  expect(book).toMatchObject({
+    symbol: "AAPL/USDT:USDT",
+    bidPrice: new BigNumber("308.32000").toFixed(),
+    bidSize: new BigNumber("0.33").toFixed(),
+    askPrice: new BigNumber("308.33000").toFixed(),
+    askSize: new BigNumber("8.54").toFixed(),
+    exchangeTs: 1710000000100,
+    version: 1,
+  });
+  expect(fundingRate).toMatchObject({
+    symbol: "AAPL/USDT:USDT",
+    fundingRate: new BigNumber("0.00000000").toFixed(),
+    markPrice: new BigNumber("308.32554074").toFixed(),
+    indexPrice: new BigNumber("308.38886179").toFixed(),
+    nextFundingTime: 1710028800000,
+    exchangeTs: 1710000000200,
+    version: 1,
+  });
+
+  const l1Event = await nextEvent(l1Iterator);
+  const fundingEvent = await nextEvent(fundingIterator);
+  expect(l1Event).toMatchObject({
+    type: "l1_book.updated",
+    symbol: "AAPL/USDT:USDT",
+  });
+  expect(fundingEvent).toMatchObject({
+    type: "funding_rate.updated",
+    symbol: "AAPL/USDT:USDT",
+  });
+
+  await client.market.unsubscribeL1Book({
+    venue: "binance",
+    symbol: "AAPL/USDT:USDT",
+  });
+  await client.market.unsubscribeFundingRate({
+    venue: "binance",
+    symbol: "AAPL/USDT:USDT",
+  });
+  await l1Iterator.return?.();
+  await fundingIterator.return?.();
 });
 
 test("binance l1 multiplexes multiple symbols onto one websocket", async () => {

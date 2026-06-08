@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
-- **Last Active**: 2026-06-05
+- **Total Sessions**: 25
+- **Last Active**: 2026-06-08
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~894 | Active |
+| `journal-1.md` | ~927 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-06-08 | Binance TradFi public market data | `153e2d8` | `feat/binance-tradfi-public-market` |
 | 24 | 2026-06-05 | AcexError 根因透传 | `d874b29` | `feat/acex-error-details` |
 | 23 | 2026-06-03 | venue server time 接口 (client.market.fetchServerTime) | `dac87aa`, `89b38ac` | `feat/venue-server-time` |
 | 22 | 2026-06-02 | market catalog reload: reloadMarkets 主动刷新目录 | `65fbdb2`, `f65bab7` | `feat/market-catalog-reload` |

@@ -2,7 +2,7 @@
 
 `acex` 是一个面向交易场景的 **状态型** 多交易所 SDK。调用方持有一个 `AcexClient`，通过统一的 `market` / `account` / `order` manager 读取最新快照、消费增量事件、执行下单撤单命令；SDK 内部负责本地缓存、ready barrier、websocket 生命周期和自动重连，调用方不需要自己处理。
 
-当前 MVP 落地 Binance（Spot + USDⓈ-M + COIN-M 行情，PAPI UM 私有链路）以及 Juplend（Jupiter Lend 只读借贷账户视图）。
+当前 MVP 落地 Binance（Spot + USDⓈ-M + COIN-M 行情，含 Binance TradFi Perps public market data；PAPI UM 私有链路）以及 Juplend（Jupiter Lend 只读借贷账户视图）。
 
 ## 安装
 
@@ -160,7 +160,7 @@ const capabilities = client.listVenueCapabilities();
 - 运行时 market/order 能力只支持 `binance`；`okx` / `bybit` / `gate` 仅类型定义
 - 账户视图支持 Binance PAPI UM 与 Juplend 只读借贷账户
 - Juplend 只读，不支持订单和链上写操作；仓位数量来自 `@jup-ag/lend-read` 原生 position 数据
-- Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；不支持现货和交割合约
+- Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；支持 Binance TradFi Perps，不支持现货和交割合约
 - `createOrder()` 只支持 `limit` / `market`；条件单、改单、账户级全撤不支持
 - 双向持仓账户下单时必须显式传 `positionSide`
 - `CreateClientOptions` 中 `sandbox` / `logger` / `logLevel` 是预留位

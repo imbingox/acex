@@ -348,6 +348,16 @@ class StubNoRefreshBinanceAdapter extends StubBinanceAdapter {
   }
 }
 
+class StubBootstrapReconcileBinanceAdapter extends StubBinanceAdapter {
+  constructor(trace?: string[]) {
+    super(trace);
+    Object.defineProperty(this, "reconcileAccount", {
+      value: undefined,
+      configurable: true,
+    });
+  }
+}
+
 class StubPollingBinanceAdapter extends StubNoRefreshBinanceAdapter {
   override readonly accountCapabilities: VenueAccountCapabilities = {
     register: "supported",
@@ -619,6 +629,29 @@ test("private reconcile polling runs by default and can be disabled independentl
   expect(disabledAdapter.refreshCalls).toBeGreaterThan(0);
   expect(disabledAdapter.reconcileCalls).toBe(0);
   expect(disabledAdapter.fetchOpenOrdersCalls).toBe(1);
+});
+
+test("private reconcile polling uses bootstrapAccount fallback when reconcileAccount is absent", async () => {
+  const context = new StubContext();
+  const adapter = new StubBootstrapReconcileBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(adapter.bootstrapCalls).toBeGreaterThan(1);
 });
 
 test("private reconcile polling stops after unsubscribe cleanup", async () => {

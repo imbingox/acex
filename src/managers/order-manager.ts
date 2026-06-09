@@ -115,17 +115,20 @@ function successfulStatus(
     (status.runtimeStatus === "reconnecting" ||
       status.reason === "ws_disconnected" ||
       status.reason === "heartbeat_timeout");
+  const ready = options.ready ?? true;
 
   return {
     ...status,
     activity: "active",
-    ready: options.ready ?? true,
+    ready,
     runtimeStatus: preservesStreamState ? status.runtimeStatus : "healthy",
     reason: preservesStreamState ? status.reason : undefined,
     lastReceivedAt: options.lastReceivedAt ?? status.lastReceivedAt,
-    lastReadyAt: options.preserveStatus
-      ? (status.lastReadyAt ?? options.lastReadyAt)
-      : (options.lastReadyAt ?? status.lastReadyAt),
+    lastReadyAt: ready
+      ? (options.lastReadyAt ??
+        (options.preserveStatus ? status.lastReadyAt : undefined) ??
+        Date.now())
+      : status.lastReadyAt,
     inactiveSince: undefined,
   };
 }
@@ -316,6 +319,22 @@ export class OrderManagerImpl
     }
 
     for (const snapshot of record.snapshots.values()) {
+      if (input.orderId && input.clientOrderId) {
+        if (
+          shouldMatchOrderIdentity(snapshot, {
+            symbol: input.symbol,
+            orderId: input.orderId,
+          }) &&
+          shouldMatchOrderIdentity(snapshot, {
+            symbol: input.symbol,
+            clientOrderId: input.clientOrderId,
+          })
+        ) {
+          return snapshot;
+        }
+        continue;
+      }
+
       if (
         input.orderId &&
         shouldMatchOrderIdentity(snapshot, {

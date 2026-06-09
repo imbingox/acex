@@ -1,4 +1,5 @@
 import type {
+  FetchOrderRequest,
   PrivateUserDataAdapter,
   RawOpenOrdersSnapshot,
   StreamHandle,
@@ -575,7 +576,8 @@ export class PrivateSubscriptionCoordinator {
     const adapter = this.getAdapter(record.venue);
     return (
       (record.accountSubscribed &&
-        typeof adapter.reconcileAccount === "function") ||
+        (typeof adapter.reconcileAccount === "function" ||
+          typeof adapter.bootstrapAccount === "function")) ||
       (record.ordersSubscribed && typeof adapter.fetchOpenOrders === "function")
     );
   }
@@ -1018,13 +1020,25 @@ export class PrivateSubscriptionCoordinator {
 
     const requestStartedAt = this.context.now();
     try {
-      const update = await adapter.fetchOrder(
-        account.credentials ?? {},
-        {
+      let request: FetchOrderRequest;
+      if (order.orderId) {
+        request = {
           symbol: order.symbol,
           orderId: order.orderId,
           clientOrderId: order.clientOrderId,
-        },
+        };
+      } else if (order.clientOrderId) {
+        request = {
+          symbol: order.symbol,
+          clientOrderId: order.clientOrderId,
+        };
+      } else {
+        return;
+      }
+
+      const update = await adapter.fetchOrder(
+        account.credentials ?? {},
+        request,
         { ...account.options, accountId: account.accountId },
       );
       if (

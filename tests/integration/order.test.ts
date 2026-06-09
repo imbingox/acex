@@ -33,15 +33,30 @@ async function nextMatchingEvent<T>(
   timeoutMs: number,
   message: string,
 ): Promise<T> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const event = await nextEvent(iterator, timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(message);
+    }
+
+    let event: T;
+    try {
+      event = await nextEvent(iterator, remainingMs);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "Timed out waiting for event"
+      ) {
+        throw new Error(message);
+      }
+      throw error;
+    }
+
     if (check(event)) {
       return event;
     }
   }
-
-  throw new Error(message);
 }
 
 test("order subscribe bootstraps open orders, applies websocket updates, and reuses the account private socket", async () => {
@@ -1209,6 +1224,14 @@ test("order cache keeps same-symbol orders with different order ids when clientO
     side: "sell",
     price: new BigNumber("100700.00").toFixed(),
   });
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "9999",
+      clientOrderId: "duplicate-client-id",
+    }),
+  ).toBeUndefined();
 });
 
 test("cancelOrder validates that at least one order identifier is provided", async () => {

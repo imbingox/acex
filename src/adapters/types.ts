@@ -182,11 +182,9 @@ export interface RawOpenOrdersSnapshot {
   snapshotExchangeTs?: number;
 }
 
-export interface FetchOrderRequest {
-  symbol: string;
-  orderId?: string;
-  clientOrderId?: string;
-}
+export type FetchOrderRequest =
+  | { symbol: string; orderId: string; clientOrderId?: string }
+  | { symbol: string; clientOrderId: string; orderId?: string };
 
 export interface CreateOrderRequest {
   symbol: string;

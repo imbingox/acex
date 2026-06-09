@@ -296,3 +296,69 @@ for (const order of disappeared) {
 - `getOpenOrders()` 收敛到交易所当前 open set。
 - `getOrder()` 仍保留可证明的最终订单状态。
 - 无法证明终态时不伪造生命周期事件。
+
+---
+
+## Scenario: OrderManager 本地订单存储分层、复合身份与 closed 裁剪
+
+### 1. Scope / Trigger
+
+- Trigger: 修改 `OrderManagerImpl` 内部存储结构、订单身份 / 索引、closed 容量裁剪、`getOrder()` / `getOpenOrders()` 查询路径时。
+- 目标: 终态订单不无界累积导致内存膨胀；查询不随历史订单数量退化；复合身份正确处理 `orderId` / `clientOrderId` 两条线。
+
+### 2. 存储结构与复合身份
+
+- 每个账户的 `OrderRecord` 内部分 **open / closed 两表**，各按 symbol 嵌套：`Map<symbol, Map<orderKey, OrderSnapshot>>`。`orderKey` = `order:{orderId}` 优先，否则 `client:{clientOrderId}`。
+- 主身份 = **`(symbol, orderId)`**；closed 表强制 `orderId` 主键。原因：Binance `orderId` 仅 **per-symbol** 唯一（非全局），而 `clientOrderId` 只是 "unique among open orders"、终态后可被复用，ADL 单还共享 `adl_autoclose` 字面量——`clientOrderId` 不能作为终态订单的稳定主键。
+- 每个 `OrderRecord` 内维护**三索引**，覆盖 open + closed，经 `insertSnapshot` / `deleteSnapshot` / `moveSnapshot` 三个 helper **严格同步**（任何增删改只走 helper，禁止散落维护）：
+  - `(symbol, orderId)` 精确索引；
+  - `orderId → Set<location>` 歧义索引（支持不带 symbol 查询；跨 symbol 同 `orderId` 多命中时 open 优先、同类按 `updatedAt` 最新）；
+  - `clientOrderId → Set<location>` 索引（一对多，应对同 symbol 同 cid、不同 orderId 的多笔并存）。
+- `OrderSnapshot` 保持**不可变替换**：`createSnapshot` 每次返回新对象，绝不原地 mutate；对外返回的引用因此是某一时刻的冻结视图。
+
+### 3. closed 裁剪与内存有界
+
+- closed 订单按 **symbol 子表各留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`，默认 **500**；非正、非整数、`undefined` 一律归一为默认。
+- 超限按**插入顺序 FIFO 删最旧**，**批量摊销**：一次删 `max(1, floor(N/10))`，循环到 `size <= N`，以降低高频写入下的删除频率。
+- 裁剪删除**必须走 `deleteSnapshot`**（同步三索引、清理空 symbol 子表），禁止只删主表 —— 否则索引悬挂、`getOrder()` 仍能查到已被裁剪的快照。
+- **open 表永不因容量裁剪**：open 是实时状态，裁剪会破坏 reconcile 对账与 `getOpenOrders()` 正确性。
+- 内存有界靠三条：子表 FIFO 上限 + 清理空 symbol 子表 + 索引随主存储同步删除；并**依赖 venue symbol 集合有限**这一前提（故用 per-symbol 上限，不设全局 cap）。
+
+### 4. 查询语义
+
+- `getOpenOrders(accountId, symbol?)`：只返回 open 表内容，复杂度与历史终态订单数量无关。
+- `getOrder(input)`：必须带 `orderId` 或 `clientOrderId`，否则返回 `undefined`。
+  - 带 `symbol` + `orderId`：走精确索引 O(1)。
+  - 不带 `symbol`、给 `orderId`：经 `orderId` 歧义索引命中（可命中 closed）。
+  - 仅 `clientOrderId`：经 cid 索引命中，**覆盖 open + closed**；多命中返回**最新一笔**（**open 候选绝对优先**，同为 open / closed 时按 `updatedAt` 最新，`updatedAt` 相等时取任一；不用 `seq`——它是单订单版本号、跨订单不可比）。要精确定位历史某一笔须用 `orderId`。
+  - 同时给 `orderId` 与 `clientOrderId`：**conjunctive**，两者都匹配才命中。
+
+### 5. 终态、事件与迟到更新
+
+- **无 `orderId` 的终态 order update**：若有 `clientOrderId`，用 `client:{cid}` 作 **provisional** closed key 暂存（拿到 `orderId` 后迁移到正式 `order:{orderId}` key）；若 `orderId` 与 `clientOrderId` 都缺，**丢弃并经 `context.publishRuntimeError("order", ...)` 发 warning**。对应 adapter 侧契约见 `adapter-contract.md`「终态更新应带 orderId」。
+- `order.snapshot_replaced` 必须发布**全量**（open + 保留的 closed），分表后不得只发 open，否则下游会丢失终态订单视图。
+- **裁剪后迟到更新**：closed 单被裁剪后，同一旧终态事件若迟到，因其 `previous` 已被删，可能被当作新订单重新插入并重复发事件。这是**已接受的取舍**（不设 tombstone），`maxClosedOrdersPerSymbol` 应配置得足够覆盖正常的迟到 / reconcile 窗口。
+
+### 6. 演进:submitting 三表与本地 cid 身份
+
+- 当前 REST 下单**同步返回 `orderId`**，没有"提交中"可观测窗口，故只设 open / closed 两表、复合身份以 `orderId` 为主键。
+- 后续若落地 **WS / 异步下单**（下单请求在途、ack 与 `orderId` 后到）：应扩展为 `submitting + open + closed` 三表并扩 `OrderStatus`；身份模型可演进为**本地生成 `clientOrderId` 主键 + `venueOrderId → localClientOrderId` 反向索引**（NautilusTrader 式），契合 acex 发起型 OMS 定位。现有分表 + helper 结构已为此预留扩展点。
+
+### 7. Tests Required
+
+```bash
+bun run lint
+bun run type-check
+bun run test
+```
+
+断言重点（`tests/integration/order.test.ts`）：
+
+- 单 symbol closed 超 N 后 FIFO 批量裁剪，子表稳定 `<= N`，最旧被删。
+- 被裁订单经 `orderId` 与 `clientOrderId` 都查不到（索引无悬挂）。
+- open 订单数超过 N 时不被裁剪。
+- 跨 symbol 各自独立裁剪；非法 N（`0` / 负 / 非整）回退默认、小 N 时批量至少删 1。
+- 跨 symbol 同 `orderId`、同 symbol 同 `clientOrderId` 多笔并存可被正确区分。
+- cid-only open 单收到 `orderId` 后迁移 key、不留旧 key / 索引；open→closed 迁移正确。
+- 无 key 终态单被丢弃并发 warning。
+- reconcile / backfill 写入终态触发裁剪后，`getOpenOrders()` 不回退、`order.snapshot_replaced` 仍为全量。

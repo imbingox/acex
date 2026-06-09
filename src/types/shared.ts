@@ -104,6 +104,10 @@ export interface AccountRuntimeOptions {
   };
 }
 
+export interface OrderRuntimeOptions {
+  maxClosedOrdersPerSymbol?: number;
+}
+
 export interface CreateClientOptions {
   sandbox?: boolean;
   /** Request/signing clock; local receivedAt/freshness clocks stay independent. */
@@ -113,6 +117,7 @@ export interface CreateClientOptions {
   logLevel?: LogLevel;
   market?: MarketRuntimeOptions;
   account?: AccountRuntimeOptions;
+  order?: OrderRuntimeOptions;
 }
 
 export interface AccountCredentials {

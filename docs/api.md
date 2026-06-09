@@ -438,6 +438,14 @@ interface OrderManager {
 
 `createOrder()` 不会自动纠偏。调用方应先用 `MarketDefinition.priceStep`、`amountStep`、`minAmount`、`minNotional` 和 `normalizeOrderInput()` 处理输入。交易所拒单会包装成 `ORDER_CREATE_FAILED`。
 
+### 7.3 本地缓存与查询
+
+- OrderManager 内部按 open / closed 分层缓存订单。**closed（filled / canceled / rejected / expired）订单按 symbol 各保留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`（默认 500，非正或非整数回退默认），超限按 FIFO 裁剪最旧；**open 订单不受此上限限制**。`getOpenOrders()` 查询复杂度与历史终态订单数量无关。
+- `getOrder(input)` 需带 `orderId` 或 `clientOrderId`（否则返回 `undefined`），`symbol` 可选：
+  - 仅 `clientOrderId` 查询可命中 open 与未被裁剪的 closed；同一 `clientOrderId` 命中多笔时返回**最新一笔**（精确定位历史某一笔请用 `orderId`）。
+  - 同时给 `orderId` 与 `clientOrderId` 时，两者都匹配才命中。
+  - 已超出保留上限被裁剪的 closed 订单将查不到（返回 `undefined`）。
+
 Order 事件用于消费订单状态变化和 open orders 快照校准。Binance private reconcile 会先用 `/papi/v1/um/openOrders` 校验当前 open set；本地 open order 从 open set 消失时，SDK 会优先查询单笔订单终态并发布 `order.filled` / `order.canceled` 等事件。若 Binance retention / not found 导致无法证明终态，SDK 不会合成 filled/canceled，而是保留原 snapshot 并把 order status 标记为 `degraded`，下一轮继续尝试。
 
 ```ts
@@ -581,6 +589,9 @@ interface CreateClientOptions {
       rpcUrl?: string;
       jupApiKey?: string;
     };
+  };
+  order?: {
+    maxClosedOrdersPerSymbol?: number;
   };
 }
 

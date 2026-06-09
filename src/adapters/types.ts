@@ -176,6 +176,16 @@ export interface RawOrderUpdate {
   receivedAt: number;
 }
 
+export interface RawOpenOrdersSnapshot {
+  orders: RawOrderUpdate[];
+  snapshotReceivedAt: number;
+  snapshotExchangeTs?: number;
+}
+
+export type FetchOrderRequest =
+  | { symbol: string; orderId: string; clientOrderId?: string }
+  | { symbol: string; clientOrderId: string; orderId?: string };
+
 export interface CreateOrderRequest {
   symbol: string;
   side: OrderSide;
@@ -229,10 +239,23 @@ export interface PrivateUserDataAdapter {
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawAccountUpdate>;
+  reconcileAccount?(
+    credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawAccountBootstrap>;
   bootstrapOpenOrders(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate[]>;
+  fetchOpenOrders?(
+    credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOpenOrdersSnapshot>;
+  fetchOrder?(
+    credentials: AccountCredentials,
+    request: FetchOrderRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOrderUpdate | undefined>;
   createOrder(
     credentials: AccountCredentials,
     request: CreateOrderRequest,

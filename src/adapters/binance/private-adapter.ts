@@ -20,12 +20,14 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  FetchOrderRequest,
   PrivateStreamCallbacks,
   PrivateStreamOptions,
   PrivateUserDataAdapter,
   RawAccountBootstrap,
   RawAccountUpdate,
   RawBalanceUpdate,
+  RawOpenOrdersSnapshot,
   RawOrderUpdate,
   RawPositionUpdate,
   RawRiskUpdate,
@@ -169,6 +171,7 @@ const LISTEN_KEY_KEEPALIVE_RETRY_POLICY: HttpRetryPolicy = {
   idempotent: true,
   maxAttempts: 3,
 };
+const BINANCE_ORDER_NOT_FOUND_CODES = new Set(["-2011", "-2013"]);
 function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
   return {
     http: ({ status, statusText, url, rawBody }) =>
@@ -436,6 +439,27 @@ function mapAccountRefresh(
   };
 }
 
+function mapAccountBootstrap(
+  balances: BinancePapiBalance[],
+  account: BinancePapiAccount,
+  positions: BinancePapiUmPosition[],
+  receivedAt: number,
+): RawAccountBootstrap {
+  return {
+    balances: balances.flatMap((balance) => {
+      const mapped = mapBalance(balance, receivedAt);
+      return mapped ? [mapped] : [];
+    }),
+    positions: positions.flatMap((position) => {
+      const mapped = mapUmPosition(position, receivedAt);
+      return mapped ? [mapped] : [];
+    }),
+    risk: mapAccountRisk(account, receivedAt, positions),
+    exchangeTs: account.updateTime,
+    receivedAt,
+  };
+}
+
 function mapOpenOrder(
   input: BinancePapiOpenOrder,
   receivedAt: number,
@@ -564,6 +588,28 @@ function mapOrderUpdate(
   };
 }
 
+function isBinanceOrderNotFound(error: unknown): boolean {
+  if (!isTransportError(error) || error.kind !== "http") {
+    return false;
+  }
+
+  if (error.status !== 400 && error.status !== 404) {
+    return false;
+  }
+
+  const rawBody = error.rawBody;
+  if (!rawBody) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(rawBody) as { code?: unknown };
+    return BINANCE_ORDER_NOT_FOUND_CODES.has(`${parsed.code}`);
+  } catch {
+    return false;
+  }
+}
+
 export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   readonly venue = "binance" as const;
   readonly readOnly = false;
@@ -638,19 +684,14 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       ),
     ]);
 
-    return {
-      balances: balances.flatMap((balance) => {
-        const mapped = mapBalance(balance, receivedAt);
-        return mapped ? [mapped] : [];
-      }),
-      positions: positions.flatMap((position) => {
-        const mapped = mapUmPosition(position, receivedAt);
-        return mapped ? [mapped] : [];
-      }),
-      risk: mapAccountRisk(account, receivedAt, positions),
-      exchangeTs: account.updateTime,
-      receivedAt,
-    };
+    return mapAccountBootstrap(balances, account, positions, receivedAt);
+  }
+
+  async reconcileAccount(
+    credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawAccountBootstrap> {
+    return this.bootstrapAccount(credentials, accountOptions);
   }
 
   async refreshAccount(
@@ -684,6 +725,14 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate[]> {
+    const snapshot = await this.fetchOpenOrders(credentials, accountOptions);
+    return snapshot.orders;
+  }
+
+  async fetchOpenOrders(
+    credentials: AccountCredentials,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOpenOrdersSnapshot> {
     const receivedAt = Date.now();
     const orders = await this.signedRequest<BinancePapiOpenOrder[]>(
       "GET",
@@ -694,10 +743,43 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       SAFE_READ_RETRY_POLICY,
     );
 
-    return orders.flatMap((order) => {
-      const mapped = mapOpenOrder(order, receivedAt);
-      return mapped ? [mapped] : [];
-    });
+    return {
+      orders: orders.flatMap((order) => {
+        const mapped = mapOpenOrder(order, receivedAt);
+        return mapped ? [mapped] : [];
+      }),
+      snapshotReceivedAt: receivedAt,
+    };
+  }
+
+  async fetchOrder(
+    credentials: AccountCredentials,
+    request: FetchOrderRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawOrderUpdate | undefined> {
+    const receivedAt = Date.now();
+    try {
+      const response = await this.signedRequest<BinancePapiOpenOrder>(
+        "GET",
+        "/papi/v1/um/order",
+        credentials,
+        accountOptions,
+        {
+          symbol: encodeUmSymbol(request.symbol),
+          orderId: request.orderId,
+          origClientOrderId: request.clientOrderId,
+        },
+        SAFE_READ_RETRY_POLICY,
+      );
+
+      return mapOpenOrder(response, receivedAt);
+    } catch (error) {
+      if (isBinanceOrderNotFound(error)) {
+        return undefined;
+      }
+
+      throw error;
+    }
   }
 
   async createOrder(

@@ -17,6 +17,10 @@ import type {
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesAccountFilter } from "../internal/filters.ts";
+import {
+  canDeleteMissingFromSnapshot,
+  shouldApplyWatermarkedUpdate,
+} from "../internal/watermark.ts";
 import type {
   AccountDataStatus,
   AccountEvent,
@@ -59,6 +63,46 @@ function getBigNumber(
 
 function isZeroDecimal(value: string): boolean {
   return new BigNumber(value).isZero();
+}
+
+function isZeroBalance(balance: BalanceSnapshot): boolean {
+  return (
+    isZeroDecimal(balance.free) &&
+    isZeroDecimal(balance.used) &&
+    isZeroDecimal(balance.total)
+  );
+}
+
+function successfulStatus(
+  status: AccountDataStatus,
+  options: {
+    ready?: boolean;
+    lastReceivedAt?: number;
+    lastReadyAt?: number;
+    preserveStatus?: boolean;
+  },
+): AccountDataStatus {
+  const preservesStreamState =
+    options.preserveStatus &&
+    (status.runtimeStatus === "reconnecting" ||
+      status.reason === "ws_disconnected" ||
+      status.reason === "heartbeat_timeout");
+  const ready = options.ready ?? true;
+
+  return {
+    ...status,
+    activity: "active",
+    ready,
+    runtimeStatus: preservesStreamState ? status.runtimeStatus : "healthy",
+    reason: preservesStreamState ? status.reason : undefined,
+    lastReceivedAt: options.lastReceivedAt ?? status.lastReceivedAt,
+    lastReadyAt: ready
+      ? (options.lastReadyAt ??
+        (options.preserveStatus ? status.lastReadyAt : undefined) ??
+        Date.now())
+      : status.lastReadyAt,
+    inactiveSince: undefined,
+  };
 }
 
 export class AccountManagerImpl
@@ -282,7 +326,7 @@ export class AccountManagerImpl
     accountId: string,
     venue: Venue,
     update: RawAccountUpdate,
-    options: { preserveStatus?: boolean } = {},
+    options: { preserveStatus?: boolean; requestStartedAt?: number } = {},
   ): void {
     const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
@@ -300,7 +344,17 @@ export class AccountManagerImpl
     );
     let risk = previous.risk;
 
+    let latestAppliedAt = 0;
     for (const balance of update.balances ?? []) {
+      if (
+        !shouldApplyWatermarkedUpdate(balances[balance.asset], balance, {
+          requestStartedAt: options.requestStartedAt,
+          source: options.requestStartedAt === undefined ? "stream" : "rest",
+        })
+      ) {
+        continue;
+      }
+
       const nextBalance = this.createBalance(
         accountId,
         venue,
@@ -308,6 +362,7 @@ export class AccountManagerImpl
         balances[balance.asset],
       );
       balances[balance.asset] = nextBalance;
+      latestAppliedAt = Math.max(latestAppliedAt, nextBalance.receivedAt);
       this.accountBus.publish({
         type: "balance.updated",
         accountId,
@@ -320,6 +375,15 @@ export class AccountManagerImpl
 
     for (const position of update.positions ?? []) {
       const key = positionKey(position.symbol, position.side);
+      if (
+        !shouldApplyWatermarkedUpdate(positions.get(key), position, {
+          requestStartedAt: options.requestStartedAt,
+          source: options.requestStartedAt === undefined ? "stream" : "rest",
+        })
+      ) {
+        continue;
+      }
+
       const nextPosition = this.createPosition(
         accountId,
         venue,
@@ -333,6 +397,7 @@ export class AccountManagerImpl
         positions.set(key, nextPosition);
       }
 
+      latestAppliedAt = Math.max(latestAppliedAt, nextPosition.receivedAt);
       this.accountBus.publish({
         type: "position.updated",
         accountId,
@@ -343,8 +408,15 @@ export class AccountManagerImpl
       });
     }
 
-    if (update.risk) {
+    if (
+      update.risk &&
+      shouldApplyWatermarkedUpdate(previous.risk, update.risk, {
+        requestStartedAt: options.requestStartedAt,
+        source: options.requestStartedAt === undefined ? "stream" : "rest",
+      })
+    ) {
       risk = this.createRisk(accountId, venue, update.risk, previous.risk);
+      latestAppliedAt = Math.max(latestAppliedAt, risk.receivedAt);
       this.accountBus.publish({
         type: "risk.updated",
         accountId,
@@ -354,34 +426,166 @@ export class AccountManagerImpl
       });
     }
 
+    if (latestAppliedAt === 0) {
+      return;
+    }
+
     record.snapshot = {
       accountId,
       venue,
       balances,
       positions: [...positions.values()],
       risk,
-      exchangeTs: update.exchangeTs ?? previous.exchangeTs,
-      receivedAt: update.receivedAt,
-      updatedAt: update.receivedAt,
+      exchangeTs:
+        update.exchangeTs === undefined
+          ? previous.exchangeTs
+          : update.exchangeTs,
+      receivedAt: latestAppliedAt,
+      updatedAt: latestAppliedAt,
     };
-    record.status = options.preserveStatus
-      ? {
-          ...record.status,
-          activity: "active",
-          lastReceivedAt: update.receivedAt,
-          lastReadyAt: record.status.lastReadyAt ?? update.receivedAt,
-          inactiveSince: undefined,
-        }
-      : {
-          ...record.status,
-          activity: "active",
-          ready: true,
-          runtimeStatus: "healthy",
-          reason: undefined,
-          lastReceivedAt: update.receivedAt,
-          lastReadyAt: update.receivedAt,
-          inactiveSince: undefined,
-        };
+    record.status = successfulStatus(record.status, {
+      preserveStatus: options.preserveStatus,
+      lastReceivedAt: latestAppliedAt,
+      lastReadyAt: latestAppliedAt,
+    });
+    this.publishStatus(record);
+  }
+
+  onPrivateAccountReconcile(
+    accountId: string,
+    venue: Venue,
+    snapshot: RawAccountBootstrap,
+    options: { requestStartedAt: number; preserveStatus?: boolean },
+  ): void {
+    const record = this.getOrCreateRecord(accountId, venue);
+    if (!record.subscribed) {
+      return;
+    }
+
+    const previous =
+      record.snapshot ?? this.createEmptySnapshot(accountId, venue);
+    const balances = { ...previous.balances };
+    const positions = new Map(
+      previous.positions.map((position) => [
+        positionKey(position.symbol, position.side),
+        position,
+      ]),
+    );
+    let risk = previous.risk;
+
+    const incomingBalanceAssets = new Set<string>();
+    for (const balance of snapshot.balances) {
+      incomingBalanceAssets.add(balance.asset);
+      if (
+        !shouldApplyWatermarkedUpdate(balances[balance.asset], balance, {
+          requestStartedAt: options.requestStartedAt,
+          source: "rest",
+        })
+      ) {
+        continue;
+      }
+
+      const nextBalance = this.createBalance(
+        accountId,
+        venue,
+        balance,
+        balances[balance.asset],
+      );
+      if (isZeroBalance(nextBalance)) {
+        delete balances[balance.asset];
+      } else {
+        balances[balance.asset] = nextBalance;
+      }
+    }
+
+    for (const [asset, balance] of Object.entries(balances)) {
+      if (
+        (!incomingBalanceAssets.has(asset) || isZeroBalance(balance)) &&
+        canDeleteMissingFromSnapshot(balance, {
+          requestStartedAt: options.requestStartedAt,
+          snapshotExchangeTs: snapshot.exchangeTs,
+        })
+      ) {
+        delete balances[asset];
+      }
+    }
+
+    const incomingPositionKeys = new Set<string>();
+    for (const position of snapshot.positions) {
+      const key = positionKey(position.symbol, position.side);
+      incomingPositionKeys.add(key);
+      if (
+        !shouldApplyWatermarkedUpdate(positions.get(key), position, {
+          requestStartedAt: options.requestStartedAt,
+          source: "rest",
+        })
+      ) {
+        continue;
+      }
+
+      const nextPosition = this.createPosition(
+        accountId,
+        venue,
+        position,
+        positions.get(key),
+      );
+      if (isZeroDecimal(nextPosition.size)) {
+        positions.delete(key);
+      } else {
+        positions.set(key, nextPosition);
+      }
+    }
+
+    for (const [key, position] of positions.entries()) {
+      if (
+        !incomingPositionKeys.has(key) &&
+        canDeleteMissingFromSnapshot(position, {
+          requestStartedAt: options.requestStartedAt,
+          snapshotExchangeTs: snapshot.exchangeTs,
+        })
+      ) {
+        positions.delete(key);
+      }
+    }
+
+    if (
+      snapshot.risk &&
+      shouldApplyWatermarkedUpdate(previous.risk, snapshot.risk, {
+        requestStartedAt: options.requestStartedAt,
+        source: "rest",
+      })
+    ) {
+      risk = this.createRisk(accountId, venue, snapshot.risk, previous.risk);
+    }
+
+    record.snapshot = {
+      accountId,
+      venue,
+      balances,
+      positions: [...positions.values()],
+      risk,
+      exchangeTs:
+        snapshot.exchangeTs === undefined
+          ? previous.exchangeTs
+          : snapshot.exchangeTs,
+      receivedAt: snapshot.receivedAt,
+      updatedAt: snapshot.receivedAt,
+    };
+    record.status = successfulStatus(record.status, {
+      preserveStatus: options.preserveStatus,
+      lastReceivedAt: snapshot.receivedAt,
+      lastReadyAt: snapshot.receivedAt,
+    });
+
+    const event: AccountSnapshotReplacedEvent = {
+      type: "account.snapshot_replaced",
+      accountId,
+      venue,
+      snapshot: record.snapshot,
+      ts: this.context.now(),
+    };
+
+    this.accountBus.publish(event);
     this.publishStatus(record);
   }
 

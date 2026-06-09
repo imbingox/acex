@@ -925,3 +925,37 @@ PR3 review 修复（PR #40，本轮 work commit `4259cc6`）：
 ### Next Steps
 
 - None - task complete
+
+
+## Session 26: Binance private REST reconciliation
+
+**Date**: 2026-06-09
+**Task**: Binance private REST reconciliation
+**Branch**: `feat/binance-open-orders-reconcile`
+
+### Summary
+
+Implemented Binance private REST reconciliation for account and order convergence, fixed PR review issues around request identity, generation guards, status readiness timestamps, and watermark coverage, then opened and updated PR #53.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b01486` | (see git log) |
+| `95ae3f2` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

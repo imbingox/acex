@@ -10,6 +10,55 @@ import {
   waitForSocket,
 } from "../support/test-utils.ts";
 
+async function waitForCondition<T>(
+  check: () => T | undefined,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const value = check();
+    if (value !== undefined) {
+      return value;
+    }
+    await Bun.sleep(5);
+  }
+
+  throw new Error(message);
+}
+
+async function nextMatchingEvent<T>(
+  iterator: AsyncIterator<T>,
+  check: (event: T) => boolean,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(message);
+    }
+
+    let event: T;
+    try {
+      event = await nextEvent(iterator, remainingMs);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "Timed out waiting for event"
+      ) {
+        throw new Error(message);
+      }
+      throw error;
+    }
+
+    if (check(event)) {
+      return event;
+    }
+  }
+}
+
 test("order subscribe bootstraps open orders, applies websocket updates, and reuses the account private socket", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient({
@@ -175,6 +224,398 @@ test("order status enters reconnecting on disconnect and recovers after websocke
     reason: undefined,
   });
   expect(client.order.getOpenOrders("main-binance")).toHaveLength(1);
+});
+
+test("private order reconcile backfills terminal status for disappeared open orders", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrderResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          orderId: 1001,
+          clientOrderId: "cid-1001",
+          side: "BUY",
+          type: "LIMIT",
+          status: "NEW",
+          price: "100500.00",
+          stopPrice: "0",
+          origQty: "0.020",
+          executedQty: "0.005",
+          avgPrice: "100400.00",
+          reduceOnly: false,
+          positionSide: "BOTH",
+          updateTime: 1710000000300,
+        },
+      ],
+      [],
+    ],
+    queryOrder: {
+      symbol: "BTCUSDT",
+      orderId: 1001,
+      clientOrderId: "cid-1001",
+      side: "BUY",
+      type: "LIMIT",
+      status: "FILLED",
+      price: "100500.00",
+      stopPrice: "0",
+      origQty: "0.020",
+      executedQty: "0.020",
+      avgPrice: "100450.00",
+      reduceOnly: false,
+      positionSide: "BOTH",
+      updateTime: 1710000000600,
+    },
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  });
+  const iterator = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "order.snapshot_replaced",
+  });
+  const filled = await nextMatchingEvent(
+    iterator,
+    (event) => event.type === "order.filled",
+    200,
+    "order reconcile did not publish filled event",
+  );
+  expect(filled).toMatchObject({
+    type: "order.filled",
+    snapshot: {
+      orderId: "1001",
+      status: "filled",
+      filled: new BigNumber("0.020").toFixed(),
+    },
+  });
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    status: "filled",
+    avgFillPrice: new BigNumber("100450.00").toFixed(),
+  });
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "GET" &&
+        request.url.pathname === "/papi/v1/um/order" &&
+        request.url.searchParams.get("orderId") === "1001",
+    ),
+  ).toBe(true);
+
+  await iterator.return?.();
+});
+
+test("order bootstrap backfills terminal status for cached disappeared open orders", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrderResponses: [[], []],
+    createOrder: {
+      symbol: "BTCUSDT",
+      orderId: 2001,
+      clientOrderId: "cid-bootstrap-2001",
+      side: "BUY",
+      type: "LIMIT",
+      status: "NEW",
+      price: "101000.00",
+      stopPrice: "0",
+      origQty: "0.010",
+      executedQty: "0",
+      avgPrice: "0",
+      reduceOnly: false,
+      positionSide: "BOTH",
+      updateTime: 1710000000400,
+    },
+    queryOrder: {
+      symbol: "BTCUSDT",
+      orderId: 2001,
+      clientOrderId: "cid-bootstrap-2001",
+      side: "BUY",
+      type: "LIMIT",
+      status: "FILLED",
+      price: "101000.00",
+      stopPrice: "0",
+      origQty: "0.010",
+      executedQty: "0.010",
+      avgPrice: "100900.00",
+      reduceOnly: false,
+      positionSide: "BOTH",
+      updateTime: 1710000000600,
+    },
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+  const iterator = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+    clientOrderId: "cid-bootstrap-2001",
+  });
+
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  const filled = await nextMatchingEvent(
+    iterator,
+    (event) => event.type === "order.filled",
+    200,
+    "order bootstrap did not backfill filled event",
+  );
+  expect(filled).toMatchObject({
+    snapshot: {
+      orderId: "2001",
+      status: "filled",
+      filled: new BigNumber("0.010").toFixed(),
+    },
+  });
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "2001",
+    }),
+  ).toMatchObject({
+    status: "filled",
+  });
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "GET" &&
+        request.url.pathname === "/papi/v1/um/order" &&
+        request.url.searchParams.get("orderId") === "2001",
+    ),
+  ).toBe(true);
+
+  await iterator.return?.();
+});
+
+test("private order reconcile degrades and keeps snapshot when terminal backfill is missing", async () => {
+  installBinancePrivateAccountInfra({
+    openOrderResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          orderId: 1001,
+          clientOrderId: "cid-1001",
+          side: "BUY",
+          type: "LIMIT",
+          status: "NEW",
+          price: "100500.00",
+          stopPrice: "0",
+          origQty: "0.020",
+          executedQty: "0.005",
+          avgPrice: "100400.00",
+          reduceOnly: false,
+          positionSide: "BOTH",
+          updateTime: 1710000000300,
+        },
+      ],
+      [],
+    ],
+    failQueryOrder: true,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  await waitForCondition(
+    () =>
+      client.order.getOrderStatus("main-binance")?.runtimeStatus === "degraded"
+        ? true
+        : undefined,
+    200,
+    "order reconcile did not degrade",
+  );
+
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(1);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    status: "open",
+  });
+  expect(client.order.getOrderStatus("main-binance")).toMatchObject({
+    runtimeStatus: "degraded",
+    reason: "http_failed",
+  });
+});
+
+test("successful order reconcile clears previous HTTP degraded status", async () => {
+  installBinancePrivateAccountInfra({
+    openOrderResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          orderId: 1001,
+          clientOrderId: "cid-1001",
+          side: "BUY",
+          type: "LIMIT",
+          status: "NEW",
+          price: "100500.00",
+          stopPrice: "0",
+          origQty: "0.020",
+          executedQty: "0.005",
+          avgPrice: "100400.00",
+          reduceOnly: false,
+          positionSide: "BOTH",
+          updateTime: 1710000000300,
+        },
+      ],
+      [],
+      [
+        {
+          symbol: "BTCUSDT",
+          orderId: 1001,
+          clientOrderId: "cid-1001",
+          side: "BUY",
+          type: "LIMIT",
+          status: "NEW",
+          price: "100500.00",
+          stopPrice: "0",
+          origQty: "0.020",
+          executedQty: "0.005",
+          avgPrice: "100400.00",
+          reduceOnly: false,
+          positionSide: "BOTH",
+          updateTime: 1710000000300,
+        },
+      ],
+    ],
+    queryOrderResponses: [
+      {},
+      {
+        symbol: "BTCUSDT",
+        orderId: 1001,
+        clientOrderId: "cid-1001",
+        side: "BUY",
+        type: "LIMIT",
+        status: "NEW",
+        price: "100500.00",
+        stopPrice: "0",
+        origQty: "0.020",
+        executedQty: "0.005",
+        avgPrice: "100400.00",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000300,
+      },
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  await waitForCondition(
+    () =>
+      client.order.getOrderStatus("main-binance")?.runtimeStatus === "degraded"
+        ? true
+        : undefined,
+    200,
+    "order reconcile did not degrade",
+  );
+  await waitForCondition(
+    () =>
+      client.order.getOrderStatus("main-binance")?.runtimeStatus === "healthy"
+        ? true
+        : undefined,
+    300,
+    "successful order reconcile did not clear degraded status",
+  );
+  expect(client.order.getOrderStatus("main-binance")).toMatchObject({
+    runtimeStatus: "healthy",
+    reason: undefined,
+  });
 });
 
 test("order bootstrap rate limit maps to rate_limited status without changing public code", async () => {
@@ -604,6 +1045,193 @@ test("cancelAllOrders scopes by symbol and only updates matching cached orders",
   );
   expect(request).toBeDefined();
   expect(request?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+});
+
+test("order cache scopes exchange order ids by symbol", async () => {
+  installBinancePrivateAccountInfra({
+    openOrders: [
+      {
+        symbol: "BTCUSDT",
+        orderId: 1001,
+        clientOrderId: "btc-1001",
+        side: "BUY",
+        type: "LIMIT",
+        status: "NEW",
+        price: "100500.00",
+        stopPrice: "0",
+        origQty: "0.020",
+        executedQty: "0.005",
+        avgPrice: "100400.00",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000300,
+      },
+      {
+        symbol: "ETHUSDT",
+        orderId: 1001,
+        clientOrderId: "eth-1001",
+        side: "SELL",
+        type: "LIMIT",
+        status: "NEW",
+        price: "3500.00",
+        stopPrice: "0",
+        origQty: "0.100",
+        executedQty: "0",
+        avgPrice: "0",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000310,
+      },
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(2);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    clientOrderId: "btc-1001",
+    symbol: "BTC/USDT:USDT",
+  });
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "ETH/USDT:USDT",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    clientOrderId: "eth-1001",
+    symbol: "ETH/USDT:USDT",
+  });
+});
+
+test("order cache keeps same-symbol orders with different order ids when clientOrderId collides", async () => {
+  installBinancePrivateAccountInfra({
+    openOrders: [
+      {
+        symbol: "BTCUSDT",
+        orderId: 1001,
+        clientOrderId: "duplicate-client-id",
+        side: "BUY",
+        type: "LIMIT",
+        status: "NEW",
+        price: "100500.00",
+        stopPrice: "0",
+        origQty: "0.020",
+        executedQty: "0.005",
+        avgPrice: "100400.00",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000300,
+      },
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  socket.emitJson({
+    e: "ORDER_TRADE_UPDATE",
+    E: 1710000000500,
+    T: 1710000000500,
+    o: {
+      s: "BTCUSDT",
+      i: 1002,
+      c: "duplicate-client-id",
+      S: "SELL",
+      o: "LIMIT",
+      X: "NEW",
+      p: "100700.00",
+      sp: "0",
+      q: "0.010",
+      z: "0",
+      ap: "0",
+      R: false,
+      ps: "BOTH",
+    },
+  });
+
+  await waitForCondition(
+    () =>
+      client.order.getOpenOrders("main-binance", "BTC/USDT:USDT").length === 2
+        ? true
+        : undefined,
+    100,
+    "same-symbol clientOrderId collision was not retained as two orders",
+  );
+
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    clientOrderId: "duplicate-client-id",
+    side: "buy",
+  });
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "1002",
+    }),
+  ).toMatchObject({
+    clientOrderId: "duplicate-client-id",
+    side: "sell",
+    price: new BigNumber("100700.00").toFixed(),
+  });
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "9999",
+      clientOrderId: "duplicate-client-id",
+    }),
+  ).toBeUndefined();
 });
 
 test("cancelOrder validates that at least one order identifier is provided", async () => {

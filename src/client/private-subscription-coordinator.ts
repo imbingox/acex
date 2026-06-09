@@ -1,5 +1,7 @@
 import type {
+  FetchOrderRequest,
   PrivateUserDataAdapter,
+  RawOpenOrdersSnapshot,
   StreamHandle,
 } from "../adapters/types.ts";
 import {
@@ -10,6 +12,7 @@ import {
 import { isTransportError } from "../internal/http-client.ts";
 import type {
   AccountRuntimeOptions,
+  OrderSnapshot,
   PrivateRuntimeReason,
   Venue,
 } from "../types/index.ts";
@@ -31,6 +34,11 @@ interface PrivateSubscriptionRecord {
   accountRefreshTimer?: ReturnType<typeof setTimeout>;
   accountRefreshInFlight?: Promise<void>;
   accountRefreshGeneration: number;
+  accountSubscriptionGeneration: number;
+  orderSubscriptionGeneration: number;
+  privateReconcileTimer?: ReturnType<typeof setTimeout>;
+  privateReconcileInFlight?: Promise<void>;
+  privateReconcileGeneration: number;
   startPromise?: Promise<void>;
   reconcilePromise?: Promise<void>;
 }
@@ -40,6 +48,9 @@ const DEFAULT_STREAM_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS = 10_000;
 const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
 const DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS = 60_000;
+const MAX_ORDER_TERMINAL_BACKFILLS_PER_RECONCILE = 20;
+const MAX_ORDER_TERMINAL_BACKFILL_CONCURRENCY = 4;
 
 function normalizePositiveInterval(
   value: number | undefined,
@@ -48,6 +59,17 @@ function normalizePositiveInterval(
   return value !== undefined && Number.isFinite(value) && value > 0
     ? value
     : fallback;
+}
+
+function normalizeReconcileInterval(
+  value: number | undefined,
+  fallback: number,
+): number | undefined {
+  if (value === 0) {
+    return undefined;
+  }
+
+  return normalizePositiveInterval(value, fallback);
 }
 
 function transportReason(
@@ -69,6 +91,7 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamReconnectMaxDelayMs: number;
   private readonly listenKeyKeepAliveMs: number;
   private readonly binanceRiskPollIntervalMs: number;
+  private readonly binancePrivateReconcileIntervalMs: number | undefined;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
   constructor(
@@ -97,6 +120,10 @@ export class PrivateSubscriptionCoordinator {
       options.binance?.riskPollIntervalMs,
       DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
     );
+    this.binancePrivateReconcileIntervalMs = normalizeReconcileInterval(
+      options.binance?.privateReconcileIntervalMs,
+      DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS,
+    );
   }
 
   async subscribeAccountFeed(accountId: string): Promise<void> {
@@ -104,6 +131,8 @@ export class PrivateSubscriptionCoordinator {
     const record = this.getOrCreateRecord(account);
     const needsPending = !record.stream && !record.startPromise;
     record.accountSubscribed = true;
+    const generation = record.privateReconcileGeneration;
+    const accountGeneration = record.accountSubscriptionGeneration;
     if (needsPending) {
       this.accountConsumer.onPrivateAccountPending(accountId, record.venue);
     }
@@ -111,12 +140,60 @@ export class PrivateSubscriptionCoordinator {
     try {
       const adapter = this.getAdapter(record.venue);
       if (adapter.accountCapabilities.updates === "polling") {
-        await this.bootstrapAccount(record, account);
+        await this.bootstrapAccount(
+          record,
+          account,
+          generation,
+          accountGeneration,
+        );
+        if (
+          !this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
+          return;
+        }
         await this.ensureStream(record, account);
+        if (
+          !this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
+          return;
+        }
+        this.ensurePrivateReconcilePolling(record);
       } else {
         await this.ensureStream(record, account);
-        await this.bootstrapAccount(record, account);
+        if (
+          !this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
+          return;
+        }
+        await this.bootstrapAccount(
+          record,
+          account,
+          generation,
+          accountGeneration,
+        );
+        if (
+          !this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
+          return;
+        }
         this.ensureAccountRefreshPolling(record);
+        this.ensurePrivateReconcilePolling(record);
       }
     } catch (error) {
       record.accountSubscribed = false;
@@ -132,7 +209,9 @@ export class PrivateSubscriptionCoordinator {
     }
 
     record.accountSubscribed = false;
+    record.accountSubscriptionGeneration += 1;
     this.stopAccountRefreshPolling(record);
+    this.restartPrivateReconcilePolling(record);
     this.closeIfUnused(record);
   }
 
@@ -141,13 +220,26 @@ export class PrivateSubscriptionCoordinator {
     const record = this.getOrCreateRecord(account);
     const needsPending = !record.stream && !record.startPromise;
     record.ordersSubscribed = true;
+    const generation = record.privateReconcileGeneration;
+    const orderGeneration = record.orderSubscriptionGeneration;
     if (needsPending) {
       this.orderConsumer.onPrivateOrderPending(accountId, record.venue);
     }
 
     try {
       await this.ensureStream(record, account);
-      await this.bootstrapOrders(record, account);
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+      await this.bootstrapOrders(record, account, generation, orderGeneration);
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+      this.ensurePrivateReconcilePolling(record);
     } catch (error) {
       record.ordersSubscribed = false;
       this.closeIfUnused(record);
@@ -162,6 +254,8 @@ export class PrivateSubscriptionCoordinator {
     }
 
     record.ordersSubscribed = false;
+    record.orderSubscriptionGeneration += 1;
+    this.restartPrivateReconcilePolling(record);
     this.closeIfUnused(record);
   }
 
@@ -191,6 +285,7 @@ export class PrivateSubscriptionCoordinator {
   onClientStopping(): void {
     for (const record of this.records.values()) {
       this.stopAccountRefreshPolling(record);
+      this.stopPrivateReconcilePolling(record);
       this.closeStream(record);
     }
   }
@@ -203,6 +298,7 @@ export class PrivateSubscriptionCoordinator {
 
     this.closeStream(record);
     this.stopAccountRefreshPolling(record);
+    this.stopPrivateReconcilePolling(record);
     this.records.delete(accountId);
   }
 
@@ -226,6 +322,10 @@ export class PrivateSubscriptionCoordinator {
     const account = this.getAccount(record.accountId);
     this.closeStream(record);
     this.stopAccountRefreshPolling(record);
+    this.stopPrivateReconcilePolling(record);
+    const generation = record.privateReconcileGeneration;
+    const accountGeneration = record.accountSubscriptionGeneration;
+    const orderGeneration = record.orderSubscriptionGeneration;
 
     try {
       const adapter = this.getAdapter(record.venue);
@@ -233,17 +333,71 @@ export class PrivateSubscriptionCoordinator {
         adapter.accountCapabilities.updates === "polling" &&
         record.accountSubscribed
       ) {
-        await this.bootstrapAccount(record, account);
-        await this.ensureStream(record, account);
+        await this.bootstrapAccount(
+          record,
+          account,
+          generation,
+          accountGeneration,
+        );
+        if (
+          this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
+          await this.ensureStream(record, account);
+          if (
+            this.shouldContinueAccountBootstrap(
+              record,
+              generation,
+              accountGeneration,
+            )
+          ) {
+            this.ensurePrivateReconcilePolling(record);
+          }
+        }
       } else {
         await this.ensureStream(record, account);
-        if (record.accountSubscribed) {
-          await this.bootstrapAccount(record, account);
+        if (
+          this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
+          await this.bootstrapAccount(
+            record,
+            account,
+            generation,
+            accountGeneration,
+          );
+        }
+        if (
+          this.shouldContinueAccountBootstrap(
+            record,
+            generation,
+            accountGeneration,
+          )
+        ) {
           this.ensureAccountRefreshPolling(record);
+          this.ensurePrivateReconcilePolling(record);
         }
       }
-      if (record.ordersSubscribed) {
-        await this.bootstrapOrders(record, account);
+      if (
+        this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        await this.bootstrapOrders(
+          record,
+          account,
+          generation,
+          orderGeneration,
+        );
+      }
+      if (
+        this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        this.ensurePrivateReconcilePolling(record);
       }
     } catch {
       // Errors are already published to the runtime error bus.
@@ -292,6 +446,9 @@ export class PrivateSubscriptionCoordinator {
       accountReady: false,
       orderReady: false,
       accountRefreshGeneration: 0,
+      accountSubscriptionGeneration: 0,
+      orderSubscriptionGeneration: 0,
+      privateReconcileGeneration: 0,
     };
 
     this.records.set(account.accountId, record);
@@ -302,12 +459,37 @@ export class PrivateSubscriptionCoordinator {
     return record.accountSubscribed || record.ordersSubscribed;
   }
 
+  private shouldContinueAccountBootstrap(
+    record: PrivateSubscriptionRecord,
+    generation: number,
+    accountGeneration: number,
+  ): boolean {
+    return (
+      record.accountSubscribed &&
+      generation === record.privateReconcileGeneration &&
+      accountGeneration === record.accountSubscriptionGeneration
+    );
+  }
+
+  private shouldContinueOrderBootstrap(
+    record: PrivateSubscriptionRecord,
+    generation: number,
+    orderGeneration: number,
+  ): boolean {
+    return (
+      record.ordersSubscribed &&
+      generation === record.privateReconcileGeneration &&
+      orderGeneration === record.orderSubscriptionGeneration
+    );
+  }
+
   private closeIfUnused(record: PrivateSubscriptionRecord): void {
     if (this.isActive(record)) {
       return;
     }
 
     this.stopAccountRefreshPolling(record);
+    this.stopPrivateReconcilePolling(record);
     this.closeStream(record);
     this.records.delete(record.accountId);
   }
@@ -388,6 +570,129 @@ export class PrivateSubscriptionCoordinator {
     }, this.binanceRiskPollIntervalMs);
   }
 
+  private hasPrivateReconcileCapability(
+    record: PrivateSubscriptionRecord,
+  ): boolean {
+    const adapter = this.getAdapter(record.venue);
+    return (
+      (record.accountSubscribed &&
+        (typeof adapter.reconcileAccount === "function" ||
+          typeof adapter.bootstrapAccount === "function")) ||
+      (record.ordersSubscribed && typeof adapter.fetchOpenOrders === "function")
+    );
+  }
+
+  private ensurePrivateReconcilePolling(
+    record: PrivateSubscriptionRecord,
+  ): void {
+    if (
+      this.binancePrivateReconcileIntervalMs === undefined ||
+      !this.isActive(record) ||
+      !this.hasPrivateReconcileCapability(record) ||
+      record.privateReconcileTimer ||
+      record.privateReconcileInFlight
+    ) {
+      return;
+    }
+
+    this.schedulePrivateReconcilePoll(record);
+  }
+
+  private restartPrivateReconcilePolling(
+    record: PrivateSubscriptionRecord,
+  ): void {
+    if (record.privateReconcileTimer) {
+      clearTimeout(record.privateReconcileTimer);
+      record.privateReconcileTimer = undefined;
+    }
+    this.ensurePrivateReconcilePolling(record);
+  }
+
+  private stopPrivateReconcilePolling(record: PrivateSubscriptionRecord): void {
+    record.privateReconcileGeneration += 1;
+    if (record.privateReconcileTimer) {
+      clearTimeout(record.privateReconcileTimer);
+      record.privateReconcileTimer = undefined;
+    }
+    record.privateReconcileInFlight = undefined;
+  }
+
+  private schedulePrivateReconcilePoll(
+    record: PrivateSubscriptionRecord,
+  ): void {
+    if (
+      this.binancePrivateReconcileIntervalMs === undefined ||
+      !this.isActive(record) ||
+      !this.hasPrivateReconcileCapability(record)
+    ) {
+      return;
+    }
+
+    const generation = record.privateReconcileGeneration;
+    record.privateReconcileTimer = setTimeout(() => {
+      record.privateReconcileTimer = undefined;
+      if (
+        generation !== record.privateReconcileGeneration ||
+        this.binancePrivateReconcileIntervalMs === undefined ||
+        !this.isActive(record) ||
+        !this.hasPrivateReconcileCapability(record)
+      ) {
+        return;
+      }
+
+      let latestAccount: RegisteredAccountRecord;
+      try {
+        latestAccount = this.getAccount(record.accountId);
+      } catch (error) {
+        this.handlePrivateReconcileLookupError(record, error);
+        return;
+      }
+
+      record.privateReconcileInFlight = this.reconcilePrivateData(
+        record,
+        latestAccount,
+        generation,
+        true,
+      )
+        .catch(() => {})
+        .finally(() => {
+          if (generation !== record.privateReconcileGeneration) {
+            return;
+          }
+
+          record.privateReconcileInFlight = undefined;
+          if (
+            this.binancePrivateReconcileIntervalMs !== undefined &&
+            this.isActive(record) &&
+            this.hasPrivateReconcileCapability(record)
+          ) {
+            this.schedulePrivateReconcilePoll(record);
+          }
+        });
+    }, this.binancePrivateReconcileIntervalMs);
+  }
+
+  private handlePrivateReconcileLookupError(
+    record: PrivateSubscriptionRecord,
+    error: unknown,
+  ): void {
+    this.stopPrivateReconcilePolling(record);
+    if (error instanceof AcexError && error.code === "ACCOUNT_NOT_FOUND") {
+      return;
+    }
+
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error(`Failed to load ${record.venue} account for reconcile`),
+      {
+        accountId: record.accountId,
+        venue: record.venue,
+      },
+    );
+  }
+
   private handleAccountRefreshLookupError(
     record: PrivateSubscriptionRecord,
     error: unknown,
@@ -419,6 +724,7 @@ export class PrivateSubscriptionCoordinator {
       return;
     }
 
+    const requestStartedAt = this.context.now();
     try {
       const update = await adapter.refreshAccount(account.credentials ?? {}, {
         ...account.options,
@@ -436,7 +742,7 @@ export class PrivateSubscriptionCoordinator {
         record.accountId,
         record.venue,
         update,
-        { preserveStatus: true },
+        { preserveStatus: true, requestStartedAt },
       );
     } catch (error) {
       if (
@@ -468,6 +774,331 @@ export class PrivateSubscriptionCoordinator {
         },
       );
     }
+  }
+
+  private async reconcilePrivateData(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    preserveStatus: boolean,
+  ): Promise<void> {
+    const accountGeneration = record.accountSubscriptionGeneration;
+    const orderGeneration = record.orderSubscriptionGeneration;
+
+    await Promise.all([
+      this.reconcileAccount(
+        record,
+        account,
+        generation,
+        accountGeneration,
+        preserveStatus,
+      ),
+      this.reconcileOrders(
+        record,
+        account,
+        generation,
+        orderGeneration,
+        preserveStatus,
+      ),
+    ]);
+  }
+
+  private async reconcileAccount(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    accountGeneration: number,
+    preserveStatus: boolean,
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (
+      !this.shouldContinueAccountBootstrap(
+        record,
+        generation,
+        accountGeneration,
+      )
+    ) {
+      return;
+    }
+
+    const requestStartedAt = this.context.now();
+    try {
+      const snapshot = adapter.reconcileAccount
+        ? await adapter.reconcileAccount(account.credentials ?? {}, {
+            ...account.options,
+            accountId: account.accountId,
+          })
+        : await adapter.bootstrapAccount(account.credentials ?? {}, {
+            ...account.options,
+            accountId: account.accountId,
+          });
+      if (
+        !this.shouldContinueAccountBootstrap(
+          record,
+          generation,
+          accountGeneration,
+        )
+      ) {
+        return;
+      }
+
+      record.accountReady = true;
+      this.accountConsumer.onPrivateAccountReconcile(
+        record.accountId,
+        record.venue,
+        snapshot,
+        {
+          requestStartedAt,
+          preserveStatus,
+        },
+      );
+    } catch (error) {
+      if (
+        !this.shouldContinueAccountBootstrap(
+          record,
+          generation,
+          accountGeneration,
+        )
+      ) {
+        return;
+      }
+
+      this.context.publishRuntimeError(
+        "adapter",
+        error instanceof Error
+          ? error
+          : new Error(
+              `Failed to reconcile ${record.venue} private account state`,
+            ),
+        {
+          accountId: record.accountId,
+          venue: record.venue,
+        },
+      );
+      this.accountConsumer.onPrivateAccountStreamState(
+        record.accountId,
+        record.venue,
+        {
+          runtimeStatus: "degraded",
+          ready: record.accountReady,
+          reason: transportReason(error, "http_failed"),
+        },
+      );
+    }
+  }
+
+  private async reconcileOrders(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    orderGeneration: number,
+    preserveStatus: boolean,
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (
+      !adapter.fetchOpenOrders ||
+      !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+    ) {
+      return;
+    }
+
+    const requestStartedAt = this.context.now();
+    try {
+      const snapshot = await adapter.fetchOpenOrders(
+        account.credentials ?? {},
+        {
+          ...account.options,
+          accountId: account.accountId,
+        },
+      );
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      record.orderReady = true;
+      const disappeared = this.orderConsumer.onPrivateOrderReconcile(
+        record.accountId,
+        record.venue,
+        snapshot,
+        {
+          requestStartedAt,
+          preserveStatus,
+        },
+      );
+      await this.backfillDisappearedOrders(
+        record,
+        account,
+        generation,
+        orderGeneration,
+        disappeared,
+      );
+    } catch (error) {
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      this.handleOrderReconcileError(record, error);
+    }
+  }
+
+  private async backfillDisappearedOrders(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    orderGeneration: number,
+    disappeared: OrderSnapshot[],
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (!adapter.fetchOrder || disappeared.length === 0) {
+      return;
+    }
+
+    const pending = disappeared
+      .filter((order) => order.orderId || order.clientOrderId)
+      .slice(0, MAX_ORDER_TERMINAL_BACKFILLS_PER_RECONCILE);
+    if (pending.length === 0) {
+      return;
+    }
+
+    let cursor = 0;
+    const workers = Array.from(
+      {
+        length: Math.min(
+          MAX_ORDER_TERMINAL_BACKFILL_CONCURRENCY,
+          pending.length,
+        ),
+      },
+      async () => {
+        while (cursor < pending.length) {
+          if (
+            !this.shouldContinueOrderBootstrap(
+              record,
+              generation,
+              orderGeneration,
+            )
+          ) {
+            return;
+          }
+
+          const order = pending[cursor];
+          cursor += 1;
+          if (!order) {
+            continue;
+          }
+          await this.backfillDisappearedOrder(
+            record,
+            account,
+            generation,
+            orderGeneration,
+            order,
+          );
+        }
+      },
+    );
+
+    await Promise.all(workers);
+  }
+
+  private async backfillDisappearedOrder(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    orderGeneration: number,
+    order: OrderSnapshot,
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (
+      !adapter.fetchOrder ||
+      !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+    ) {
+      return;
+    }
+
+    const requestStartedAt = this.context.now();
+    try {
+      let request: FetchOrderRequest;
+      if (order.orderId) {
+        request = {
+          symbol: order.symbol,
+          orderId: order.orderId,
+          clientOrderId: order.clientOrderId,
+        };
+      } else if (order.clientOrderId) {
+        request = {
+          symbol: order.symbol,
+          clientOrderId: order.clientOrderId,
+        };
+      } else {
+        return;
+      }
+
+      const update = await adapter.fetchOrder(
+        account.credentials ?? {},
+        request,
+        { ...account.options, accountId: account.accountId },
+      );
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      if (!update) {
+        this.handleOrderReconcileError(
+          record,
+          new Error(
+            `Failed to backfill disappeared ${record.venue} order terminal state`,
+          ),
+        );
+        return;
+      }
+
+      this.orderConsumer.onPrivateOrderUpdate(
+        record.accountId,
+        record.venue,
+        update,
+        {
+          requestStartedAt,
+        },
+      );
+    } catch (error) {
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      this.handleOrderReconcileError(record, error);
+    }
+  }
+
+  private handleOrderReconcileError(
+    record: PrivateSubscriptionRecord,
+    error: unknown,
+  ): void {
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error(`Failed to reconcile ${record.venue} private order state`),
+      {
+        accountId: record.accountId,
+        venue: record.venue,
+      },
+    );
+    this.orderConsumer.onPrivateOrderStreamState(
+      record.accountId,
+      record.venue,
+      {
+        runtimeStatus: "degraded",
+        ready: record.orderReady,
+        reason: transportReason(error, "http_failed"),
+      },
+    );
   }
 
   private async ensureStream(
@@ -656,32 +1287,65 @@ export class PrivateSubscriptionCoordinator {
     record: PrivateSubscriptionRecord,
   ): Promise<void> {
     const account = this.getAccount(record.accountId);
+    const generation = record.privateReconcileGeneration;
+    const accountGeneration = record.accountSubscriptionGeneration;
+    const orderGeneration = record.orderSubscriptionGeneration;
 
     if (record.accountSubscribed) {
       this.accountConsumer.onPrivateAccountPending(
         record.accountId,
         record.venue,
       );
-      await this.bootstrapAccount(record, account);
+      await this.reconcileAccount(
+        record,
+        account,
+        generation,
+        accountGeneration,
+        false,
+      );
     }
 
     if (record.ordersSubscribed) {
       this.orderConsumer.onPrivateOrderPending(record.accountId, record.venue);
-      await this.bootstrapOrders(record, account);
+      await this.reconcileOrders(
+        record,
+        account,
+        generation,
+        orderGeneration,
+        false,
+      );
     }
   }
 
   private async bootstrapAccount(
     record: PrivateSubscriptionRecord,
     account: RegisteredAccountRecord,
+    generation: number,
+    accountGeneration: number,
   ): Promise<void> {
+    if (
+      !this.shouldContinueAccountBootstrap(
+        record,
+        generation,
+        accountGeneration,
+      )
+    ) {
+      return;
+    }
+
     try {
       const adapter = this.getAdapter(record.venue);
       const bootstrap = await adapter.bootstrapAccount(
         account.credentials ?? {},
         { ...account.options, accountId: account.accountId },
       );
-      if (!record.accountSubscribed) {
+      if (
+        !this.shouldContinueAccountBootstrap(
+          record,
+          generation,
+          accountGeneration,
+        )
+      ) {
         return;
       }
 
@@ -692,6 +1356,16 @@ export class PrivateSubscriptionCoordinator {
         bootstrap,
       );
     } catch (error) {
+      if (
+        !this.shouldContinueAccountBootstrap(
+          record,
+          generation,
+          accountGeneration,
+        )
+      ) {
+        return;
+      }
+
       record.accountReady = false;
       this.context.publishRuntimeError(
         "adapter",
@@ -744,63 +1418,157 @@ export class PrivateSubscriptionCoordinator {
   private async bootstrapOrders(
     record: PrivateSubscriptionRecord,
     account: RegisteredAccountRecord,
+    generation: number,
+    orderGeneration: number,
   ): Promise<void> {
+    if (
+      !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+    ) {
+      return;
+    }
+
+    const adapter = this.getAdapter(record.venue);
+    if (!adapter.fetchOpenOrders) {
+      try {
+        const requestStartedAt = this.context.now();
+        const orders = await adapter.bootstrapOpenOrders(
+          account.credentials ?? {},
+          { ...account.options, accountId: account.accountId },
+        );
+        const snapshot: RawOpenOrdersSnapshot = {
+          orders,
+          snapshotReceivedAt:
+            orders.reduce(
+              (latest, order) => Math.max(latest, order.receivedAt),
+              0,
+            ) || this.context.now(),
+        };
+        if (
+          !this.shouldContinueOrderBootstrap(
+            record,
+            generation,
+            orderGeneration,
+          )
+        ) {
+          return;
+        }
+
+        record.orderReady = true;
+        const disappeared = this.orderConsumer.onPrivateOrderBootstrap(
+          record.accountId,
+          record.venue,
+          snapshot,
+          {
+            requestStartedAt,
+          },
+        );
+        await this.backfillDisappearedOrders(
+          record,
+          account,
+          generation,
+          orderGeneration,
+          disappeared,
+        );
+        return;
+      } catch (error) {
+        if (
+          !this.shouldContinueOrderBootstrap(
+            record,
+            generation,
+            orderGeneration,
+          )
+        ) {
+          return;
+        }
+
+        this.handleBootstrapOrdersError(record, error);
+        return;
+      }
+    }
+
+    const requestStartedAt = this.context.now();
     try {
-      const snapshots = await this.getAdapter(record.venue).bootstrapOpenOrders(
+      const snapshot = await adapter.fetchOpenOrders(
         account.credentials ?? {},
-        { ...account.options, accountId: account.accountId },
+        {
+          ...account.options,
+          accountId: account.accountId,
+        },
       );
-      if (!record.ordersSubscribed) {
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
         return;
       }
 
       record.orderReady = true;
-      this.orderConsumer.onPrivateOrderBootstrap(
+      const disappeared = this.orderConsumer.onPrivateOrderBootstrap(
         record.accountId,
         record.venue,
-        snapshots,
+        snapshot,
+        {
+          requestStartedAt,
+        },
+      );
+      await this.backfillDisappearedOrders(
+        record,
+        account,
+        generation,
+        orderGeneration,
+        disappeared,
       );
     } catch (error) {
-      record.orderReady = false;
-      this.context.publishRuntimeError(
-        "adapter",
-        error instanceof Error
-          ? error
-          : new Error(
-              `Failed to bootstrap ${record.venue} private order state`,
-            ),
-        {
-          accountId: record.accountId,
-          venue: record.venue,
-        },
-      );
-      this.orderConsumer.onPrivateOrderStreamState(
-        record.accountId,
-        record.venue,
-        {
-          runtimeStatus: "degraded",
-          ready: false,
-          reason: transportReason(error, "auth_failed"),
-        },
-      );
-      const details = buildAcexErrorDetails(
-        {
-          accountId: record.accountId,
-          venue: record.venue,
-        },
-        error,
-      );
-      throw new AcexError(
-        "ORDER_BOOTSTRAP_FAILED",
-        formatAcexErrorMessage(
-          `Failed to bootstrap order data: ${record.accountId}`,
-          details,
-        ),
-        {
-          cause: error,
-          details,
-        },
-      );
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      this.handleBootstrapOrdersError(record, error);
     }
+  }
+
+  private handleBootstrapOrdersError(
+    record: PrivateSubscriptionRecord,
+    error: unknown,
+  ): never {
+    record.orderReady = false;
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error(`Failed to bootstrap ${record.venue} private order state`),
+      {
+        accountId: record.accountId,
+        venue: record.venue,
+      },
+    );
+    this.orderConsumer.onPrivateOrderStreamState(
+      record.accountId,
+      record.venue,
+      {
+        runtimeStatus: "degraded",
+        ready: false,
+        reason: transportReason(error, "auth_failed"),
+      },
+    );
+    const details = buildAcexErrorDetails(
+      {
+        accountId: record.accountId,
+        venue: record.venue,
+      },
+      error,
+    );
+    throw new AcexError(
+      "ORDER_BOOTSTRAP_FAILED",
+      formatAcexErrorMessage(
+        `Failed to bootstrap order data: ${record.accountId}`,
+        details,
+      ),
+      {
+        cause: error,
+        details,
+      },
+    );
   }
 }

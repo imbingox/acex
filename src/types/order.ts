@@ -48,6 +48,7 @@ export interface UnsubscribeOrdersInput {
 
 export interface GetOrderInput {
   accountId: string;
+  symbol?: string;
   orderId?: string;
   clientOrderId?: string;
 }

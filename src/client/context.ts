@@ -1,6 +1,7 @@
 import type {
   RawAccountBootstrap,
   RawAccountUpdate,
+  RawOpenOrdersSnapshot,
   RawOrderUpdate,
 } from "../adapters/types.ts";
 import type {
@@ -10,6 +11,7 @@ import type {
   CancelOrderInput,
   CreateOrderInput,
   HealthEvent,
+  OrderSnapshot,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
   Venue,
@@ -77,7 +79,13 @@ export interface PrivateAccountDataConsumer {
     accountId: string,
     venue: Venue,
     update: RawAccountUpdate,
-    options?: { preserveStatus?: boolean },
+    options?: { preserveStatus?: boolean; requestStartedAt?: number },
+  ): void;
+  onPrivateAccountReconcile(
+    accountId: string,
+    venue: Venue,
+    snapshot: RawAccountBootstrap,
+    options: { requestStartedAt: number; preserveStatus?: boolean },
   ): void;
   onPrivateAccountStreamState(
     accountId: string,
@@ -91,13 +99,22 @@ export interface PrivateOrderDataConsumer {
   onPrivateOrderBootstrap(
     accountId: string,
     venue: Venue,
-    snapshots: RawOrderUpdate[],
-  ): void;
+    snapshot: RawOpenOrdersSnapshot,
+    options: { requestStartedAt: number; preserveStatus?: boolean },
+  ): OrderSnapshot[];
+  onPrivateOrderReconcile(
+    accountId: string,
+    venue: Venue,
+    snapshot: RawOpenOrdersSnapshot,
+    options: { requestStartedAt: number; preserveStatus?: boolean },
+  ): OrderSnapshot[];
   onPrivateOrderUpdate(
     accountId: string,
     venue: Venue,
     update: RawOrderUpdate,
+    options?: { requestStartedAt?: number; preserveStatus?: boolean },
   ): void;
+  getPrivateOpenOrders(accountId: string): OrderSnapshot[];
   onPrivateOrderStreamState(
     accountId: string,
     venue: Venue,

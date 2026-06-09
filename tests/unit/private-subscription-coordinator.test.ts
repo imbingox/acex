@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import type {
+  FetchOrderRequest,
   PrivateUserDataAdapter,
   RawAccountBootstrap,
   RawAccountUpdate,
+  RawOpenOrdersSnapshot,
   RawOrderUpdate,
   StreamHandle,
 } from "../../src/adapters/types.ts";
@@ -23,6 +25,7 @@ import type {
   CancelOrderInput,
   CreateOrderInput,
   HealthEvent,
+  OrderSnapshot,
   Venue,
   VenueAccountCapabilities,
   VenueOrderCapabilities,
@@ -129,6 +132,21 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
     this.updates.push(update);
   }
 
+  onPrivateAccountReconcile(
+    _accountId: string,
+    _venue: Venue,
+    bootstrap: RawAccountBootstrap,
+  ): void {
+    this.trace?.push("account-reconcile");
+    this.updates.push({
+      balances: bootstrap.balances,
+      positions: bootstrap.positions,
+      risk: bootstrap.risk,
+      exchangeTs: bootstrap.exchangeTs,
+      receivedAt: bootstrap.receivedAt,
+    });
+  }
+
   onPrivateAccountStreamState(
     _accountId: string,
     _venue: Venue,
@@ -139,10 +157,43 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
 }
 
 class StubOrderConsumer implements PrivateOrderDataConsumer {
+  reconciles = 0;
+  updates: RawOrderUpdate[] = [];
+  states: PrivateSubscriptionState[] = [];
+
+  constructor(private readonly disappeared: OrderSnapshot[] = []) {}
+
   onPrivateOrderPending(): void {}
-  onPrivateOrderBootstrap(): void {}
-  onPrivateOrderUpdate(): void {}
-  onPrivateOrderStreamState(): void {}
+
+  onPrivateOrderBootstrap(): OrderSnapshot[] {
+    this.reconciles += 1;
+    return this.disappeared;
+  }
+
+  onPrivateOrderReconcile(): OrderSnapshot[] {
+    this.reconciles += 1;
+    return this.disappeared;
+  }
+
+  onPrivateOrderUpdate(
+    _accountId: string,
+    _venue: Venue,
+    update: RawOrderUpdate,
+  ): void {
+    this.updates.push(update);
+  }
+
+  getPrivateOpenOrders(): OrderSnapshot[] {
+    return [];
+  }
+
+  onPrivateOrderStreamState(
+    _accountId: string,
+    _venue: Venue,
+    state: PrivateSubscriptionState,
+  ): void {
+    this.states.push(state);
+  }
 }
 
 class StubBinanceAdapter implements PrivateUserDataAdapter {
@@ -174,6 +225,9 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     clientOrderId: true,
   };
   refreshCalls = 0;
+  reconcileCalls = 0;
+  fetchOpenOrdersCalls = 0;
+  fetchOrderCalls = 0;
   bootstrapCalls = 0;
   createStreamCalls = 0;
   closeCalls = 0;
@@ -207,8 +261,45 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     });
   }
 
+  reconcileAccount(): Promise<RawAccountBootstrap> {
+    this.reconcileCalls += 1;
+    this.trace?.push("reconcile-account");
+    return Promise.resolve({
+      balances: [],
+      positions: [],
+      receivedAt: Date.now(),
+    });
+  }
+
   bootstrapOpenOrders(): Promise<RawOrderUpdate[]> {
     return Promise.resolve([]);
+  }
+
+  fetchOpenOrders(): Promise<RawOpenOrdersSnapshot> {
+    this.fetchOpenOrdersCalls += 1;
+    this.trace?.push("fetch-open-orders");
+    return Promise.resolve({
+      orders: [],
+      snapshotReceivedAt: Date.now(),
+    });
+  }
+
+  fetchOrder(
+    _credentials: AccountCredentials,
+    _request: FetchOrderRequest,
+  ): Promise<RawOrderUpdate | undefined> {
+    this.fetchOrderCalls += 1;
+    return Promise.resolve({
+      orderId: "1001",
+      clientOrderId: "cid-1001",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "LIMIT",
+      status: "filled",
+      amount: "1",
+      filled: "1",
+      receivedAt: Date.now(),
+    });
   }
 
   createOrder(
@@ -257,6 +348,16 @@ class StubNoRefreshBinanceAdapter extends StubBinanceAdapter {
   }
 }
 
+class StubBootstrapReconcileBinanceAdapter extends StubBinanceAdapter {
+  constructor(trace?: string[]) {
+    super(trace);
+    Object.defineProperty(this, "reconcileAccount", {
+      value: undefined,
+      configurable: true,
+    });
+  }
+}
+
 class StubPollingBinanceAdapter extends StubNoRefreshBinanceAdapter {
   override readonly accountCapabilities: VenueAccountCapabilities = {
     register: "supported",
@@ -268,6 +369,71 @@ class StubPollingBinanceAdapter extends StubNoRefreshBinanceAdapter {
     lending: "unsupported",
     credentialsRequired: true,
   };
+}
+
+class SlowFetchOrderBinanceAdapter extends StubBinanceAdapter {
+  startedResolvers: Array<() => void> = [];
+  releaseFetches: Array<() => void> = [];
+
+  override fetchOrder(
+    _credentials: AccountCredentials,
+    request: FetchOrderRequest,
+  ): Promise<RawOrderUpdate | undefined> {
+    this.fetchOrderCalls += 1;
+    this.startedResolvers.shift()?.();
+    return new Promise((resolve) => {
+      this.releaseFetches.push(() =>
+        resolve({
+          orderId: request.orderId,
+          clientOrderId: request.clientOrderId,
+          symbol: request.symbol,
+          side: "buy",
+          type: "LIMIT",
+          status: "filled",
+          amount: "1",
+          filled: "1",
+          receivedAt: Date.now(),
+        }),
+      );
+    });
+  }
+}
+
+class SlowBootstrapAccountBinanceAdapter extends StubBinanceAdapter {
+  bootstrapStartedResolvers: Array<() => void> = [];
+  releaseBootstraps: Array<() => void> = [];
+
+  override bootstrapAccount(): Promise<RawAccountBootstrap> {
+    this.bootstrapCalls += 1;
+    this.bootstrapStartedResolvers.shift()?.();
+    return new Promise((resolve) => {
+      this.releaseBootstraps.push(() =>
+        resolve({
+          balances: [],
+          positions: [],
+          receivedAt: Date.now(),
+        }),
+      );
+    });
+  }
+}
+
+class SlowOpenOrdersBinanceAdapter extends StubBinanceAdapter {
+  fetchOpenOrdersStartedResolvers: Array<() => void> = [];
+  releaseOpenOrders: Array<() => void> = [];
+
+  override fetchOpenOrders(): Promise<RawOpenOrdersSnapshot> {
+    this.fetchOpenOrdersCalls += 1;
+    this.fetchOpenOrdersStartedResolvers.shift()?.();
+    return new Promise((resolve) => {
+      this.releaseOpenOrders.push(() =>
+        resolve({
+          orders: [],
+          snapshotReceivedAt: Date.now(),
+        }),
+      );
+    });
+  }
 }
 
 class StubJuplendAdapter implements PrivateUserDataAdapter {
@@ -393,6 +559,7 @@ test("websocket-like account subscriptions start the stream before bootstrapping
     {
       binance: {
         riskPollIntervalMs: 5,
+        privateReconcileIntervalMs: 0,
       },
     },
   );
@@ -414,6 +581,291 @@ test("websocket-like account subscriptions start the stream before bootstrapping
   expect(adapter.refreshCalls).toBeGreaterThan(0);
 });
 
+test("private reconcile polling runs by default and can be disabled independently", async () => {
+  const context = new StubContext();
+  const enabledAdapter = new StubBinanceAdapter();
+  const enabledCoordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [enabledAdapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  );
+
+  await enabledCoordinator.subscribeAccountFeed("main-binance");
+  await enabledCoordinator.subscribeOrderFeed("main-binance");
+  await Bun.sleep(20);
+  enabledCoordinator.unsubscribeOrderFeed("main-binance");
+  enabledCoordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(enabledAdapter.reconcileCalls).toBeGreaterThan(0);
+  expect(enabledAdapter.fetchOpenOrdersCalls).toBeGreaterThan(0);
+
+  const disabledAdapter = new StubBinanceAdapter();
+  const disabledCoordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [disabledAdapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 5,
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  await disabledCoordinator.subscribeAccountFeed("main-binance");
+  await disabledCoordinator.subscribeOrderFeed("main-binance");
+  await Bun.sleep(20);
+  disabledCoordinator.unsubscribeOrderFeed("main-binance");
+  disabledCoordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(disabledAdapter.refreshCalls).toBeGreaterThan(0);
+  expect(disabledAdapter.reconcileCalls).toBe(0);
+  expect(disabledAdapter.fetchOpenOrdersCalls).toBe(1);
+});
+
+test("private reconcile polling uses bootstrapAccount fallback when reconcileAccount is absent", async () => {
+  const context = new StubContext();
+  const adapter = new StubBootstrapReconcileBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(adapter.bootstrapCalls).toBeGreaterThan(1);
+});
+
+test("private reconcile polling stops after unsubscribe cleanup", async () => {
+  const context = new StubContext();
+  const adapter = new StubBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("main-binance");
+  const reconcileCallsAfterUnsubscribe = adapter.reconcileCalls;
+  await Bun.sleep(20);
+
+  expect(adapter.reconcileCalls).toBe(reconcileCallsAfterUnsubscribe);
+});
+
+test("terminal backfill checks reconcile generation before each REST request", async () => {
+  const disappeared: OrderSnapshot[] = Array.from(
+    { length: 5 },
+    (_, index) => ({
+      accountId: "main-binance",
+      venue: "binance",
+      orderId: `${1001 + index}`,
+      clientOrderId: `cid-${1001 + index}`,
+      symbol: index === 1 ? "ETH/USDT:USDT" : "BTC/USDT:USDT",
+      side: "buy",
+      type: "LIMIT",
+      status: "open",
+      amount: "1",
+      filled: "0",
+      receivedAt: Date.now(),
+      updatedAt: Date.now(),
+      seq: 1,
+    }),
+  );
+  const context = new StubContext();
+  const adapter = new SlowFetchOrderBinanceAdapter();
+  const firstBatchStarted = Array.from(
+    { length: 4 },
+    () =>
+      new Promise<void>((resolve) => {
+        adapter.startedResolvers.push(resolve);
+      }),
+  );
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(disappeared),
+    {
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  const subscribePromise = coordinator
+    .subscribeOrderFeed("main-binance")
+    .catch(() => {});
+  await Promise.all(firstBatchStarted);
+  expect(adapter.fetchOrderCalls).toBe(4);
+
+  coordinator.unsubscribeOrderFeed("main-binance");
+  adapter.releaseFetches.shift()?.();
+  await Bun.sleep(0);
+
+  expect(adapter.fetchOrderCalls).toBe(4);
+  for (const release of adapter.releaseFetches.splice(0)) {
+    release();
+  }
+  await subscribePromise;
+});
+
+test("account bootstrap ignores stale generation after client stop", async () => {
+  const trace: string[] = [];
+  const context = new StubContext();
+  const adapter = new SlowBootstrapAccountBinanceAdapter();
+  const accountConsumer = new StubAccountConsumer(trace);
+  const bootstrapStarted = new Promise<void>((resolve) => {
+    adapter.bootstrapStartedResolvers.push(resolve);
+  });
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 5,
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  const { scheduled } = await withSetTimeoutCounter(async () => {
+    const subscribePromise = coordinator.subscribeAccountFeed("main-binance");
+    await bootstrapStarted;
+    coordinator.onClientStopping();
+    expect(adapter.releaseBootstraps).toHaveLength(1);
+    adapter.releaseBootstraps.shift()?.();
+    await subscribePromise;
+  });
+
+  expect(trace).not.toContain("account-bootstrap");
+  expect(context.errors).toHaveLength(0);
+  expect(scheduled).toBe(0);
+});
+
+test("order bootstrap ignores stale generation after client stop", async () => {
+  const context = new StubContext();
+  const adapter = new SlowOpenOrdersBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const fetchStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    {
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  const subscribePromise = coordinator.subscribeOrderFeed("main-binance");
+  await fetchStarted;
+  coordinator.onClientStopping();
+  expect(adapter.releaseOpenOrders).toHaveLength(1);
+  adapter.releaseOpenOrders.shift()?.();
+  await subscribePromise;
+
+  expect(orderConsumer.reconciles).toBe(0);
+  expect(context.errors).toHaveLength(0);
+});
+
+test("unsubscribing account does not cancel an in-flight order bootstrap", async () => {
+  const context = new StubContext();
+  const adapter = new SlowOpenOrdersBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const fetchStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    {
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  const subscribeOrdersPromise = coordinator.subscribeOrderFeed("main-binance");
+  await fetchStarted;
+  coordinator.unsubscribeAccountFeed("main-binance");
+  expect(adapter.releaseOpenOrders).toHaveLength(1);
+  adapter.releaseOpenOrders.shift()?.();
+  await subscribeOrdersPromise;
+
+  expect(orderConsumer.reconciles).toBe(1);
+  expect(context.errors).toHaveLength(0);
+});
+
+test("unsubscribing orders does not cancel an in-flight account bootstrap", async () => {
+  const trace: string[] = [];
+  const context = new StubContext();
+  const adapter = new SlowBootstrapAccountBinanceAdapter();
+  const accountConsumer = new StubAccountConsumer(trace);
+  const bootstrapStarted = new Promise<void>((resolve) => {
+    adapter.bootstrapStartedResolvers.push(resolve);
+  });
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    new StubOrderConsumer(),
+    {
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  const subscribeAccountPromise =
+    coordinator.subscribeAccountFeed("main-binance");
+  await coordinator.subscribeOrderFeed("main-binance");
+  await bootstrapStarted;
+  coordinator.unsubscribeOrderFeed("main-binance");
+  expect(adapter.releaseBootstraps).toHaveLength(1);
+  adapter.releaseBootstraps.shift()?.();
+  await subscribeAccountPromise;
+
+  expect(trace).toContain("account-bootstrap");
+  expect(context.errors).toHaveLength(0);
+});
+
 test("polling-like account subscriptions bootstrap before stream startup and do not schedule refresh polling", async () => {
   const trace: string[] = [];
   const context = new StubContext();
@@ -426,6 +878,7 @@ test("polling-like account subscriptions bootstrap before stream startup and do 
     {
       binance: {
         riskPollIntervalMs: 5,
+        privateReconcileIntervalMs: 0,
       },
     },
   );
@@ -454,6 +907,7 @@ test("websocket-like adapters without refreshAccount do not schedule refresh pol
     {
       binance: {
         riskPollIntervalMs: 5,
+        privateReconcileIntervalMs: 0,
       },
     },
   );

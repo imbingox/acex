@@ -95,6 +95,7 @@ export interface AccountRuntimeOptions {
   listenKeyKeepAliveMs?: number;
   binance?: {
     riskPollIntervalMs?: number;
+    privateReconcileIntervalMs?: number;
   };
   juplend?: {
     pollIntervalMs?: number;

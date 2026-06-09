@@ -959,3 +959,36 @@ Implemented Binance private REST reconciliation for account and order convergenc
 ### Next Steps
 
 - None - task complete
+
+
+## Session 27: OrderManager 存储分层与 closed 订单裁剪
+
+**Date**: 2026-06-09
+**Task**: OrderManager 存储分层与 closed 订单裁剪
+**Branch**: `feat/order-manager-store-tiering`
+
+### Summary
+
+重构 OrderManager 内部存储:open/closed 两表按 symbol 嵌套 + 复合身份三索引((symbol,orderId) 精确 / orderId-only 歧义 / clientOrderId 一对多覆盖 open+closed)+ closed 按 symbol FIFO 批量裁剪(CreateClientOptions.order.maxClosedOrdersPerSymbol,默认 500)+ 无 orderId 终态单 provisional 兜底。codex 实现(2 阶段)、Claude 逐段 review、codex 总体审核挑出并修复 3 个 cid 复用边界 bug(cid-only 归并 retained closed、seq 跨订单比较、provisional warning)、codex 复审通过。179 测试全绿,patch changeset,PR #54(stacked on feat/binance-open-orders-reconcile)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `89f846e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

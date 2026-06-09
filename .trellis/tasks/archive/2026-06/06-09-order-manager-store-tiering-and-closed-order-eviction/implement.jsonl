@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "订单执行/存储/生命周期与事件语义的核心契约;本任务要在此记录两表、复合身份、按symbol裁剪、cid查询语义变化、裁剪后迟到事件、三表演进触发条件"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "需新增'终态更新应带orderId'约定,并确认orderId/clientOrderId presence契约"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "OrderLocation、三索引、maxClosedOrdersPerSymbol option 与不可变快照的类型设计需遵循 acex 类型安全规范"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "无orderId终态单的provisional兜底与告警/丢弃处理需符合错误处理约定"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "provisional兜底/丢弃与裁剪相关 warning 日志需符合日志规范"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "src/ 重构需配套 patch changeset 的发布约定"}
+{"file": ".trellis/tasks/06-09-order-manager-store-tiering-and-closed-order-eviction/research/binance-client-order-id-behavior.md", "reason": "cid 仅 open 内唯一/可复用/ADL 字面量、orderId per-symbol 唯一——索引与 closed 主键设计依据"}
+{"file": ".trellis/tasks/06-09-order-manager-store-tiering-and-closed-order-eviction/research/order-key-convention.md", "reason": "复合身份/双索引主流模式依据,以及本地 cid 目标态背景"}
+{"file": ".trellis/tasks/06-09-order-manager-store-tiering-and-closed-order-eviction/research/codex-prd-review.md", "reason": "实现必须对照的修正点(复合orderId索引、cid一对多、全量snapshot事件、option接入、N normalize、helper化、provisional兜底)与测试清单"}

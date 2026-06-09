@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
-- **Last Active**: 2026-06-08
+- **Total Sessions**: 26
+- **Last Active**: 2026-06-09
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~927 | Active |
+| `journal-1.md` | ~961 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-06-09 | Binance private REST reconciliation | `3b01486`, `95ae3f2` | `feat/binance-open-orders-reconcile` |
 | 25 | 2026-06-08 | Binance TradFi public market data | `153e2d8` | `feat/binance-tradfi-public-market` |
 | 24 | 2026-06-05 | AcexError 根因透传 | `d874b29` | `feat/acex-error-details` |
 | 23 | 2026-06-03 | venue server time 接口 (client.market.fetchServerTime) | `dac87aa`, `89b38ac` | `feat/venue-server-time` |

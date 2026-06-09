@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "核验存储/生命周期/事件(snapshot_replaced 全量)语义与裁剪行为是否符合契约"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核验'终态应带orderId'契约与 orderId/clientOrderId presence 处理"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核验 OrderLocation/索引/option 类型与不可变快照的类型安全"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量基线核验(测试覆盖、复杂度、命名一致性)"}
+{"file": ".trellis/tasks/06-09-order-manager-store-tiering-and-closed-order-eviction/research/codex-prd-review.md", "reason": "逐条核对 codex 修正点与遗漏测试建议是否全部落实"}

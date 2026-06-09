@@ -135,7 +135,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       l1ReconnectMaxDelayMs: options.market?.l1ReconnectMaxDelayMs,
     });
     this.accountManager = new AccountManagerImpl(this);
-    this.orderManager = new OrderManagerImpl(this);
+    this.orderManager = new OrderManagerImpl(this, options.order);
     this.privateCoordinator = new PrivateSubscriptionCoordinator(
       this,
       privateAdapters,

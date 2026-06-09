@@ -100,7 +100,7 @@ const risk = client.account.getRiskSnapshot("main-binance");
 const openOrders = client.order.getOpenOrders("main-binance");
 ```
 
-Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护。
+Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护；默认每 60s 还会用 `/papi/v1/balance`、`/papi/v1/account`、`/papi/v1/um/positionRisk` 和订单 REST 接口做 private reconcile。Binance 全账户 `/papi/v1/um/openOrders` 不带 symbol 时 request weight 较高，默认 60s 是保守值。
 
 ### 2.4 注册 Juplend 只读账户
 
@@ -241,6 +241,7 @@ const client = createClient({
     listenKeyKeepAliveMs: 30 * 60_000,
     binance: {
       riskPollIntervalMs: 5_000,
+      privateReconcileIntervalMs: 60_000,
     },
     juplend: {
       pollIntervalMs: 30_000,
@@ -251,7 +252,7 @@ const client = createClient({
 });
 ```
 
-`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 reactive limiter。`sandbox`、`logger`、`logLevel` 目前是预留位。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 reactive limiter。Binance `riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
 ### 4.2 `start()` / `stop()`
 
@@ -391,7 +392,7 @@ interface AccountManager {
 
 `AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，数组视图用 `getBalances()`。
 
-Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh 的组合。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
+Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
 
 Account 事件用于消费余额、仓位、风险或全量快照替换：
 
@@ -437,7 +438,7 @@ interface OrderManager {
 
 `createOrder()` 不会自动纠偏。调用方应先用 `MarketDefinition.priceStep`、`amountStep`、`minAmount`、`minNotional` 和 `normalizeOrderInput()` 处理输入。交易所拒单会包装成 `ORDER_CREATE_FAILED`。
 
-Order 事件用于消费订单状态变化和 open orders 全量替换：
+Order 事件用于消费订单状态变化和 open orders 快照校准。Binance private reconcile 会先用 `/papi/v1/um/openOrders` 校验当前 open set；本地 open order 从 open set 消失时，SDK 会优先查询单笔订单终态并发布 `order.filled` / `order.canceled` 等事件。若 Binance retention / not found 导致无法证明终态，SDK 不会合成 filled/canceled，而是保留原 snapshot 并把 order status 标记为 `degraded`，下一轮继续尝试。
 
 ```ts
 for await (const event of client.order.events.updates({
@@ -573,6 +574,7 @@ interface CreateClientOptions {
     listenKeyKeepAliveMs?: number;
     binance?: {
       riskPollIntervalMs?: number;
+      privateReconcileIntervalMs?: number;
     };
     juplend?: {
       pollIntervalMs?: number;

@@ -60,13 +60,14 @@ await client.stop();
 
 ### 同一个 client 同时使用 Binance + Juplend
 
-`createClient({ account: { binance: { riskPollIntervalMs }, juplend: { pollIntervalMs, rpcUrl, jupApiKey } } })` 只是分别配置 Binance 风险/仓位校准间隔和 Juplend 账户 polling / RPC / Jup API，不代表这个 client 只能注册某个 venue。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。
+`createClient({ account: { binance: { riskPollIntervalMs, privateReconcileIntervalMs }, juplend: { pollIntervalMs, rpcUrl, jupApiKey } } })` 只是分别配置 Binance 风险/仓位校准、Binance private REST 对账和 Juplend 账户 polling / RPC / Jup API，不代表这个 client 只能注册某个 venue。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。
 
 ```ts
 const client = createClient({
   account: {
     binance: {
       riskPollIntervalMs: 5_000,
+      privateReconcileIntervalMs: 60_000,
     },
     juplend: {
       pollIntervalMs: 30_000,

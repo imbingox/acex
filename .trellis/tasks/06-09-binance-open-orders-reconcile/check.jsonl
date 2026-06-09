@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Quality gate commands and backend layer expectations."}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "Verify new reconcile logic stays in the correct layer and does not leak adapter types."}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "Verify coordinator/adapter behavior against private stream, REST retry, and error-state contracts."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify reconcile failures publish and wrap errors consistently with transport/venue detail contracts."}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "Verify order cache synchronization and command semantics remain stable."}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Verify any public option/type changes remain type-safe."}
+{"file": ".trellis/tasks/06-09-binance-open-orders-reconcile/research/binance-open-orders-reconcile.md", "reason": "Validate tests/docs reflect Binance REST reconcile request weights and lifecycle semantics."}

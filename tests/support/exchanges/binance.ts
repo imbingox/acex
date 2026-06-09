@@ -347,11 +347,20 @@ export function installBinancePrivateAccountInfra(options?: {
   failCancelOrder?: boolean;
   failCancelAllOrders?: boolean;
   balance?: unknown;
+  balanceResponses?: unknown[];
+  balanceDelayMs?: number;
   account?: unknown;
   accountResponses?: unknown[];
+  accountDelayMs?: number;
   umPositions?: unknown;
   umPositionResponses?: unknown[];
+  umPositionDelayMs?: number;
   openOrders?: unknown;
+  openOrderResponses?: unknown[];
+  openOrdersDelayMs?: number;
+  queryOrder?: unknown;
+  queryOrderResponses?: unknown[];
+  failQueryOrder?: boolean;
   createOrder?: unknown;
   cancelOrder?: unknown;
   cancelAllOrders?: unknown;
@@ -363,6 +372,9 @@ export function installBinancePrivateAccountInfra(options?: {
 
   let accountRequestCount = 0;
   let umPositionRequestCount = 0;
+  let balanceRequestCount = 0;
+  let openOrdersRequestCount = 0;
+  let queryOrderRequestCount = 0;
 
   const nextResponse = (
     responses: unknown[] | undefined,
@@ -499,8 +511,20 @@ export function installBinancePrivateAccountInfra(options?: {
 
       switch (`${method} ${url.pathname}`) {
         case "GET /papi/v1/balance":
-          return jsonResponse(options?.balance ?? binanceFixtures.papi.balance);
+          if (options?.balanceDelayMs) {
+            await Bun.sleep(options.balanceDelayMs);
+          }
+          return jsonResponse(
+            nextResponse(
+              options?.balanceResponses,
+              options?.balance ?? binanceFixtures.papi.balance,
+              balanceRequestCount++,
+            ),
+          );
         case "GET /papi/v1/account":
+          if (options?.accountDelayMs) {
+            await Bun.sleep(options.accountDelayMs);
+          }
           return jsonResponse(
             nextResponse(
               options?.accountResponses,
@@ -509,6 +533,9 @@ export function installBinancePrivateAccountInfra(options?: {
             ),
           );
         case "GET /papi/v1/um/positionRisk":
+          if (options?.umPositionDelayMs) {
+            await Bun.sleep(options.umPositionDelayMs);
+          }
           return jsonResponse(
             nextResponse(
               options?.umPositionResponses,
@@ -517,8 +544,47 @@ export function installBinancePrivateAccountInfra(options?: {
             ),
           );
         case "GET /papi/v1/um/openOrders":
+          if (options?.openOrdersDelayMs) {
+            await Bun.sleep(options.openOrdersDelayMs);
+          }
           return jsonResponse(
-            options?.openOrders ?? binanceFixtures.papi.openOrders,
+            nextResponse(
+              options?.openOrderResponses,
+              options?.openOrders ?? binanceFixtures.papi.openOrders,
+              openOrdersRequestCount++,
+            ),
+          );
+        case "GET /papi/v1/um/order":
+          if (options?.failQueryOrder) {
+            return textResponse(
+              '{"code":-2013,"msg":"Order does not exist."}',
+              {
+                status: 400,
+                statusText: "Bad Request",
+              },
+            );
+          }
+          return jsonResponse(
+            nextResponse(
+              options?.queryOrderResponses,
+              options?.queryOrder ?? {
+                symbol: "BTCUSDT",
+                orderId: 1001,
+                clientOrderId: "cid-1001",
+                side: "BUY",
+                type: "LIMIT",
+                status: "FILLED",
+                price: "100500.00",
+                stopPrice: "0",
+                origQty: "0.020",
+                executedQty: "0.020",
+                avgPrice: "100450.00",
+                reduceOnly: false,
+                positionSide: "BOTH",
+                updateTime: 1710000000500,
+              },
+              queryOrderRequestCount++,
+            ),
           );
         case "POST /papi/v1/um/order":
           return jsonResponse(

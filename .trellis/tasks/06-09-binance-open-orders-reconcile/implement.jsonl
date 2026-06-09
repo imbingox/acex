@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend layer overview and required guideline routing for private coordinator/order changes."}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "Layer boundaries for adding shared private reconciliation coordinator/helper logic."}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "PrivateUserDataAdapter contracts, REST refresh/reconcile semantics, error propagation, and Binance HTTP rules."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Runtime error publication, public error wrapping, and transport/venue error detail rules for reconcile failures."}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "Order command/cache synchronization semantics and Binance PAPI UM order behavior."}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Public option/type updates must preserve narrow unions and explicit status typing."}
+{"file": ".trellis/tasks/06-09-binance-open-orders-reconcile/research/binance-open-orders-reconcile.md", "reason": "Binance private REST/WS reconcile endpoints, request weights, and lifecycle semantics."}

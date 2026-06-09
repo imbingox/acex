@@ -157,10 +157,11 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     expect(request.url.searchParams.has("signature")).toBe(true);
   }
 
+  const accountUpdateTs = Date.now();
   socket.emitJson({
     e: "ACCOUNT_UPDATE",
-    E: 1710000000400,
-    T: 1710000000300,
+    E: accountUpdateTs,
+    T: accountUpdateTs,
     a: {
       B: [
         {
@@ -634,6 +635,390 @@ test("Binance account polling does not mask websocket disconnect status", async 
     accountId: "main-binance",
   });
   await iterator.return?.();
+});
+
+test("Binance full private reconcile removes stale balances and positions", async () => {
+  installBinancePrivateAccountInfra({
+    balanceResponses: [
+      [
+        {
+          asset: "USDT",
+          totalWalletBalance: "1250.50",
+          crossMarginFree: "1000.25",
+          crossMarginLocked: "250.25",
+        },
+        {
+          asset: "BTC",
+          totalWalletBalance: "0.0500",
+          crossMarginFree: "0.0400",
+        },
+      ],
+      [
+        {
+          asset: "USDT",
+          totalWalletBalance: "1250.50",
+          crossMarginFree: "1250.50",
+          crossMarginLocked: "0",
+        },
+        {
+          asset: "BTC",
+          totalWalletBalance: "0",
+          crossMarginFree: "0",
+          crossMarginLocked: "0",
+        },
+      ],
+    ],
+    accountResponses: [
+      {
+        accountEquity: "1400.75",
+        actualEquity: "1300.50",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000000100,
+      },
+      {
+        accountEquity: "1400.75",
+        actualEquity: "1300.50",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000002100,
+      },
+    ],
+    umPositionResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0.010",
+          entryPrice: "100000.10",
+          markPrice: "101000.20",
+          unRealizedProfit: "10.50",
+          liquidationPrice: "80000.00",
+          leverage: "5",
+          notional: "1010.002",
+          positionSide: "BOTH",
+          updateTime: 1710000000200,
+        },
+        {
+          symbol: "ETHUSDT",
+          positionAmt: "1.000",
+          entryPrice: "3000.00",
+          markPrice: "3100.00",
+          unRealizedProfit: "100.00",
+          liquidationPrice: "2000.00",
+          leverage: "3",
+          notional: "3100.00",
+          positionSide: "BOTH",
+          updateTime: 1710000000200,
+        },
+      ],
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0",
+          entryPrice: "100000.10",
+          markPrice: "101000.20",
+          unRealizedProfit: "0",
+          liquidationPrice: "0",
+          leverage: "5",
+          notional: "0",
+          positionSide: "BOTH",
+          updateTime: 1710000002200,
+        },
+      ],
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+
+  expect(client.account.getBalance("main-binance", "BTC")).toBeDefined();
+  expect(client.account.getPositions("main-binance")).toHaveLength(2);
+
+  await waitForCondition(
+    () =>
+      client.account.getBalance("main-binance", "BTC") === undefined &&
+      client.account.getPositions("main-binance").length === 0
+        ? true
+        : undefined,
+    200,
+    "full private reconcile did not remove stale account records",
+  );
+
+  expect(client.account.getBalances("main-binance")).toEqual([
+    expect.objectContaining({
+      asset: "USDT",
+      free: new BigNumber("1250.50").toFixed(),
+    }),
+  ]);
+});
+
+test("successful account reconcile clears previous HTTP degraded status", async () => {
+  installBinancePrivateAccountInfra({
+    balanceResponses: [
+      [
+        {
+          asset: "USDT",
+          totalWalletBalance: "1250.50",
+          crossMarginFree: "1000.25",
+          crossMarginLocked: "250.25",
+        },
+      ],
+      [
+        {
+          asset: "USDT",
+          totalWalletBalance: "1250.50",
+          crossMarginFree: "1250.50",
+          crossMarginLocked: "0",
+        },
+      ],
+    ],
+    accountResponses: [
+      {
+        accountEquity: "1400.75",
+        actualEquity: "1300.50",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000000100,
+      },
+      {
+        accountEquity: "1500.00",
+        actualEquity: "1400.00",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000002100,
+      },
+    ],
+    umPositionResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          positionAmt: "0.010",
+          entryPrice: "100000.10",
+          markPrice: "101000.20",
+          unRealizedProfit: "10.50",
+          liquidationPrice: "80000.00",
+          leverage: "5",
+          notional: "1010.002",
+          positionSide: "BOTH",
+          updateTime: 1710000000200,
+        },
+      ],
+      [],
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  client.account.getAccountStatus("main-binance");
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  socket.dispatchEvent(new ErrorEvent("error", { error: new Error("boom") }));
+  await Bun.sleep(0);
+
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    runtimeStatus: "degraded",
+    reason: "http_failed",
+  });
+
+  await waitForCondition(
+    () =>
+      client.account.getAccountStatus("main-binance")?.runtimeStatus ===
+      "healthy"
+        ? true
+        : undefined,
+    300,
+    "successful account reconcile did not clear degraded status",
+  );
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    runtimeStatus: "healthy",
+    reason: undefined,
+  });
+});
+
+test("account reconnect reconcile does not overwrite newer websocket updates", async () => {
+  installBinancePrivateAccountInfra({
+    balanceDelayMs: 30,
+    accountDelayMs: 30,
+    umPositionDelayMs: 30,
+    balanceResponses: [
+      [
+        {
+          asset: "USDT",
+          totalWalletBalance: "1250.50",
+          crossMarginFree: "1000.25",
+          crossMarginLocked: "250.25",
+        },
+      ],
+      [
+        {
+          asset: "USDT",
+          totalWalletBalance: "1250.50",
+          crossMarginFree: "1000.25",
+          crossMarginLocked: "250.25",
+        },
+      ],
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      binance: {
+        privateReconcileIntervalMs: 0,
+        riskPollIntervalMs: 60_000,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+  expect(client.account.getBalance("main-binance", "USDT")).toMatchObject({
+    total: new BigNumber("1250.50").toFixed(),
+  });
+
+  socket.disconnect();
+  const reconnectSocket = await waitForSocket(PAPI_ACCOUNT_WS_URL, 1, 100);
+  const updateTs = Date.now();
+  reconnectSocket.emitJson({
+    e: "ACCOUNT_UPDATE",
+    E: updateTs,
+    T: updateTs,
+    a: {
+      B: [
+        {
+          a: "USDT",
+          wb: "1300.50",
+          cw: "1050.25",
+        },
+      ],
+      P: [],
+    },
+  });
+
+  await waitForCondition(
+    () =>
+      client.account.getBalance("main-binance", "USDT")?.total === "1300.5"
+        ? true
+        : undefined,
+    200,
+    "websocket account update was not applied during reconnect",
+  );
+  await Bun.sleep(80);
+  expect(client.account.getBalance("main-binance", "USDT")).toMatchObject({
+    total: new BigNumber("1300.50").toFixed(),
+    free: new BigNumber("1050.25").toFixed(),
+  });
+});
+
+test("Binance private reconcile can be disabled without disabling risk polling", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    accountResponses: [
+      {
+        accountEquity: "1400.75",
+        actualEquity: "1300.50",
+        accountInitialMargin: "120.10",
+        accountMaintMargin: "45.20",
+        uniMMR: "31.0",
+        updateTime: 1710000000100,
+      },
+      {
+        accountEquity: "1600.00",
+        actualEquity: "1500.00",
+        accountInitialMargin: "150.00",
+        accountMaintMargin: "60.00",
+        uniMMR: "20.0",
+        updateTime: 1710000001100,
+      },
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        riskPollIntervalMs: 5,
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+
+  await waitForCondition(
+    () =>
+      client.account.getRiskSnapshot("main-binance")?.netEquity === "1500"
+        ? true
+        : undefined,
+    200,
+    "risk polling did not continue after disabling private reconcile",
+  );
+
+  expect(
+    requests.filter((request) => request.url.pathname === "/papi/v1/balance"),
+  ).toHaveLength(1);
 });
 
 test("private subscriptions validate credentials at subscribe time", async () => {

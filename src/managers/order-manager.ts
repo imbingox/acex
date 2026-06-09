@@ -1,5 +1,8 @@
 import BigNumber from "bignumber.js";
-import type { RawOrderUpdate } from "../adapters/types.ts";
+import type {
+  RawOpenOrdersSnapshot,
+  RawOrderUpdate,
+} from "../adapters/types.ts";
 import type {
   AccountAwareManager,
   ClientContext,
@@ -16,6 +19,10 @@ import {
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
+import {
+  canDeleteMissingFromSnapshot,
+  shouldApplyWatermarkedUpdate,
+} from "../internal/watermark.ts";
 import type {
   CancelAllOrdersInput,
   CancelOrderInput,
@@ -46,18 +53,101 @@ function cloneOrderStatus(status: OrderDataStatus): OrderDataStatus {
 }
 
 function getOrderLookupKey(input: {
+  symbol: string;
   orderId?: string;
   clientOrderId?: string;
 }): string | undefined {
   if (input.orderId) {
-    return `order:${input.orderId}`;
+    return `symbol:${input.symbol}:order:${input.orderId}`;
   }
 
   if (input.clientOrderId) {
-    return `client:${input.clientOrderId}`;
+    return `symbol:${input.symbol}:client:${input.clientOrderId}`;
   }
 
   return undefined;
+}
+
+function shouldMatchOrderIdentity(
+  candidate: OrderSnapshot,
+  input: { symbol?: string; orderId?: string; clientOrderId?: string },
+): boolean {
+  if (input.symbol && candidate.symbol !== input.symbol) {
+    return false;
+  }
+
+  return Boolean(
+    (input.orderId && candidate.orderId === input.orderId) ||
+      (input.clientOrderId && candidate.clientOrderId === input.clientOrderId),
+  );
+}
+
+function shouldMatchStoredOrderIdentity(
+  candidate: OrderSnapshot,
+  input: { symbol: string; orderId?: string; clientOrderId?: string },
+): boolean {
+  if (candidate.symbol !== input.symbol) {
+    return false;
+  }
+
+  if (candidate.orderId && input.orderId) {
+    return candidate.orderId === input.orderId;
+  }
+
+  return Boolean(
+    input.clientOrderId &&
+      candidate.clientOrderId === input.clientOrderId &&
+      (!candidate.orderId || !input.orderId),
+  );
+}
+
+function successfulStatus(
+  status: OrderDataStatus,
+  options: {
+    ready?: boolean;
+    lastReceivedAt?: number;
+    lastReadyAt?: number;
+    preserveStatus?: boolean;
+  },
+): OrderDataStatus {
+  const preservesStreamState =
+    options.preserveStatus &&
+    (status.runtimeStatus === "reconnecting" ||
+      status.reason === "ws_disconnected" ||
+      status.reason === "heartbeat_timeout");
+
+  return {
+    ...status,
+    activity: "active",
+    ready: options.ready ?? true,
+    runtimeStatus: preservesStreamState ? status.runtimeStatus : "healthy",
+    reason: preservesStreamState ? status.reason : undefined,
+    lastReceivedAt: options.lastReceivedAt ?? status.lastReceivedAt,
+    lastReadyAt: options.preserveStatus
+      ? (status.lastReadyAt ?? options.lastReadyAt)
+      : (options.lastReadyAt ?? status.lastReadyAt),
+    inactiveSince: undefined,
+  };
+}
+
+function isOpenOrder(snapshot: OrderSnapshot): boolean {
+  return snapshot.status === "open" || snapshot.status === "partially_filled";
+}
+
+function orderPriority(status: OrderSnapshot["status"]): number {
+  switch (status) {
+    case "filled":
+      return 5;
+    case "canceled":
+    case "expired":
+      return 4;
+    case "rejected":
+      return 3;
+    case "partially_filled":
+      return 2;
+    case "open":
+      return 1;
+  }
 }
 
 export class OrderManagerImpl
@@ -226,13 +316,22 @@ export class OrderManagerImpl
     }
 
     for (const snapshot of record.snapshots.values()) {
-      if (input.orderId && snapshot.orderId === input.orderId) {
+      if (
+        input.orderId &&
+        shouldMatchOrderIdentity(snapshot, {
+          symbol: input.symbol,
+          orderId: input.orderId,
+        })
+      ) {
         return snapshot;
       }
 
       if (
         input.clientOrderId &&
-        snapshot.clientOrderId === input.clientOrderId
+        shouldMatchOrderIdentity(snapshot, {
+          symbol: input.symbol,
+          clientOrderId: input.clientOrderId,
+        })
       ) {
         return snapshot;
       }
@@ -252,9 +351,7 @@ export class OrderManagerImpl
         return false;
       }
 
-      return (
-        snapshot.status === "open" || snapshot.status === "partially_filled"
-      );
+      return isOpenOrder(snapshot);
     });
   }
 
@@ -336,40 +433,82 @@ export class OrderManagerImpl
   onPrivateOrderBootstrap(
     accountId: string,
     venue: Venue,
-    snapshots: RawOrderUpdate[],
-  ): void {
+    snapshot: RawOpenOrdersSnapshot,
+    options: { requestStartedAt: number; preserveStatus?: boolean },
+  ): OrderSnapshot[] {
+    return this.onPrivateOrderReconcile(accountId, venue, snapshot, options);
+  }
+
+  onPrivateOrderReconcile(
+    accountId: string,
+    venue: Venue,
+    snapshot: RawOpenOrdersSnapshot,
+    options: { requestStartedAt: number; preserveStatus?: boolean },
+  ): OrderSnapshot[] {
     const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
-      return;
+      return [];
     }
 
-    const nextSnapshots = new Map<string, OrderSnapshot>();
-    for (const update of snapshots) {
-      const snapshot = this.createSnapshot(
+    const openSetKeys = new Set<string>();
+    for (const update of snapshot.orders) {
+      const lookupKey = getOrderLookupKey(update);
+      if (lookupKey) {
+        openSetKeys.add(lookupKey);
+      }
+      const current = this.getExistingSnapshot(record, update);
+      const nextSnapshot = this.applyUpdateToRecord(
+        record,
         accountId,
         venue,
         update,
-        this.getExistingSnapshot(record, update),
+        {
+          requestStartedAt: options.requestStartedAt,
+          preserveStatus: true,
+        },
       );
-      this.setSnapshot(nextSnapshots, snapshot);
+      if (nextSnapshot) {
+        const nextLookupKey = getOrderLookupKey(nextSnapshot);
+        if (nextLookupKey) {
+          openSetKeys.add(nextLookupKey);
+        }
+      } else if (current) {
+        const currentLookupKey = getOrderLookupKey(current);
+        if (currentLookupKey) {
+          openSetKeys.add(currentLookupKey);
+        }
+      }
     }
 
-    record.snapshots = nextSnapshots;
+    const disappeared = [...record.snapshots.values()].filter((order) => {
+      if (!isOpenOrder(order)) {
+        return false;
+      }
+
+      const lookupKey = getOrderLookupKey(order);
+      if (!lookupKey || openSetKeys.has(lookupKey)) {
+        return false;
+      }
+
+      return canDeleteMissingFromSnapshot(order, {
+        requestStartedAt: options.requestStartedAt,
+        snapshotExchangeTs: snapshot.snapshotExchangeTs,
+      });
+    });
+
     const orderedSnapshots = [...record.snapshots.values()];
-    const latestTs = orderedSnapshots.reduce(
-      (max, snapshot) => Math.max(max, snapshot.updatedAt),
-      0,
+    const latestTs = Math.max(
+      snapshot.snapshotReceivedAt,
+      orderedSnapshots.reduce(
+        (max, order) => Math.max(max, order.updatedAt),
+        0,
+      ),
     );
-    record.status = {
-      ...record.status,
-      activity: "active",
-      ready: true,
-      runtimeStatus: "healthy",
-      reason: undefined,
+    record.status = successfulStatus(record.status, {
+      preserveStatus: options.preserveStatus,
       lastReceivedAt: latestTs || record.status.lastReceivedAt,
       lastReadyAt: latestTs || this.context.now(),
-      inactiveSince: undefined,
-    };
+    });
 
     const event: OrderSnapshotReplacedEvent = {
       type: "order.snapshot_replaced",
@@ -381,21 +520,37 @@ export class OrderManagerImpl
 
     this.orderBus.publish(event);
     this.publishStatus(record);
+    return disappeared;
+  }
+
+  getPrivateOpenOrders(accountId: string): OrderSnapshot[] {
+    return this.getOpenOrders(accountId);
   }
 
   onPrivateOrderUpdate(
     accountId: string,
     venue: Venue,
     update: RawOrderUpdate,
+    options: { requestStartedAt?: number; preserveStatus?: boolean } = {},
   ): void {
     const record = this.getOrCreateRecord(accountId, venue);
     if (!record.subscribed) {
       return;
     }
 
-    const previous = this.getExistingSnapshot(record, update);
-    const snapshot = this.createSnapshot(accountId, venue, update, previous);
-    this.setSnapshot(record.snapshots, snapshot);
+    const snapshot = this.applyUpdateToRecord(
+      record,
+      accountId,
+      venue,
+      update,
+      {
+        requestStartedAt: options.requestStartedAt,
+        preserveStatus: options.preserveStatus,
+      },
+    );
+    if (!snapshot) {
+      return;
+    }
 
     const eventType =
       snapshot.status === "filled"
@@ -415,16 +570,11 @@ export class OrderManagerImpl
       ts: this.context.now(),
     });
 
-    record.status = {
-      ...record.status,
-      activity: "active",
-      ready: true,
-      runtimeStatus: "healthy",
-      reason: undefined,
+    record.status = successfulStatus(record.status, {
+      preserveStatus: options.preserveStatus,
       lastReceivedAt: snapshot.receivedAt,
       lastReadyAt: snapshot.updatedAt,
-      inactiveSince: undefined,
-    };
+    });
     this.publishStatus(record);
   }
 
@@ -499,17 +649,18 @@ export class OrderManagerImpl
 
   private getExistingSnapshot(
     record: OrderRecord,
-    update: { orderId?: string; clientOrderId?: string },
+    update: { symbol: string; orderId?: string; clientOrderId?: string },
   ): OrderSnapshot | undefined {
-    for (const snapshot of record.snapshots.values()) {
-      if (update.orderId && snapshot.orderId === update.orderId) {
-        return snapshot;
+    const lookupKey = getOrderLookupKey(update);
+    if (lookupKey) {
+      const byPrimaryKey = record.snapshots.get(lookupKey);
+      if (byPrimaryKey) {
+        return byPrimaryKey;
       }
+    }
 
-      if (
-        update.clientOrderId &&
-        snapshot.clientOrderId === update.clientOrderId
-      ) {
+    for (const snapshot of record.snapshots.values()) {
+      if (shouldMatchStoredOrderIdentity(snapshot, update)) {
         return snapshot;
       }
     }
@@ -521,14 +672,52 @@ export class OrderManagerImpl
     snapshots: Map<string, OrderSnapshot>,
     snapshot: OrderSnapshot,
   ): void {
-    const lookupKey =
-      getOrderLookupKey(snapshot) ??
-      getOrderLookupKey({
-        clientOrderId: snapshot.clientOrderId,
-      });
-    if (lookupKey) {
-      snapshots.set(lookupKey, snapshot);
+    const previousKeys: string[] = [];
+    for (const [key, existing] of snapshots.entries()) {
+      if (shouldMatchStoredOrderIdentity(existing, snapshot)) {
+        previousKeys.push(key);
+      }
     }
+    for (const key of previousKeys) {
+      snapshots.delete(key);
+    }
+
+    if (snapshot.orderId) {
+      snapshots.set(
+        `symbol:${snapshot.symbol}:order:${snapshot.orderId}`,
+        snapshot,
+      );
+      return;
+    }
+
+    if (snapshot.clientOrderId) {
+      snapshots.set(
+        `symbol:${snapshot.symbol}:client:${snapshot.clientOrderId}`,
+        snapshot,
+      );
+    }
+  }
+
+  private applyUpdateToRecord(
+    record: OrderRecord,
+    accountId: string,
+    venue: Venue,
+    update: RawOrderUpdate,
+    options: { requestStartedAt?: number; preserveStatus?: boolean } = {},
+  ): OrderSnapshot | undefined {
+    const previous = this.getExistingSnapshot(record, update);
+    if (
+      !shouldApplyWatermarkedUpdate(previous, update, {
+        requestStartedAt: options.requestStartedAt,
+        source: options.requestStartedAt === undefined ? "stream" : "rest",
+      })
+    ) {
+      return undefined;
+    }
+
+    const snapshot = this.createSnapshot(accountId, venue, update, previous);
+    this.setSnapshot(record.snapshots, snapshot);
+    return snapshot;
   }
 
   private createSnapshot(
@@ -538,7 +727,13 @@ export class OrderManagerImpl
     previous?: OrderSnapshot,
   ): OrderSnapshot {
     const amount = new BigNumber(input.amount);
-    const filled = new BigNumber(input.filled);
+    const rawFilled = new BigNumber(input.filled);
+    const filled =
+      previous &&
+      input.exchangeTs !== undefined &&
+      previous.exchangeTs === input.exchangeTs
+        ? BigNumber.maximum(rawFilled, previous.filled)
+        : rawFilled;
     const remaining =
       input.remaining === undefined
         ? amount.minus(filled)
@@ -547,12 +742,12 @@ export class OrderManagerImpl
     return {
       accountId,
       venue,
-      orderId: input.orderId,
-      clientOrderId: input.clientOrderId,
+      orderId: input.orderId ?? previous?.orderId,
+      clientOrderId: input.clientOrderId ?? previous?.clientOrderId,
       symbol: input.symbol,
       side: input.side,
       type: input.type,
-      status: input.status,
+      status: this.mergeOrderStatus(input, previous),
       price:
         input.price === undefined ? previous?.price : toCanonical(input.price),
       triggerPrice:
@@ -573,6 +768,26 @@ export class OrderManagerImpl
       updatedAt: input.receivedAt,
       seq: (previous?.seq ?? 0) + 1,
     };
+  }
+
+  private mergeOrderStatus(
+    input: RawOrderUpdate,
+    previous?: OrderSnapshot,
+  ): OrderSnapshot["status"] {
+    if (!previous) {
+      return input.status;
+    }
+
+    if (
+      input.exchangeTs !== undefined &&
+      previous.exchangeTs !== undefined &&
+      input.exchangeTs === previous.exchangeTs &&
+      orderPriority(input.status) < orderPriority(previous.status)
+    ) {
+      return previous.status;
+    }
+
+    return input.status;
   }
 
   private publishStatus(record: OrderRecord): void {

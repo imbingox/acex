@@ -83,7 +83,7 @@ interface ListenKeyExpirationSummary {
   expiredAt: string;
   expiredListenKeySuffix: string;
   statusAfterDelete: Record<string, unknown>;
-  reconnectedSocketUrl: string;
+  reconnectedListenKeySuffix: string;
   recoveredStatus: Record<string, unknown>;
   recoveredOpenOrderCount: number;
 }
@@ -116,6 +116,8 @@ const DEFAULT_RECONNECT_WAIT_SEC = 10;
 const CANCEL_ALL_TEST_ORDER_COUNT = 2;
 const BINANCE_PAPI_REST_BASE_URL = "https://papi.binance.com";
 const DEFAULT_RECV_WINDOW = "5000";
+const DELETE_LISTEN_KEY_TIMEOUT_MS = 10_000;
+const LISTEN_KEY_SUMMARY_SUFFIX_LENGTH = 6;
 
 function signQuery(query: string, secret: string): string {
   return createHmac("sha256", secret).update(query).digest("hex");
@@ -131,6 +133,23 @@ function extractListenKey(socketUrl: string): string {
   return listenKey;
 }
 
+function listenKeySuffix(listenKey: string): string {
+  return listenKey.slice(-LISTEN_KEY_SUMMARY_SUFFIX_LENGTH);
+}
+
+function extractListenKeySuffix(socketUrl: string): string {
+  return listenKeySuffix(extractListenKey(socketUrl));
+}
+
+function isAbortOrTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const name = (error as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
 async function deleteListenKey(options: {
   apiKey: string;
   secret: string;
@@ -143,15 +162,28 @@ async function deleteListenKey(options: {
   });
   params.set("signature", signQuery(params.toString(), options.secret));
 
-  const response = await fetch(
-    `${BINANCE_PAPI_REST_BASE_URL}/papi/v1/listenKey?${params.toString()}`,
-    {
-      method: "DELETE",
-      headers: {
-        "X-MBX-APIKEY": options.apiKey,
+  let response: Response;
+  try {
+    response = await fetch(
+      `${BINANCE_PAPI_REST_BASE_URL}/papi/v1/listenKey?${params.toString()}`,
+      {
+        method: "DELETE",
+        headers: {
+          "X-MBX-APIKEY": options.apiKey,
+        },
+        signal: AbortSignal.timeout(DELETE_LISTEN_KEY_TIMEOUT_MS),
       },
-    },
-  );
+    );
+  } catch (error) {
+    if (isAbortOrTimeoutError(error)) {
+      throw new Error(
+        `Timed out deleting Binance PAPI listenKey after ${DELETE_LISTEN_KEY_TIMEOUT_MS}ms`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
   if (!response.ok) {
     throw new Error(
       `Failed to delete listenKey: ${response.status} ${response.statusText} ${await response.text()}`,
@@ -664,57 +696,62 @@ async function smokeOrders(options: {
         );
       }
     } else if (expireListenKeyAt !== undefined) {
+      const expiresWithinDeadline = expireListenKeyAt <= deadline;
       updateEventsAfterFirstEvent += await collectEventsUntil(
         iterator,
-        Math.min(expireListenKeyAt, deadline),
+        expiresWithinDeadline ? expireListenKeyAt : deadline,
         {
           doneLabel: "Order update stream closed unexpectedly",
         },
       );
 
-      const socketToExpire = latestTrackedSocket(socketIndex) ?? socket;
-      const socketCountBeforeDelete = TrackedWebSocket.instances.length;
-      const listenKey = extractListenKey(socketToExpire.url);
-      await deleteListenKey({
-        apiKey: options.apiKey,
-        secret: options.secret,
-        listenKey,
-      });
-      const statusAfterDelete = cloneStatus(
-        options.client.order.getOrderStatus(options.accountId),
-      );
+      if (expiresWithinDeadline) {
+        const socketToExpire = latestTrackedSocket(socketIndex) ?? socket;
+        const socketCountBeforeDelete = TrackedWebSocket.instances.length;
+        const listenKey = extractListenKey(socketToExpire.url);
+        await deleteListenKey({
+          apiKey: options.apiKey,
+          secret: options.secret,
+          listenKey,
+        });
+        const statusAfterDelete = cloneStatus(
+          options.client.order.getOrderStatus(options.accountId),
+        );
 
-      const reconnectedSocket = await waitForRotatedListenKeySocket({
-        previousUrl: socketToExpire.url,
-        minIndex: socketCountBeforeDelete,
-        timeoutMs: options.reconnectWaitMs,
-        label: "Timed out waiting for rotated listenKey recovery websocket",
-      });
+        const reconnectedSocket = await waitForRotatedListenKeySocket({
+          previousUrl: socketToExpire.url,
+          minIndex: socketCountBeforeDelete,
+          timeoutMs: options.reconnectWaitMs,
+          label: "Timed out waiting for rotated listenKey recovery websocket",
+        });
 
-      const recoveredStatus = await waitForCondition(
-        () => {
-          const current = options.client.order.getOrderStatus(
+        const recoveredStatus = await waitForCondition(
+          () => {
+            const current = options.client.order.getOrderStatus(
+              options.accountId,
+            );
+            if (current?.runtimeStatus === "healthy" && current.ready) {
+              return cloneStatus(current);
+            }
+            return undefined;
+          },
+          options.reconnectWaitMs,
+          "Timed out waiting for listenKey recovery",
+        );
+
+        listenKeyExpiration = {
+          expiredAt: new Date().toISOString(),
+          expiredListenKeySuffix: listenKeySuffix(listenKey),
+          statusAfterDelete,
+          reconnectedListenKeySuffix: extractListenKeySuffix(
+            reconnectedSocket.url,
+          ),
+          recoveredStatus,
+          recoveredOpenOrderCount: options.client.order.getOpenOrders(
             options.accountId,
-          );
-          if (current?.runtimeStatus === "healthy" && current.ready) {
-            return cloneStatus(current);
-          }
-          return undefined;
-        },
-        options.reconnectWaitMs,
-        "Timed out waiting for listenKey recovery",
-      );
-
-      listenKeyExpiration = {
-        expiredAt: new Date().toISOString(),
-        expiredListenKeySuffix: listenKey.slice(-6),
-        statusAfterDelete,
-        reconnectedSocketUrl: reconnectedSocket.url,
-        recoveredStatus,
-        recoveredOpenOrderCount: options.client.order.getOpenOrders(
-          options.accountId,
-        ).length,
-      };
+          ).length,
+        };
+      }
 
       if (deadline > Date.now()) {
         updateEventsAfterFirstEvent += await collectEventsUntil(

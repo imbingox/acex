@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "主订单 spec:命令 contract + §6 submitting/本地 cid 演进路径 + 存储分层/复合身份/closed 裁剪场景;本任务在其上实现内部 localOrderId 模型并更新 §6"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "adapter 侧订单契约:终态更新需带 orderId、newClientOrderId/origClientOrderId 处理;本任务改 SDK 生成并发送 cid 需遵守"}
+{"file": ".trellis/tasks/archive/2026-06/06-09-order-manager-store-tiering-and-closed-order-eviction/research/order-key-convention.md", "reason": "Nautilus external-order-claim + dual-identity 反向索引落地参考,直接支撑 D4/D5 统一 localOrderId 主键与外部单补发"}
+{"file": ".trellis/tasks/archive/2026-06/06-09-order-manager-store-tiering-and-closed-order-eviction/research/binance-client-order-id-behavior.md", "reason": "Binance newClientOrderId 约束(≤32、字符集、open-only 唯一可复用、ADL adl_autoclose 字面量),支撑 cid 生成格式与 1:多 索引"}

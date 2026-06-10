@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "核对实现与更新后的 order spec 一致(命令 contract、内部身份模型、§6),含 reconcile/backfill/不可变替换/watermark 不回退"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核对 adapter 终态更新带 orderId、cid 发送/撤单字段契约未破坏"}
+{"file": ".trellis/tasks/archive/2026-06/06-09-order-manager-store-tiering-and-closed-order-eviction/research/binance-client-order-id-behavior.md", "reason": "核对生成的 cid 满足 Binance ≤32/字符集约束、ADL 共享 cid 由 1:多 索引正确区分"}

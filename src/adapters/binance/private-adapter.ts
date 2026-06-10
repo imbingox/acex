@@ -93,6 +93,11 @@ interface BinancePapiOpenOrder {
   time?: number;
 }
 
+interface BinancePapiCancelAllResponse {
+  code?: number | string;
+  msg?: string;
+}
+
 interface BinanceListenKeyResponse {
   listenKey?: string;
 }
@@ -859,21 +864,53 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     request: CancelAllOrdersRequest,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate[]> {
-    const receivedAt = Date.now();
-    const responses = await this.signedRequest<BinancePapiOpenOrder[]>(
+    const symbol = encodeUmSymbol(request.symbol);
+    const openOrders = await this.signedRequest<BinancePapiOpenOrder[]>(
+      "GET",
+      "/papi/v1/um/openOrders",
+      credentials,
+      accountOptions,
+      {
+        symbol,
+      },
+      SAFE_READ_RETRY_POLICY,
+    );
+
+    // Venue responds {code,msg}; returned updates are synthesized from the
+    // pre-fetch. Orders that fill between fetch and cancel are corrected by
+    // the WS terminal event / reconcile.
+    const response = await this.signedRequest<BinancePapiCancelAllResponse>(
       "DELETE",
       "/papi/v1/um/allOpenOrders",
       credentials,
       accountOptions,
       {
-        symbol: encodeUmSymbol(request.symbol),
+        symbol,
       },
       NO_RETRY_POLICY,
     );
 
-    return responses.flatMap((response) => {
-      const mapped = mapOpenOrder(response, receivedAt);
-      return mapped ? [mapped] : [];
+    if (response.code !== undefined && `${response.code}` !== "200") {
+      throw new Error(
+        `Binance PAPI cancelAllOrders failed: code=${response.code}, msg=${
+          response.msg ?? ""
+        }`,
+      );
+    }
+
+    const receivedAt = Date.now();
+    return openOrders.flatMap((order) => {
+      const mapped = mapOpenOrder(order, receivedAt);
+      return mapped
+        ? [
+            {
+              ...mapped,
+              status: "canceled",
+              exchangeTs: undefined,
+              receivedAt,
+            },
+          ]
+        : [];
     });
   }
 

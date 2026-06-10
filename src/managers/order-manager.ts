@@ -140,9 +140,12 @@ function shouldMatchStoredOrderIdentity(
     return candidate.orderId === input.orderId;
   }
 
-  // clientOrderId 只作"尚未拿到 orderId 的订单"的临时身份:已带 orderId 的候选
-  // (含 clientOrderId 复用后躺在 closed 的旧订单)不得被 cid-only 更新归并,否则会
-  // carry-forward 旧 orderId、污染 closed。orderId 后填充时 candidate 仍无 orderId,照常匹配。
+  // clientOrderId is only a temporary identity for an order that does not yet
+  // have an orderId. A candidate that already carries an orderId (including an
+  // old order sitting in closed that reused this clientOrderId) must not be
+  // merged by a cid-only update; otherwise the stale orderId would be
+  // carried forward and pollute closed. When the orderId is later filled in,
+  // the candidate still lacks an orderId and matches normally.
   return Boolean(
     input.clientOrderId &&
       candidate.clientOrderId === input.clientOrderId &&
@@ -1034,8 +1037,10 @@ export class OrderManagerImpl
     record: OrderRecord,
     snapshot: OrderSnapshot,
   ): void {
-    // 终态单缺 orderId 但有 clientOrderId: 用 client key provisional 存储并告警。
-    // adapter 契约要求终态带 orderId(见 adapter-contract.md);仅 cid 无法保证稳定唯一主键。
+    // Terminal order missing orderId but carrying clientOrderId: stored under a
+    // provisional client key and warned. The adapter contract requires terminal
+    // updates to carry orderId (see adapter-contract.md); clientOrderId alone
+    // cannot guarantee a stable unique primary key.
     if (snapshot.orderId || isOpenOrder(snapshot) || !snapshot.clientOrderId) {
       return;
     }
@@ -1238,15 +1243,18 @@ export class OrderManagerImpl
       const snapshotOpen = isOpenOrder(snapshot);
       const latestOpen = isOpenOrder(latest);
       if (snapshotOpen !== latestOpen) {
-        // open 候选绝对优先:当前活跃订单优于历史终态(clientOrderId 复用时旧单已 closed)
+        // Open candidate has absolute priority: current active order takes
+        // precedence over historical terminal state (when clientOrderId is
+        // reused, the old order is already closed).
         if (snapshotOpen) {
           latest = snapshot;
         }
         continue;
       }
 
-      // 同为 open 或同为 closed: 取 updatedAt 最新。
-      // 不能用 seq —— seq 是单订单版本号,跨订单(如复用 cid 的不同订单)不可比。
+      // Both open or both closed: take the latest by updatedAt.
+      // seq must not be used -- seq is a per-order version number and is not
+      // comparable across orders (e.g. different orders that reuse a cid).
       if (snapshot.updatedAt > latest.updatedAt) {
         latest = snapshot;
       }

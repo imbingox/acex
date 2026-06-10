@@ -46,7 +46,8 @@ src/
 ├── managers/                             # Layer 2: 领域 Manager
 │   ├── market-manager.ts
 │   ├── account-manager.ts
-│   └── order-manager.ts
+│   ├── order-manager.ts
+│   └── order/                            # OrderManager 私有子模块（model / identity / snapshot / store / data-status）
 │
 └── client/                               # Layer 3: 编排层
     ├── create-client.ts
@@ -128,7 +129,12 @@ export * from "./types/index.ts";
   - `ManagerLifecycle`：`onClientStarted()` / `onClientStopping(now)`
   - `HealthReporter<T>`：`getStatuses(): T[]`
   - `AccountAwareManager`（仅 account/order）：`onAccountRemoved()` / `onCredentialsUpdated()`
-- Record 类型（如 `MarketRecord`）内联定义在各自 manager 文件中，不共享。
+- 小型 manager 的 Record 类型（如 `MarketRecord`）优先内联定义在各自 manager 文件中，不共享。
+- 当单个 manager 文件开始承担过多内部状态机职责时，可以使用 `src/managers/<domain>/` 私有子模块拆分领域内部纯逻辑。约束：
+  - `<domain>-manager.ts` 仍是该领域唯一 public/runtime 入口，继续持有 record map、事件总线和 `ClientContext` 交互；
+  - 私有子模块不得从 `src/index.ts` 或 public barrel 导出，不跨领域复用；
+  - `model.ts` 这类内部类型文件只服务同一 manager 子域，不放 public contract；
+  - 需要 runtime error、health event、命令错误包装或外部事件发布的逻辑留在 manager 文件中，避免私有 helper 膨胀成第二个 manager。
 
 #### 3.6 `src/client/*` 是编排层
 

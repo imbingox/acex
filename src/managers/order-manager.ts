@@ -1,4 +1,3 @@
-import BigNumber from "bignumber.js";
 import type {
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
@@ -17,7 +16,6 @@ import {
   formatAcexErrorMessage,
 } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
-import { toCanonical } from "../internal/decimal.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
 import { isTransportError } from "../internal/http-client.ts";
 import {
@@ -40,170 +38,41 @@ import type {
   UnsubscribeOrdersInput,
   Venue,
 } from "../types/index.ts";
-
-interface OrderRecord {
-  accountId: string;
-  venue: Venue;
-  subscribed: boolean;
-  openOrders: Map<string, Map<string, OrderSnapshot>>;
-  closedOrders: Map<string, Map<string, OrderSnapshot>>;
-  localOrderLocations: Map<string, OrderLocation>;
-  orderIdIndex: Map<string, Map<string, string>>;
-  orderIdOnlyIndex: Map<string, Set<string>>;
-  clientOrderIdIndex: Map<string, Set<string>>;
-  pendingClientOrderIdIndex: Map<string, PendingOrderClaim>;
-  status: OrderDataStatus;
-}
-
-type OrderTable = "open" | "closed";
-
-interface OrderLocation {
-  table: OrderTable;
-  symbol: string;
-  localOrderId: string;
-}
-
-interface PendingOrderClaim {
-  localOrderId: string;
-  symbol: string;
-}
-
-interface OrderManagerOptions {
-  maxClosedOrdersPerSymbol?: number;
-}
-
-const DEFAULT_MAX_CLOSED_ORDERS_PER_SYMBOL = 500;
-const SDK_CLIENT_ORDER_ID_PREFIX = "acex-";
-const VENUE_CLIENT_ORDER_ID_PATTERN = /^[.A-Z:/a-z0-9_-]{1,32}$/;
-
-const SYSTEM_CLIENT_ORDER_ID_PATTERNS = [
-  /^adl_autoclose$/,
-  /^autoclose-/,
-  /^settlement_autoclose-/,
-];
-
-function cloneOrderStatus(status: OrderDataStatus): OrderDataStatus {
-  return { ...status };
-}
-
-function normalizeMaxClosedOrdersPerSymbol(value: number | undefined): number {
-  return value !== undefined && Number.isInteger(value) && value > 0
-    ? value
-    : DEFAULT_MAX_CLOSED_ORDERS_PER_SYMBOL;
-}
-
-function getOrderLookupKeys(input: {
-  symbol: string;
-  orderId?: string;
-  clientOrderId?: string;
-}): string[] {
-  const keys: string[] = [];
-  if (input.orderId) {
-    keys.push(`symbol:${input.symbol}:order:${input.orderId}`);
-  }
-
-  if (input.clientOrderId) {
-    keys.push(`symbol:${input.symbol}:client:${input.clientOrderId}`);
-  }
-
-  return keys;
-}
-
-function shouldMatchOrderQuery(
-  candidate: OrderSnapshot,
-  input: { symbol?: string; orderId?: string; clientOrderId?: string },
-): boolean {
-  if (input.symbol && candidate.symbol !== input.symbol) {
-    return false;
-  }
-
-  if (input.orderId && candidate.orderId !== input.orderId) {
-    return false;
-  }
-
-  if (input.clientOrderId && candidate.clientOrderId !== input.clientOrderId) {
-    return false;
-  }
-
-  return Boolean(input.orderId || input.clientOrderId);
-}
-
-function shouldMatchStoredOrderIdentity(
-  candidate: OrderSnapshot,
-  input: { symbol: string; orderId?: string; clientOrderId?: string },
-): boolean {
-  if (candidate.symbol !== input.symbol) {
-    return false;
-  }
-
-  if (candidate.orderId && input.orderId) {
-    return candidate.orderId === input.orderId;
-  }
-
-  // clientOrderId is only a temporary identity for an order that does not yet
-  // have an orderId. A candidate that already carries an orderId (including an
-  // old order sitting in closed that reused this clientOrderId) must not be
-  // merged by a cid-only update; otherwise the stale orderId would be
-  // carried forward and pollute closed. When the orderId is later filled in,
-  // the candidate still lacks an orderId and matches normally.
-  return Boolean(
-    input.clientOrderId &&
-      candidate.clientOrderId === input.clientOrderId &&
-      !candidate.orderId,
-  );
-}
-
-function successfulStatus(
-  status: OrderDataStatus,
-  options: {
-    ready?: boolean;
-    lastReceivedAt?: number;
-    lastReadyAt?: number;
-    preserveStatus?: boolean;
-  },
-): OrderDataStatus {
-  const preservesStreamState =
-    options.preserveStatus &&
-    (status.runtimeStatus === "reconnecting" ||
-      status.reason === "ws_disconnected" ||
-      status.reason === "heartbeat_timeout");
-  const ready = options.ready ?? true;
-
-  return {
-    ...status,
-    activity: "active",
-    ready,
-    runtimeStatus: preservesStreamState ? status.runtimeStatus : "healthy",
-    reason: preservesStreamState ? status.reason : undefined,
-    lastReceivedAt: options.lastReceivedAt ?? status.lastReceivedAt,
-    lastReadyAt: ready
-      ? (options.lastReadyAt ??
-        (options.preserveStatus ? status.lastReadyAt : undefined) ??
-        Date.now())
-      : status.lastReadyAt,
-    inactiveSince: undefined,
-  };
-}
-
-function isOpenOrder(snapshot: OrderSnapshot): boolean {
-  return snapshot.status === "open" || snapshot.status === "partially_filled";
-}
-
-function orderPriority(status: OrderSnapshot["status"]): number {
-  switch (status) {
-    case "filled":
-      return 5;
-    case "canceled":
-    case "expired":
-      return 4;
-    case "rejected":
-      return 3;
-    case "partially_filled":
-      return 2;
-    case "open":
-      return 1;
-  }
-}
+import {
+  cloneOrderStatus,
+  createOrderDataStatus,
+  normalizeMaxClosedOrdersPerSymbol,
+  successfulStatus,
+} from "./order/data-status.ts";
+import {
+  getOrderLookupKeys,
+  isSystemClientOrderId,
+  SDK_CLIENT_ORDER_ID_PREFIX,
+  shouldMatchOrderQuery,
+  VENUE_CLIENT_ORDER_ID_PATTERN,
+} from "./order/identity.ts";
+import type {
+  OrderLocation,
+  OrderManagerOptions,
+  OrderRecord,
+} from "./order/model.ts";
+import { createSnapshot, isOpenOrder } from "./order/snapshot.ts";
+import {
+  getAllSnapshots,
+  getExistingSnapshot,
+  getLocalOrderIdForVenueOrderId,
+  getLocationByLocalOrderId,
+  getOpenOrderSnapshots,
+  getSnapshotAtLocation,
+  getSnapshotByLocalOrderId,
+  getSnapshotCount,
+  getSnapshotsForClientOrderId,
+  getSnapshotsForOrderId,
+  isVenueClientOrderIdInUseForOpenOrder,
+  resolveLocalOrderIdForUpdate,
+  selectLatestSnapshot,
+  setSnapshot,
+} from "./order/store.ts";
 
 export class OrderManagerImpl
   implements
@@ -417,13 +286,13 @@ export class OrderManagerImpl
     }
 
     if (input.symbol && input.orderId) {
-      const localOrderId = this.getLocalOrderIdForVenueOrderId(
+      const localOrderId = getLocalOrderIdForVenueOrderId(
         record,
         input.symbol,
         input.orderId,
       );
       const snapshot = localOrderId
-        ? this.getSnapshotByLocalOrderId(record, localOrderId)
+        ? getSnapshotByLocalOrderId(record, localOrderId)
         : undefined;
       if (!snapshot) {
         return undefined;
@@ -440,16 +309,16 @@ export class OrderManagerImpl
     }
 
     if (input.orderId) {
-      return this.selectLatestSnapshot(
-        this.getSnapshotsForOrderId(record, input.orderId).filter((snapshot) =>
+      return selectLatestSnapshot(
+        getSnapshotsForOrderId(record, input.orderId).filter((snapshot) =>
           shouldMatchOrderQuery(snapshot, input),
         ),
       );
     }
 
     if (input.clientOrderId) {
-      return this.selectLatestSnapshot(
-        this.getSnapshotsForClientOrderId(record, input.clientOrderId).filter(
+      return selectLatestSnapshot(
+        getSnapshotsForClientOrderId(record, input.clientOrderId).filter(
           (snapshot) => shouldMatchOrderQuery(snapshot, input),
         ),
       );
@@ -464,11 +333,7 @@ export class OrderManagerImpl
       return [];
     }
 
-    if (symbol) {
-      return [...(record.openOrders.get(symbol)?.values() ?? [])];
-    }
-
-    return this.getOpenOrderSnapshots(record);
+    return getOpenOrderSnapshots(record, symbol);
   }
 
   getOrderStatus(accountId: string): OrderDataStatus | undefined {
@@ -535,8 +400,8 @@ export class OrderManagerImpl
     }
 
     record.status = {
-      ...this.createStatus(accountId, venue, "active"),
-      ready: this.getSnapshotCount(record) > 0,
+      ...createOrderDataStatus(accountId, venue, "active"),
+      ready: getSnapshotCount(record) > 0,
       runtimeStatus: "bootstrap_pending",
       reason: undefined,
       lastReceivedAt: record.status.lastReceivedAt,
@@ -571,7 +436,7 @@ export class OrderManagerImpl
       for (const lookupKey of getOrderLookupKeys(update)) {
         openSetKeys.add(lookupKey);
       }
-      const current = this.getExistingSnapshot(record, update);
+      const current = getExistingSnapshot(record, update);
       const nextSnapshot = this.applyUpdateToRecord(
         record,
         accountId,
@@ -593,7 +458,7 @@ export class OrderManagerImpl
       }
     }
 
-    const disappeared = this.getOpenOrderSnapshots(record).filter((order) => {
+    const disappeared = getOpenOrderSnapshots(record).filter((order) => {
       if (!isOpenOrder(order)) {
         return false;
       }
@@ -612,7 +477,7 @@ export class OrderManagerImpl
       });
     });
 
-    const orderedSnapshots = this.getAllSnapshots(record);
+    const orderedSnapshots = getAllSnapshots(record);
     const latestTs = Math.max(
       snapshot.snapshotReceivedAt,
       orderedSnapshots.reduce(
@@ -748,43 +613,11 @@ export class OrderManagerImpl
       orderIdOnlyIndex: new Map(),
       clientOrderIdIndex: new Map(),
       pendingClientOrderIdIndex: new Map(),
-      status: this.createStatus(accountId, venue, "inactive"),
+      status: createOrderDataStatus(accountId, venue, "inactive"),
     };
 
     this.records.set(accountId, record);
     return record;
-  }
-
-  private createStatus(
-    accountId: string,
-    venue: Venue,
-    activity: "active" | "inactive",
-  ): OrderDataStatus {
-    return {
-      accountId,
-      venue,
-      activity,
-      ready: false,
-      runtimeStatus: activity === "active" ? "bootstrap_pending" : "stopped",
-    };
-  }
-
-  private getExistingSnapshot(
-    record: OrderRecord,
-    update: { symbol: string; orderId?: string; clientOrderId?: string },
-  ): OrderSnapshot | undefined {
-    const location = this.getExistingSnapshotLocation(record, update);
-    return location ? this.getSnapshotAtLocation(record, location) : undefined;
-  }
-
-  private getExistingSnapshotLocation(
-    record: OrderRecord,
-    update: { symbol: string; orderId?: string; clientOrderId?: string },
-  ): OrderLocation | undefined {
-    const resolution = this.resolveLocalOrderIdForUpdate(record, update);
-    return resolution.localOrderId
-      ? record.localOrderLocations.get(resolution.localOrderId)
-      : undefined;
   }
 
   private resolveLocalOrderIdForUpdate(
@@ -795,203 +628,40 @@ export class OrderManagerImpl
     localOrderId?: string;
     source?: "exact" | "pending" | "provisional" | "preferred";
   } {
-    if (update.orderId) {
-      const exact = this.getLocalOrderIdForVenueOrderId(
-        record,
-        update.symbol,
-        update.orderId,
-      );
-      if (exact) {
-        return { localOrderId: exact, source: "exact" };
-      }
-    }
+    const pending =
+      update.clientOrderId === undefined
+        ? undefined
+        : record.pendingClientOrderIdIndex.get(update.clientOrderId);
 
-    if (preferredLocalOrderId) {
-      return { localOrderId: preferredLocalOrderId, source: "preferred" };
-    }
-
-    if (update.clientOrderId) {
-      const pending = record.pendingClientOrderIdIndex.get(
-        update.clientOrderId,
-      );
-      if (pending?.symbol === update.symbol) {
-        return { localOrderId: pending.localOrderId, source: "pending" };
-      }
-    }
-
-    if (
-      update.clientOrderId &&
-      !this.isSystemClientOrderId(update.clientOrderId)
-    ) {
-      for (const localOrderId of record.clientOrderIdIndex.get(
-        update.clientOrderId,
-      ) ?? []) {
-        const snapshot = this.getSnapshotByLocalOrderId(record, localOrderId);
-        if (snapshot && shouldMatchStoredOrderIdentity(snapshot, update)) {
-          return { localOrderId, source: "provisional" };
-        }
-      }
-    }
-
-    return {};
+    return resolveLocalOrderIdForUpdate(record, update, {
+      preferredLocalOrderId,
+      pendingLocalOrderId:
+        pending?.symbol === update.symbol ? pending.localOrderId : undefined,
+    });
   }
 
-  private setSnapshot(
+  private writeSnapshot(
     record: OrderRecord,
     localOrderId: string,
     snapshot: OrderSnapshot,
     previousLocation?: OrderLocation,
-  ): OrderLocation | undefined {
+  ): boolean {
     if (!snapshot.orderId && !snapshot.clientOrderId) {
       this.warnDroppedUnkeyedTerminalOrder(record, snapshot);
-      return undefined;
+      return false;
     }
 
-    const currentLocation =
-      previousLocation ?? record.localOrderLocations.get(localOrderId);
-    if (currentLocation) {
-      return this.moveSnapshot(record, currentLocation, localOrderId, snapshot);
+    const result = setSnapshot(record, localOrderId, snapshot, {
+      maxClosedOrdersPerSymbol: this.maxClosedOrdersPerSymbol,
+      previousLocation,
+    });
+    if (!result.location) {
+      return false;
     }
 
-    return this.insertSnapshot(record, localOrderId, snapshot);
-  }
-
-  private insertSnapshot(
-    record: OrderRecord,
-    localOrderId: string,
-    snapshot: OrderSnapshot,
-  ): OrderLocation | undefined {
-    const existingLocation = record.localOrderLocations.get(localOrderId);
-    if (existingLocation) {
-      this.deleteSnapshot(record, existingLocation);
-    }
-
-    const location: OrderLocation = {
-      table: isOpenOrder(snapshot) ? "open" : "closed",
-      symbol: snapshot.symbol,
-      localOrderId,
-    };
-
-    const table = this.getOrderTable(record, location.table);
-    const symbolOrders = this.getOrCreateSymbolOrders(table, location.symbol);
-    symbolOrders.set(localOrderId, snapshot);
-    record.localOrderLocations.set(localOrderId, location);
-
-    if (snapshot.orderId) {
-      const symbolIndex = this.getOrCreateOrderIdSymbolIndex(
-        record,
-        snapshot.symbol,
-      );
-      symbolIndex.set(snapshot.orderId, localOrderId);
-      this.addLocalOrderIdToSetIndex(
-        record.orderIdOnlyIndex,
-        snapshot.orderId,
-        localOrderId,
-      );
-    }
-
-    if (snapshot.clientOrderId) {
-      this.addLocalOrderIdToSetIndex(
-        record.clientOrderIdIndex,
-        snapshot.clientOrderId,
-        localOrderId,
-      );
-    }
-
-    this.trimClosedOrdersForSymbol(record, location);
     this.warnSystemClientOrderIdOnlyClaim(record, snapshot);
     this.warnProvisionalTerminalOrder(record, snapshot);
-    return location;
-  }
-
-  private deleteSnapshot(
-    record: OrderRecord,
-    location: OrderLocation,
-  ): OrderSnapshot | undefined {
-    const snapshot = this.getSnapshotAtLocation(record, location);
-    if (!snapshot) {
-      return undefined;
-    }
-
-    const table = this.getOrderTable(record, location.table);
-    const symbolOrders = table.get(location.symbol);
-    symbolOrders?.delete(location.localOrderId);
-    if (symbolOrders?.size === 0) {
-      table.delete(location.symbol);
-    }
-    record.localOrderLocations.delete(location.localOrderId);
-
-    if (snapshot.orderId) {
-      const symbolIndex = record.orderIdIndex.get(location.symbol);
-      if (
-        symbolIndex?.get(snapshot.orderId) &&
-        symbolIndex.get(snapshot.orderId) === location.localOrderId
-      ) {
-        symbolIndex.delete(snapshot.orderId);
-      }
-      if (symbolIndex?.size === 0) {
-        record.orderIdIndex.delete(location.symbol);
-      }
-      this.removeLocalOrderIdFromSetIndex(
-        record.orderIdOnlyIndex,
-        snapshot.orderId,
-        location.localOrderId,
-      );
-    }
-
-    if (snapshot.clientOrderId) {
-      this.removeLocalOrderIdFromSetIndex(
-        record.clientOrderIdIndex,
-        snapshot.clientOrderId,
-        location.localOrderId,
-      );
-    }
-
-    return snapshot;
-  }
-
-  private moveSnapshot(
-    record: OrderRecord,
-    previousLocation: OrderLocation,
-    localOrderId: string,
-    snapshot: OrderSnapshot,
-  ): OrderLocation | undefined {
-    this.deleteSnapshot(record, previousLocation);
-    return this.insertSnapshot(record, localOrderId, snapshot);
-  }
-
-  private trimClosedOrdersForSymbol(
-    record: OrderRecord,
-    location: OrderLocation,
-  ): void {
-    if (location.table !== "closed") {
-      return;
-    }
-
-    let symbolOrders = record.closedOrders.get(location.symbol);
-    if (!symbolOrders || symbolOrders.size <= this.maxClosedOrdersPerSymbol) {
-      return;
-    }
-
-    const trimBatchSize = Math.max(
-      1,
-      Math.floor(this.maxClosedOrdersPerSymbol / 10),
-    );
-    while (symbolOrders && symbolOrders.size > this.maxClosedOrdersPerSymbol) {
-      const keys = symbolOrders.keys();
-      for (let deleted = 0; deleted < trimBatchSize; deleted += 1) {
-        const next = keys.next();
-        if (next.done) {
-          break;
-        }
-        this.deleteSnapshot(record, {
-          table: "closed",
-          symbol: location.symbol,
-          localOrderId: next.value,
-        });
-      }
-      symbolOrders = record.closedOrders.get(location.symbol);
-    }
+    return true;
   }
 
   private warnDroppedUnkeyedTerminalOrder(
@@ -1022,7 +692,7 @@ export class OrderManagerImpl
     if (
       snapshot.orderId ||
       !snapshot.clientOrderId ||
-      !this.isSystemClientOrderId(snapshot.clientOrderId)
+      !isSystemClientOrderId(snapshot.clientOrderId)
     ) {
       return;
     }
@@ -1065,211 +735,6 @@ export class OrderManagerImpl
     );
   }
 
-  private getSnapshotAtLocation(
-    record: OrderRecord,
-    location: OrderLocation,
-  ): OrderSnapshot | undefined {
-    return this.getOrderTable(record, location.table)
-      .get(location.symbol)
-      ?.get(location.localOrderId);
-  }
-
-  private getSnapshotByLocalOrderId(
-    record: OrderRecord,
-    localOrderId: string,
-  ): OrderSnapshot | undefined {
-    const location = record.localOrderLocations.get(localOrderId);
-    return location ? this.getSnapshotAtLocation(record, location) : undefined;
-  }
-
-  private getOrderTable(
-    record: OrderRecord,
-    table: OrderTable,
-  ): Map<string, Map<string, OrderSnapshot>> {
-    return table === "open" ? record.openOrders : record.closedOrders;
-  }
-
-  private getOrCreateSymbolOrders(
-    table: Map<string, Map<string, OrderSnapshot>>,
-    symbol: string,
-  ): Map<string, OrderSnapshot> {
-    const existing = table.get(symbol);
-    if (existing) {
-      return existing;
-    }
-
-    const created = new Map<string, OrderSnapshot>();
-    table.set(symbol, created);
-    return created;
-  }
-
-  private getOrCreateOrderIdSymbolIndex(
-    record: OrderRecord,
-    symbol: string,
-  ): Map<string, string> {
-    const existing = record.orderIdIndex.get(symbol);
-    if (existing) {
-      return existing;
-    }
-
-    const created = new Map<string, string>();
-    record.orderIdIndex.set(symbol, created);
-    return created;
-  }
-
-  private getLocalOrderIdForVenueOrderId(
-    record: OrderRecord,
-    symbol: string,
-    orderId: string,
-  ): string | undefined {
-    return record.orderIdIndex.get(symbol)?.get(orderId);
-  }
-
-  private getSnapshotsForOrderId(
-    record: OrderRecord,
-    orderId: string,
-  ): OrderSnapshot[] {
-    return this.getSnapshotsForLocalOrderIds(
-      record,
-      record.orderIdOnlyIndex.get(orderId),
-    );
-  }
-
-  private getSnapshotsForClientOrderId(
-    record: OrderRecord,
-    clientOrderId: string,
-  ): OrderSnapshot[] {
-    return this.getSnapshotsForLocalOrderIds(
-      record,
-      record.clientOrderIdIndex.get(clientOrderId),
-    );
-  }
-
-  private getSnapshotsForLocalOrderIds(
-    record: OrderRecord,
-    localOrderIds?: Iterable<string>,
-  ): OrderSnapshot[] {
-    if (!localOrderIds) {
-      return [];
-    }
-
-    const snapshots: OrderSnapshot[] = [];
-    for (const localOrderId of localOrderIds) {
-      const snapshot = this.getSnapshotByLocalOrderId(record, localOrderId);
-      if (snapshot) {
-        snapshots.push(snapshot);
-      }
-    }
-
-    return snapshots;
-  }
-
-  private getOpenOrderSnapshots(record: OrderRecord): OrderSnapshot[] {
-    return this.getSnapshotsInTable(record.openOrders);
-  }
-
-  private getAllSnapshots(record: OrderRecord): OrderSnapshot[] {
-    return [
-      ...this.getSnapshotsInTable(record.openOrders),
-      ...this.getSnapshotsInTable(record.closedOrders),
-    ];
-  }
-
-  private getSnapshotsInTable(
-    table: Map<string, Map<string, OrderSnapshot>>,
-  ): OrderSnapshot[] {
-    const snapshots: OrderSnapshot[] = [];
-    for (const symbolOrders of table.values()) {
-      snapshots.push(...symbolOrders.values());
-    }
-
-    return snapshots;
-  }
-
-  private getSnapshotCount(record: OrderRecord): number {
-    return (
-      this.getSnapshotCountInTable(record.openOrders) +
-      this.getSnapshotCountInTable(record.closedOrders)
-    );
-  }
-
-  private getSnapshotCountInTable(
-    table: Map<string, Map<string, OrderSnapshot>>,
-  ): number {
-    let size = 0;
-    for (const symbolOrders of table.values()) {
-      size += symbolOrders.size;
-    }
-
-    return size;
-  }
-
-  private addLocalOrderIdToSetIndex(
-    index: Map<string, Set<string>>,
-    key: string,
-    localOrderId: string,
-  ): void {
-    this.removeLocalOrderIdFromSetIndex(index, key, localOrderId);
-
-    const localOrderIds = index.get(key);
-    if (localOrderIds) {
-      localOrderIds.add(localOrderId);
-      return;
-    }
-
-    index.set(key, new Set([localOrderId]));
-  }
-
-  private removeLocalOrderIdFromSetIndex(
-    index: Map<string, Set<string>>,
-    key: string,
-    localOrderId: string,
-  ): void {
-    const localOrderIds = index.get(key);
-    if (!localOrderIds) {
-      return;
-    }
-
-    localOrderIds.delete(localOrderId);
-
-    if (localOrderIds.size === 0) {
-      index.delete(key);
-    }
-  }
-
-  private selectLatestSnapshot(
-    snapshots: OrderSnapshot[],
-  ): OrderSnapshot | undefined {
-    let latest: OrderSnapshot | undefined;
-    for (const snapshot of snapshots) {
-      if (!latest) {
-        latest = snapshot;
-        continue;
-      }
-
-      const snapshotOpen = isOpenOrder(snapshot);
-      const latestOpen = isOpenOrder(latest);
-      if (snapshotOpen !== latestOpen) {
-        // Open candidate has absolute priority: current active order takes
-        // precedence over historical terminal state (when clientOrderId is
-        // reused, the old order is already closed).
-        if (snapshotOpen) {
-          latest = snapshot;
-        }
-        continue;
-      }
-
-      // Both open or both closed: take the latest by updatedAt.
-      // seq must not be used -- seq is a per-order version number and is not
-      // comparable across orders (e.g. different orders that reuse a cid).
-      if (snapshot.updatedAt > latest.updatedAt) {
-        latest = snapshot;
-      }
-    }
-
-    return latest;
-  }
-
   private applyUpdateToRecord(
     record: OrderRecord,
     accountId: string,
@@ -1279,9 +744,9 @@ export class OrderManagerImpl
   ): OrderSnapshot | undefined {
     const resolution = this.resolveLocalOrderIdForUpdate(record, update);
     const localOrderId = resolution.localOrderId ?? this.generateLocalOrderId();
-    const previousLocation = record.localOrderLocations.get(localOrderId);
+    const previousLocation = getLocationByLocalOrderId(record, localOrderId);
     const previous = previousLocation
-      ? this.getSnapshotAtLocation(record, previousLocation)
+      ? getSnapshotAtLocation(record, previousLocation)
       : undefined;
     if (
       !shouldApplyWatermarkedUpdate(previous, update, {
@@ -1292,14 +757,14 @@ export class OrderManagerImpl
       return undefined;
     }
 
-    const snapshot = this.createSnapshot(accountId, venue, update, previous);
-    const location = this.setSnapshot(
+    const snapshot = createSnapshot(accountId, venue, update, previous);
+    const written = this.writeSnapshot(
       record,
       localOrderId,
       snapshot,
       previousLocation,
     );
-    if (location && resolution.source === "pending" && update.clientOrderId) {
+    if (written && resolution.source === "pending" && update.clientOrderId) {
       this.clearPendingClientOrderClaim(
         record,
         update.clientOrderId,
@@ -1307,70 +772,7 @@ export class OrderManagerImpl
       );
     }
 
-    return location ? snapshot : undefined;
-  }
-
-  private createSnapshot(
-    accountId: string,
-    venue: Venue,
-    input: RawOrderUpdate,
-    previous?: OrderSnapshot,
-  ): OrderSnapshot {
-    const amount = new BigNumber(input.amount);
-    const rawFilled = new BigNumber(input.filled);
-    const filled = previous
-      ? BigNumber.maximum(rawFilled, previous.filled)
-      : rawFilled;
-    const filledWasClamped = !filled.eq(rawFilled);
-    const remaining =
-      input.remaining === undefined || filledWasClamped
-        ? amount.minus(filled)
-        : new BigNumber(input.remaining);
-
-    return {
-      accountId,
-      venue,
-      orderId: input.orderId ?? previous?.orderId,
-      clientOrderId: input.clientOrderId ?? previous?.clientOrderId,
-      symbol: input.symbol,
-      side: input.side,
-      type: input.type,
-      status: this.mergeOrderStatus(input, previous),
-      price:
-        input.price === undefined ? previous?.price : toCanonical(input.price),
-      triggerPrice:
-        input.triggerPrice === undefined
-          ? previous?.triggerPrice
-          : toCanonical(input.triggerPrice),
-      amount: toCanonical(amount),
-      filled: toCanonical(filled),
-      remaining: toCanonical(remaining),
-      reduceOnly: input.reduceOnly ?? previous?.reduceOnly,
-      positionSide: input.positionSide ?? previous?.positionSide,
-      avgFillPrice:
-        input.avgFillPrice === undefined
-          ? previous?.avgFillPrice
-          : toCanonical(input.avgFillPrice),
-      exchangeTs: input.exchangeTs,
-      receivedAt: input.receivedAt,
-      updatedAt: input.receivedAt,
-      seq: (previous?.seq ?? 0) + 1,
-    };
-  }
-
-  private mergeOrderStatus(
-    input: RawOrderUpdate,
-    previous?: OrderSnapshot,
-  ): OrderSnapshot["status"] {
-    if (!previous) {
-      return input.status;
-    }
-
-    if (orderPriority(input.status) < orderPriority(previous.status)) {
-      return previous.status;
-    }
-
-    return input.status;
+    return written ? snapshot : undefined;
   }
 
   private publishStatus(record: OrderRecord): void {
@@ -1395,10 +797,7 @@ export class OrderManagerImpl
       if (
         (options?.record &&
           options.avoidOpenClientOrderId &&
-          this.isVenueClientOrderIdInUseForOpenOrder(
-            options.record,
-            candidate,
-          )) ||
+          isVenueClientOrderIdInUseForOpenOrder(options.record, candidate)) ||
         options?.record?.pendingClientOrderIdIndex.has(candidate) ||
         !VENUE_CLIENT_ORDER_ID_PATTERN.test(candidate)
       ) {
@@ -1407,22 +806,6 @@ export class OrderManagerImpl
 
       return candidate;
     }
-  }
-
-  private isVenueClientOrderIdInUseForOpenOrder(
-    record: OrderRecord,
-    venueClientOrderId: string,
-  ): boolean {
-    for (const localOrderId of record.clientOrderIdIndex.get(
-      venueClientOrderId,
-    ) ?? []) {
-      const location = record.localOrderLocations.get(localOrderId);
-      if (location?.table === "open") {
-        return true;
-      }
-    }
-
-    return false;
   }
 
   private addPendingClientOrderClaim(
@@ -1450,12 +833,6 @@ export class OrderManagerImpl
 
   private shouldRetainPendingClaimAfterCreateError(error: unknown): boolean {
     return isTransportError(error) && error.kind === "timeout";
-  }
-
-  private isSystemClientOrderId(clientOrderId: string): boolean {
-    return SYSTEM_CLIENT_ORDER_ID_PATTERNS.some((pattern) =>
-      pattern.test(clientOrderId),
-    );
   }
 
   private validateCreateOrderInput(
@@ -1522,9 +899,9 @@ export class OrderManagerImpl
       options.localOrderId,
     );
     const localOrderId = resolution.localOrderId ?? this.generateLocalOrderId();
-    const previousLocation = record.localOrderLocations.get(localOrderId);
+    const previousLocation = getLocationByLocalOrderId(record, localOrderId);
     const previous = previousLocation
-      ? this.getSnapshotAtLocation(record, previousLocation)
+      ? getSnapshotAtLocation(record, previousLocation)
       : undefined;
     if (
       previous &&
@@ -1536,8 +913,8 @@ export class OrderManagerImpl
       return previous;
     }
 
-    const snapshot = this.createSnapshot(accountId, venue, update, previous);
-    this.setSnapshot(record, localOrderId, snapshot, previousLocation);
+    const snapshot = createSnapshot(accountId, venue, update, previous);
+    this.writeSnapshot(record, localOrderId, snapshot, previousLocation);
     return snapshot;
   }
 

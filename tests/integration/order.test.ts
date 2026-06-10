@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { AcexError, BigNumber, createClient } from "../../index.ts";
+import { TransportError } from "../../src/internal/http-client.ts";
 import {
   installBinancePrivateAccountInfra,
   PAPI_ACCOUNT_WS_URL,
@@ -77,6 +78,20 @@ interface BinanceOrderUpdateInput {
   amount?: string;
   filled?: string;
   updateTime?: number;
+}
+
+interface OrderManagerDebugView {
+  records: Map<
+    string,
+    {
+      pendingClientOrderIdIndex: Map<string, unknown>;
+    }
+  >;
+}
+
+interface ClientDebugView {
+  createOrder(input: unknown): Promise<unknown>;
+  orderManager: OrderManagerDebugView;
 }
 
 async function createSubscribedOrderClient(options: {
@@ -1031,6 +1046,253 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
   expect(request?.url.searchParams.get("signature")).not.toBeNull();
 });
 
+test("createOrder generates and sends a Binance-safe clientOrderId when omitted", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+
+  const snapshot = await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+  });
+
+  const request = requests.find(
+    (entry) =>
+      entry.method === "POST" && entry.url.pathname === "/papi/v1/um/order",
+  );
+  const generatedCid = request?.url.searchParams.get("newClientOrderId");
+  if (!generatedCid) {
+    throw new Error("generated clientOrderId was not sent");
+  }
+  expect(generatedCid).toMatch(/^acex-[.A-Z:/a-z0-9_-]{1,27}$/);
+  expect(generatedCid.length).toBeLessThanOrEqual(32);
+  expect(snapshot.clientOrderId).toBe(generatedCid);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      clientOrderId: generatedCid,
+    }),
+  ).toMatchObject({
+    orderId: "2001",
+    clientOrderId: generatedCid,
+    status: "open",
+  });
+});
+
+test("createOrder rejects invalid caller-provided clientOrderId before REST", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+      clientOrderId: "invalid client id with spaces",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_INPUT_INVALID");
+  expect(
+    requests.some(
+      (entry) =>
+        entry.method === "POST" && entry.url.pathname === "/papi/v1/um/order",
+    ),
+  ).toBe(false);
+});
+
+test("createOrder clears pending claim after explicit adapter failure", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.createOrder = async () => {
+    throw new Error("venue rejected order");
+  };
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+  expect(
+    debugClient.orderManager.records.get("main-binance")
+      ?.pendingClientOrderIdIndex.size,
+  ).toBe(0);
+});
+
+test("createOrder retains pending claim after timeout", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.createOrder = async () => {
+    throw new TransportError("Binance PAPI fetch timeout after 1ms", {
+      kind: "timeout",
+      attempts: 1,
+      retryable: true,
+      url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+    });
+  };
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+
+  const pending = [
+    ...(debugClient.orderManager.records
+      .get("main-binance")
+      ?.pendingClientOrderIdIndex.keys() ?? []),
+  ];
+  expect(pending).toHaveLength(1);
+  expect(pending[0]).toMatch(/^acex-/);
+});
+
+test("createOrder pending claim reuses the generated cid for early websocket updates", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [],
+    createOrderDelayMs: 30,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  const createPromise = client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+  });
+
+  const request = await waitForCondition(
+    () =>
+      requests.find(
+        (entry) =>
+          entry.method === "POST" && entry.url.pathname === "/papi/v1/um/order",
+      ),
+    100,
+    "createOrder request was not sent",
+  );
+  const generatedCid = request.url.searchParams.get("newClientOrderId");
+  if (!generatedCid) {
+    throw new Error("generated clientOrderId was not sent");
+  }
+
+  emitBinanceOrderUpdate(socket, {
+    clientOrderId: generatedCid ?? undefined,
+    status: "NEW",
+    updateTime: 1710000000300,
+  });
+  await waitForCondition(
+    () =>
+      client.order.getOpenOrders("main-binance", "BTC/USDT:USDT").length === 1
+        ? true
+        : undefined,
+    100,
+    "early websocket order was not stored",
+  );
+
+  const snapshot = await createPromise;
+  expect(snapshot.clientOrderId).toBe(generatedCid);
+  await waitForCondition(
+    () => {
+      const open = client.order.getOpenOrders("main-binance", "BTC/USDT:USDT");
+      return open.length === 1 && open[0]?.orderId === "2001"
+        ? true
+        : undefined;
+    },
+    100,
+    "pending claim created a duplicate order",
+  );
+});
+
 test("createOrder sends post-only limit orders with Binance GTX timeInForce", async () => {
   const requests = installBinancePrivateAccountInfra();
   const client = createClient();
@@ -1697,6 +1959,43 @@ test("order cache stores a cid-only terminal order as provisional and warns", as
     }),
   ).toMatchObject({ status: "filled" });
   expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+
+  await errors.return?.();
+});
+
+test("order cache does not merge system cid-only orders and warns", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const errors = client.events.errors()[Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    clientOrderId: "adl_autoclose",
+    status: "NEW",
+    updateTime: 1710000021000,
+  });
+  emitBinanceOrderUpdate(socket, {
+    clientOrderId: "adl_autoclose",
+    status: "NEW",
+    updateTime: 1710000021100,
+  });
+
+  const warning = await nextEvent(errors);
+  expect(warning).toMatchObject({
+    source: "order",
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  expect(warning.error.message).toBe(
+    "Received system clientOrderId without orderId; cid-only claim is unstable",
+  );
+  await waitForCondition(
+    () =>
+      client.order.getOpenOrders("main-binance", "BTC/USDT:USDT").length === 2
+        ? true
+        : undefined,
+    100,
+    "system cid-only updates were merged unexpectedly",
+  );
 
   await errors.return?.();
 });

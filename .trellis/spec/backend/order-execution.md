@@ -299,28 +299,33 @@ for (const order of disappeared) {
 
 ---
 
-## Scenario: OrderManager 本地订单存储分层、复合身份与 closed 裁剪
+## Scenario: OrderManager 本地订单存储分层、内部 localOrderId 身份与 closed 裁剪
 
 ### 1. Scope / Trigger
 
 - Trigger: 修改 `OrderManagerImpl` 内部存储结构、订单身份 / 索引、closed 容量裁剪、`getOrder()` / `getOpenOrders()` 查询路径时。
-- 目标: 终态订单不无界累积导致内存膨胀；查询不随历史订单数量退化；复合身份正确处理 `orderId` / `clientOrderId` 两条线。
+- 目标: 终态订单不无界累积导致内存膨胀；查询不随历史订单数量退化；内部统一用 SDK 生成的 `localOrderId` 做主键，同时保持 public `orderId` / `clientOrderId` 语义稳定。
 
-### 2. 存储结构与复合身份
+### 2. 存储结构与内部身份
 
-- 每个账户的 `OrderRecord` 内部分 **open / closed 两表**，各按 symbol 嵌套：`Map<symbol, Map<orderKey, OrderSnapshot>>`。`orderKey` = `order:{orderId}` 优先，否则 `client:{clientOrderId}`。
-- 主身份 = **`(symbol, orderId)`**；closed 表强制 `orderId` 主键。原因：Binance `orderId` 仅 **per-symbol** 唯一（非全局），而 `clientOrderId` 只是 "unique among open orders"、终态后可被复用，ADL 单还共享 `adl_autoclose` 字面量——`clientOrderId` 不能作为终态订单的稳定主键。
-- 每个 `OrderRecord` 内维护**三索引**，覆盖 open + closed，经 `insertSnapshot` / `deleteSnapshot` / `moveSnapshot` 三个 helper **严格同步**（任何增删改只走 helper，禁止散落维护）：
-  - `(symbol, orderId)` 精确索引；
-  - `orderId → Set<location>` 歧义索引（支持不带 symbol 查询；跨 symbol 同 `orderId` 多命中时 open 优先、同类按 `updatedAt` 最新）；
-  - `clientOrderId → Set<location>` 索引（一对多，应对同 symbol 同 cid、不同 orderId 的多笔并存）。
+- 每个账户的 `OrderRecord` 内部分 **open / closed 两表**，各按 symbol 嵌套：`Map<symbol, Map<localOrderId, OrderSnapshot>>`。`localOrderId` 是 SDK 生成、纯内部、调用方不可指定的代理主键，不出现在任何 public type / event 中。
+- Public 字段名保持不变：`OrderSnapshot.orderId` 表示 venue `orderId`，`OrderSnapshot.clientOrderId` 表示 venue `clientOrderId`。Binance `orderId` 仅 per-symbol 唯一，`clientOrderId` 终态后可复用，ADL/系统单还会共享字面量，所以两者都不能直接作为内部全局主键。
+- 每个 `OrderRecord` 内维护**四个内部结构**，覆盖 open + closed，经 `insertSnapshot` / `deleteSnapshot` / `moveSnapshot` 三个 helper **严格同步**（任何增删改只走 helper，禁止散落维护）：
+  - `localOrderId → location` 主存储定位；
+  - `(symbol, venueOrderId) → localOrderId` 精确 1:1 索引，权威路径；
+  - `venueOrderId → Set<localOrderId>` 歧义索引（支持不带 symbol 查询；跨 symbol 同 `orderId` 多命中时 open 优先、同类按 `updatedAt` 最新）；
+  - `venueClientOrderId → Set<localOrderId>` 1:多索引（应对 ADL 共享 `adl_autoclose`、同 symbol 同 cid 多 orderId、cid 终态后复用）。
+- `createOrder()` 在发 REST 前生成 `localOrderId`。调用方未传 `clientOrderId` 时，SDK 把该 `localOrderId` 作为 Binance `newClientOrderId` 发送；调用方传了 `clientOrderId` 时，发送调用方的值，但内部仍使用独立的 `localOrderId`。
+- 未传 `clientOrderId` 时发送的 `localOrderId` 必须满足 Binance `newClientOrderId` 约束：`acex-` 前缀、长度不超过 32、匹配 `^[\.A-Z\:/a-z0-9_-]{1,32}$`，并且不撞该账户当前 open 的 venue clientOrderId。调用方自带 `clientOrderId` 不满足该约束时，本地 fail-fast 抛 `ORDER_INPUT_INVALID`。
+- 外部 / ADL / 其它会话的订单首见时，SDK 会补生成内部 `localOrderId`。带 venue orderId 的更新永远先用 `(symbol, venueOrderId)` 复用既有 local id；无 venue orderId 的 cid-only 更新只能 claim 同 symbol、同 cid、且尚无 venue orderId 的 provisional 订单。系统 cid 字面量（`adl_autoclose`、`autoclose-*`、`settlement_autoclose-*`）的 cid-only 更新不稳定归并，必须发 warning。
+- `createOrder()` 发 REST 前会登记内部 pending claim：`venueClientOrderId → localOrderId`。如果 REST 返回前同 cid 的 WS 更新先到，manager 复用同一个 `localOrderId`，避免双建。REST 明确失败 / 拒单时清理 pending；timeout 这类未知 ack 保留 pending，等待后续 WS / reconcile 复用，不主动查询。
 - `OrderSnapshot` 保持**不可变替换**：`createSnapshot` 每次返回新对象，绝不原地 mutate；对外返回的引用因此是某一时刻的冻结视图。
 
 ### 3. closed 裁剪与内存有界
 
 - closed 订单按 **symbol 子表各留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`，默认 **500**；非正、非整数、`undefined` 一律归一为默认。
 - 超限按**插入顺序 FIFO 删最旧**，**批量摊销**：一次删 `max(1, floor(N/10))`，循环到 `size <= N`，以降低高频写入下的删除频率。
-- 裁剪删除**必须走 `deleteSnapshot`**（同步三索引、清理空 symbol 子表），禁止只删主表 —— 否则索引悬挂、`getOrder()` 仍能查到已被裁剪的快照。
+- 裁剪删除**必须走 `deleteSnapshot`**（同步四个内部结构、清理空 symbol 子表），禁止只删主表 —— 否则索引悬挂、`getOrder()` 仍能查到已被裁剪的快照。
 - **open 表永不因容量裁剪**：open 是实时状态，裁剪会破坏 reconcile 对账与 `getOpenOrders()` 正确性。
 - 内存有界靠三条：子表 FIFO 上限 + 清理空 symbol 子表 + 索引随主存储同步删除；并**依赖 venue symbol 集合有限**这一前提（故用 per-symbol 上限，不设全局 cap）。
 
@@ -335,14 +340,16 @@ for (const order of disappeared) {
 
 ### 5. 终态、事件与迟到更新
 
-- **无 `orderId` 的终态 order update**：若有 `clientOrderId`，用 `client:{cid}` 作 **provisional** closed key 暂存（拿到 `orderId` 后迁移到正式 `order:{orderId}` key）；若 `orderId` 与 `clientOrderId` 都缺，**丢弃并经 `context.publishRuntimeError("order", ...)` 发 warning**。对应 adapter 侧契约见 `adapter-contract.md`「终态更新应带 orderId」。
+- **无 `orderId` 的终态 order update**：若有 `clientOrderId`，以新生成的 `localOrderId` 作 **provisional** closed 订单暂存（拿到 `(symbol, orderId)` 后迁移到同一个 `localOrderId` 下的正式 venue identity）；若 `orderId` 与 `clientOrderId` 都缺，**丢弃并经 `context.publishRuntimeError("order", ...)` 发 warning**。对应 adapter 侧契约见 `adapter-contract.md`「终态更新应带 orderId」。
 - `order.snapshot_replaced` 必须发布**全量**（open + 保留的 closed），分表后不得只发 open，否则下游会丢失终态订单视图。
+- Reconcile open-set diff 仍基于 venue identity（`(symbol, orderId)` / `(symbol, clientOrderId)` alias），不得改用 `localOrderId` 比较；否则 orderId 后到或 cid-only provisional 迁移时会把同一 venue 订单误判为 disappeared。
 - **裁剪后迟到更新**：closed 单被裁剪后，同一旧终态事件若迟到，因其 `previous` 已被删，可能被当作新订单重新插入并重复发事件。这是**已接受的取舍**（不设 tombstone），`maxClosedOrdersPerSymbol` 应配置得足够覆盖正常的迟到 / reconcile 窗口。
 
-### 6. 演进:submitting 三表与本地 cid 身份
+### 6. submitting 后续演进边界
 
-- 当前 REST 下单**同步返回 `orderId`**，没有"提交中"可观测窗口，故只设 open / closed 两表、复合身份以 `orderId` 为主键。
-- 后续若落地 **WS / 异步下单**（下单请求在途、ack 与 `orderId` 后到）：应扩展为 `submitting + open + closed` 三表并扩 `OrderStatus`；身份模型可演进为**本地生成 `clientOrderId` 主键 + `venueOrderId → localClientOrderId` 反向索引**（NautilusTrader 式），契合 acex 发起型 OMS 定位。现有分表 + helper 结构已为此预留扩展点。
+- 当前 REST 下单仍**同步返回 `orderId`**，没有 public 可观测的 "submitting" 窗口，故只设 open / closed 两表，不扩 `OrderStatus`，也不新增 public 状态。
+- 已落地的 `localOrderId` + pending claim 只是身份地基，不是 submitting：pending 不出现在 public snapshot / event / status 中，不作为第三张表，不主动恢复查询。
+- 后续若落地 **WS / 异步下单**（下单请求在途、ack 与 `orderId` 后到），可在当前内部主键模型上扩展 `submitting + open + closed` 三表；不应再重排 `OrderManager` 主键。
 
 ### 7. Tests Required
 
@@ -359,6 +366,10 @@ bun run test
 - open 订单数超过 N 时不被裁剪。
 - 跨 symbol 各自独立裁剪；非法 N（`0` / 负 / 非整）回退默认、小 N 时批量至少删 1。
 - 跨 symbol 同 `orderId`、同 symbol 同 `clientOrderId` 多笔并存可被正确区分。
-- cid-only open 单收到 `orderId` 后迁移 key、不留旧 key / 索引；open→closed 迁移正确。
+- 未传 `clientOrderId` 下单时，请求必须带 SDK 生成的合规 `acex-*` cid，且返回 snapshot 的 public `clientOrderId` 等于该值；mock 必须回显请求 cid，避免假绿。
+- 下单 REST 返回前早到的同 cid WS 更新必须复用 pending 的同一 `localOrderId`，不能双建；明确拒单清理 pending，timeout 保留。
+- 自带 `clientOrderId` 超长或含非法字符时，本地抛 `ORDER_INPUT_INVALID`，不得发 REST。
+- cid-only open 单收到 `orderId` 后在同一 `localOrderId` 下迁移 venue identity、不留旧 provisional 副本 / 索引；open→closed 迁移正确。
+- 系统 cid 字面量（如 `adl_autoclose`）cid-only 更新不稳定归并并发 warning；带 `orderId` 的 ADL 单必须由 `(symbol, orderId)` 正确区分，`clientOrderId → Set<localOrderId>` 为 1:多。
 - 无 key 终态单被丢弃并发 warning。
-- reconcile / backfill 写入终态触发裁剪后，`getOpenOrders()` 不回退、`order.snapshot_replaced` 仍为全量。
+- reconcile / backfill 写入终态触发裁剪后，四个内部结构无悬挂，`getOpenOrders()` 不回退、`order.snapshot_replaced` 仍为全量。

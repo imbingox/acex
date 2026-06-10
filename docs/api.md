@@ -430,6 +430,7 @@ interface OrderManager {
 
 - `createOrder()` 支持 `limit` / `market`
 - `limit` 可传 `postOnly: true`，Binance PAPI UM 映射为 `timeInForce=GTX`
+- 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-` 前缀，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
 - `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
 - `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
 - hedge mode 下必须显式传 `positionSide: "long" | "short"`
@@ -442,7 +443,9 @@ interface OrderManager {
 
 - OrderManager 内部按 open / closed 分层缓存订单。**closed（filled / canceled / rejected / expired）订单按 symbol 各保留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`（默认 500，非正或非整数回退默认），超限按 FIFO 裁剪最旧；**open 订单不受此上限限制**。`getOpenOrders()` 查询复杂度与历史终态订单数量无关。
 - `getOrder(input)` 需带 `orderId` 或 `clientOrderId`（否则返回 `undefined`），`symbol` 可选：
-  - 仅 `clientOrderId` 查询可命中 open 与未被裁剪的 closed；同一 `clientOrderId` 命中多笔时返回**最新一笔**（精确定位历史某一笔请用 `orderId`）。
+  - **精确查单推荐传 `symbol + orderId`**（O(1) 精确索引、唯一命中）。
+  - 仅 `clientOrderId` 查询可命中 open 与未被裁剪的 closed；当 `clientOrderId` 唯一（你自定义的或 SDK 生成的 `acex-*`）时可精确命中，但同一 `clientOrderId` 命中多笔时返回**最新一笔**（精确定位历史某一笔请用 `symbol + orderId`）。
+  - 仅传 `orderId`（不带 `symbol`）时，跨 symbol 同 `orderId` 可能多命中，返回最新一笔；ADL / 系统单会共享 `clientOrderId`（如 `adl_autoclose`），必须用 `symbol + orderId` 精确定位。
   - 同时给 `orderId` 与 `clientOrderId` 时，两者都匹配才命中。
   - 已超出保留上限被裁剪的 closed 订单将查不到（返回 `undefined`）。
 

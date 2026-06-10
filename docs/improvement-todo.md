@@ -31,14 +31,14 @@
 - **验证方式**：文档级已核实（官方响应示例）；live 验证步骤见[附录 A](#附录-a-cancelallorders-live-验证步骤)。
 - **状态**：代码已修复（→ .trellis/tasks/06-10-cancel-all-response-shape）并完成 live 复核（2026-06-10，`ETH/USDC:USDC`，2 笔 GTX 挂单全部由 `cancelAllOrders` 撤成 `canceled`，`remainingOpenOrders.count = 0`，`errors = []`）。
 
-### - [ ] P0-2 REST 下单回包与 WS 成交竞态：已成交订单被回退成 `open`
+### - [x] P0-2 REST 下单回包与 WS 成交竞态：已成交订单被回退成 `open`
 
 - **位置**：`src/managers/order-manager.ts:1512`（`applyCommandUpdate`）、`src/managers/order-manager.ts:1356`（`mergeOrderStatus`）、`src/internal/watermark.ts:9`
 - **问题**：`applyCommandUpdate`（REST 命令回包入库）不经过 `shouldApplyWatermarkedUpdate`。当 WS `ORDER_TRADE_UPDATE`（FILLED，`exchangeTs=T1`）先于 REST ack（NEW，`exchangeTs=T0 < T1`）到达时，`mergeOrderStatus` 仅在 exchangeTs **相等**时保留高优先级状态、`filled` 的 max 合并同样只在相等时生效——时间戳不等则直接覆盖。结果：本地订单回退为 `open` / `filled=0`，事件序列出现 `order.filled` → `order.updated(open)`，幽灵挂单最长存活到下一次 60s reconcile。策略可能据此重复对冲或重复撤单。
 - **佐证**：`watermark.ts:10` 已定义 `source: "command"` 但 `shouldApplyWatermarkedUpdate` 没有对应分支——设计上预留了命令源水位，未实现。
 - **修复方案**：`createOrder`/`cancelOrder`/`cancelAllOrders` 在发起 REST 前记录 `requestStartedAt`，`applyCommandUpdate` 以 `source: "command"`（或复用 `"rest"`）走 watermark 门控；同时把 `filled` 回退保护从"相等时取 max"放宽为"不小于已知值"。
 - **验证方式**：单测构造"WS FILLED 先到、REST ack 后到"序列，断言状态不回退、不发布回退事件；现有 `tests/unit/watermark.test.ts` 增补 command 源用例。
-- **状态**：未开始。
+- **状态**：代码已修复（→ .trellis/tasks/06-10-order-command-watermark），`bun run lint` / `bun run type-check` / `bun run test` 通过；该项无需 live 验证。
 
 ### - [ ] P0-3 `listenKeyExpired` 被丢弃 + 私有流无 watchdog → 私有数据流静默死亡
 

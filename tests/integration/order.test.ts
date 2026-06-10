@@ -60,6 +60,38 @@ async function nextMatchingEvent<T>(
   }
 }
 
+async function expectNoMatchingEvent<T>(
+  iterator: AsyncIterator<T>,
+  check: (event: T) => boolean,
+  timeoutMs: number,
+  message: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return;
+    }
+
+    let event: T;
+    try {
+      event = await nextEvent(iterator, remainingMs);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "Timed out waiting for event"
+      ) {
+        return;
+      }
+      throw error;
+    }
+
+    if (check(event)) {
+      throw new Error(message);
+    }
+  }
+}
+
 type BinanceOrderStatus =
   | "NEW"
   | "PARTIALLY_FILLED"
@@ -91,6 +123,7 @@ interface OrderManagerDebugView {
 
 interface ClientDebugView {
   createOrder(input: unknown): Promise<unknown>;
+  cancelAllOrders(input: unknown): Promise<unknown>;
   orderManager: OrderManagerDebugView;
 }
 
@@ -1129,6 +1162,52 @@ test("createOrder rejects invalid caller-provided clientOrderId before REST", as
   ).toBe(false);
 });
 
+test("createOrder propagates command ack write failures", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.createOrder = async () => ({
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "LIMIT",
+    status: "open",
+    amount: "0.010",
+    filled: "0",
+    remaining: "0.010",
+    receivedAt: 1710000000200,
+  });
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+  expect(
+    debugClient.orderManager.records.get("main-binance")
+      ?.pendingClientOrderIdIndex.size,
+  ).toBe(0);
+});
+
 test("createOrder clears pending claim after explicit adapter failure", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient();
@@ -1291,6 +1370,214 @@ test("createOrder pending claim reuses the generated cid for early websocket upd
     100,
     "pending claim created a duplicate order",
   );
+});
+
+test("createOrder command ack cannot roll back an earlier websocket fill", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [],
+    createOrderDelayMs: 30,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  const iterator = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    [Symbol.asyncIterator]();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  const createPromise = client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+  });
+
+  const request = await waitForCondition(
+    () =>
+      requests.find(
+        (entry) =>
+          entry.method === "POST" && entry.url.pathname === "/papi/v1/um/order",
+      ),
+    100,
+    "createOrder request was not sent",
+  );
+  const generatedCid = request.url.searchParams.get("newClientOrderId");
+  if (!generatedCid) {
+    throw new Error("generated clientOrderId was not sent");
+  }
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 2001,
+    clientOrderId: generatedCid,
+    status: "FILLED",
+    price: "101000.00",
+    amount: "0.010",
+    filled: "0.010",
+    updateTime: 1710000000500,
+  });
+
+  const filled = await nextMatchingEvent(
+    iterator,
+    (event) =>
+      event.type === "order.filled" && event.snapshot.orderId === "2001",
+    200,
+    "early websocket fill was not published",
+  );
+  expect(filled).toMatchObject({
+    type: "order.filled",
+    snapshot: {
+      orderId: "2001",
+      clientOrderId: generatedCid,
+      status: "filled",
+      filled: new BigNumber("0.010").toFixed(),
+      remaining: new BigNumber("0").toFixed(),
+    },
+  });
+
+  const snapshot = await createPromise;
+  expect(snapshot).toMatchObject({
+    orderId: "2001",
+    clientOrderId: generatedCid,
+    status: "filled",
+    filled: new BigNumber("0.010").toFixed(),
+    remaining: new BigNumber("0").toFixed(),
+  });
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "2001",
+    }),
+  ).toMatchObject({
+    status: "filled",
+    filled: new BigNumber("0.010").toFixed(),
+    remaining: new BigNumber("0").toFixed(),
+  });
+  expect(client.order.getOpenOrders("main-binance", "BTC/USDT:USDT")).toEqual(
+    [],
+  );
+
+  await expectNoMatchingEvent(
+    iterator,
+    (event) =>
+      event.type === "order.updated" &&
+      event.snapshot.orderId === "2001" &&
+      event.snapshot.status === "open",
+    50,
+    "stale REST ack published an open rollback event",
+  );
+
+  await iterator.return?.();
+});
+
+test("createOrder command ack recomputes remaining when filled is clamped", async () => {
+  installBinancePrivateAccountInfra({
+    openOrders: [],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 2101,
+    clientOrderId: "cid-remaining",
+    status: "FILLED",
+    price: "101000.00",
+    amount: "0.010",
+    filled: "0.010",
+    updateTime: 1710000000500,
+  });
+  await waitForCondition(
+    () =>
+      client.order.getOrder({
+        accountId: "main-binance",
+        symbol: "BTC/USDT:USDT",
+        orderId: "2101",
+      })?.status === "filled"
+        ? true
+        : undefined,
+    100,
+    "seed filled order was not stored",
+  );
+
+  debugClient.createOrder = async () => ({
+    orderId: "2101",
+    clientOrderId: "cid-remaining",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "LIMIT",
+    status: "open",
+    price: "101000.00",
+    amount: "0.010",
+    filled: "0",
+    remaining: "0.010",
+    avgFillPrice: "0",
+    reduceOnly: false,
+    positionSide: "net",
+    exchangeTs: 1710000000600,
+    receivedAt: Date.now(),
+  });
+
+  const snapshot = await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+    clientOrderId: "cid-remaining",
+  });
+
+  expect(snapshot).toMatchObject({
+    orderId: "2101",
+    status: "filled",
+    filled: new BigNumber("0.010").toFixed(),
+    remaining: new BigNumber("0").toFixed(),
+  });
 });
 
 test("createOrder sends post-only limit orders with Binance GTX timeInForce", async () => {
@@ -1489,6 +1776,178 @@ test("cancelAllOrders parses object response and only updates matching cached or
   );
   expect(request).toBeDefined();
   expect(request?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+});
+
+test("cancelAllOrders propagates command ack write failures", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.cancelAllOrders = async () => [
+    {
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "LIMIT",
+      status: "canceled",
+      amount: "0.010",
+      filled: "0",
+      remaining: "0.010",
+      receivedAt: 1710000000200,
+    },
+  ];
+
+  const failure = await client.order
+    .cancelAllOrders({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CANCEL_ALL_FAILED");
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+});
+
+test("cancelAllOrders synthesized ack cannot roll back a websocket fill during the command", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [
+      {
+        symbol: "BTCUSDT",
+        orderId: 1001,
+        clientOrderId: "cid-1001",
+        side: "BUY",
+        type: "LIMIT",
+        status: "NEW",
+        price: "100500.00",
+        stopPrice: "0",
+        origQty: "0.020",
+        executedQty: "0.005",
+        avgPrice: "100400.00",
+        reduceOnly: false,
+        positionSide: "BOTH",
+        updateTime: 1710000000300,
+      },
+    ],
+    openOrdersDelayMs: 30,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  const iterator = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    [Symbol.asyncIterator]();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await waitForCondition(
+    () =>
+      client.order.getOpenOrders("main-binance", "BTC/USDT:USDT").length === 1
+        ? true
+        : undefined,
+    100,
+    "bootstrap open order was not stored",
+  );
+
+  const cancelPromise = client.order.cancelAllOrders({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  await waitForCondition(
+    () =>
+      requests.some(
+        (entry) =>
+          entry.method === "GET" &&
+          entry.url.pathname === "/papi/v1/um/openOrders" &&
+          entry.url.searchParams.get("symbol") === "BTCUSDT",
+      )
+        ? true
+        : undefined,
+    100,
+    "cancelAllOrders pre-fetch request was not sent",
+  );
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 1001,
+    clientOrderId: "cid-1001",
+    status: "FILLED",
+    price: "100500.00",
+    amount: "0.020",
+    filled: "0.020",
+    updateTime: 1710000000500,
+  });
+
+  await nextMatchingEvent(
+    iterator,
+    (event) =>
+      event.type === "order.filled" && event.snapshot.orderId === "1001",
+    200,
+    "websocket fill during cancelAllOrders was not published",
+  );
+
+  const result = await cancelPromise;
+  expect(result).toHaveLength(1);
+  expect(result[0]).toMatchObject({
+    orderId: "1001",
+    clientOrderId: "cid-1001",
+    status: "filled",
+    filled: new BigNumber("0.020").toFixed(),
+    remaining: new BigNumber("0").toFixed(),
+  });
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    status: "filled",
+    filled: new BigNumber("0.020").toFixed(),
+    remaining: new BigNumber("0").toFixed(),
+  });
+  expect(client.order.getOpenOrders("main-binance", "BTC/USDT:USDT")).toEqual(
+    [],
+  );
+
+  await expectNoMatchingEvent(
+    iterator,
+    (event) =>
+      event.type === "order.canceled" && event.snapshot.orderId === "1001",
+    50,
+    "stale synthesized cancelAllOrders ack published a canceled rollback event",
+  );
+
+  await iterator.return?.();
 });
 
 test("cancelAllOrders returns empty snapshots when pre-fetch finds no open orders", async () => {

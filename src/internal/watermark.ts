@@ -28,6 +28,17 @@ export function shouldApplyWatermarkedUpdate(
   const graceMs = options.graceMs ?? CROSS_CLOCK_WATERMARK_GRACE_MS;
   const requestStartedAt = options.requestStartedAt;
 
+  if (options.source === "command" && requestStartedAt !== undefined) {
+    const hasMissingExchangeTs =
+      current.exchangeTs === undefined || incoming.exchangeTs === undefined;
+    if (hasMissingExchangeTs) {
+      return (
+        current.receivedAt <= requestStartedAt &&
+        incoming.receivedAt >= current.receivedAt
+      );
+    }
+  }
+
   if (
     options.source === "rest" &&
     requestStartedAt !== undefined &&

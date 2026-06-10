@@ -81,6 +81,11 @@ DELETE /papi/v1/um/allOpenOrders
 
 - `createOrder()` / `cancelOrder()` resolve 的结果来自 **REST 成功响应标准化后的 `OrderSnapshot`**；`cancelAllOrders()` 的结果是 **预取合成**（见 3.5），DELETE 响应本身不含订单。
 - Manager 必须在命令成功后，先把 REST 返回更新应用到本地 order cache。
+- 命令回包入库必须记录发起命令前的 `requestStartedAt`，并以 `source: "command"` 走 watermark 门控：
+  - 若已有本地 snapshot 的 `receivedAt > requestStartedAt`，且 command 回包或已有 snapshot 任一缺少 `exchangeTs`，命令回包不得覆盖本地状态；
+  - 若已有本地 snapshot 早于命令请求，且 command 回包缺少 `exchangeTs`（例如 `cancelAllOrders()` 合成 canceled），允许命令回包按 `receivedAt` 入库，不能被通用 REST snapshot 的跨时钟 grace 误拦；
+  - 若两边都有 `exchangeTs`，仍按 `exchangeTs` 单调水位判断，较旧命令 ack 不能覆盖较新 WS / reconcile 状态。
+- 同一订单生命周期合并必须单调：`filled` 数量不得回退；`filled` 被保留为更大历史值时，`remaining` 必须随之重算或等价 clamp，不能继续信任较旧 incoming 的 `remaining`；`filled` / `canceled` / `expired` / `rejected` 等更高优先级状态不得被后到的低优先级 `open` / `partially_filled` 回退。
 - private WS 后续到来的 `order.updated` / `order.canceled` / `order.filled` 事件，是生命周期变化流，**不是命令 ack 的唯一来源**。
 - Binance private REST reconcile 不能把 `/papi/v1/um/openOrders` 当作订单生命周期真源；它只能作为 current open set 检测。某个本地 open order 从 REST open set 消失时，必须用 `/papi/v1/um/order`（或后续 `allOrders` 窗口回补）证明终态后再发布 `order.filled` / `order.canceled` / `order.rejected` / `order.updated`。
 - 如果终态回补因 not found / retention miss / HTTP 失败无法证明订单状态，首版不得合成 filled/canceled/expired。保持原 snapshot，order domain 进入 `degraded`，下一轮 reconcile 继续尝试。
@@ -121,7 +126,9 @@ DELETE /papi/v1/um/allOpenOrders
 | `DELETE um/allOpenOrders` 响应 `code` 存在且非 200/"200" | adapter 抛错，SDK 对外包装为 `ORDER_CANCEL_ALL_FAILED`（HTTP 层失败仍经 `TransportError.rawBody` 透出 `venueError`） |
 | REST openOrders 缺少本地 open order 且 `queryOrder` 返回 filled/canceled | 应用终态，`getOpenOrders()` 不再返回该订单，`getOrder()` 仍可读终态 |
 | REST openOrders 缺少本地 open order 但终态查询 not found/retention miss | 不合成终态；保留原 snapshot，order status 标记 `degraded` |
-| 较旧 REST/WS/order bootstrap 更新到达 | 不能覆盖较新的 command ack / WS / reconcile 状态；相同 `exchangeTs` 下 terminal status 不被 open 覆盖，filled 数量不倒退 |
+| 较旧 REST/WS/order bootstrap 更新到达 | 不能覆盖较新的 command ack / WS / reconcile 状态；terminal status 不被 open 覆盖，filled 数量不倒退 |
+| WS `ORDER_TRADE_UPDATE` 先于 REST 下单 ack 到达 | 若 WS 已推进到 filled/canceled 等更新状态，REST ack 不得把缓存或返回 snapshot 回退成 open，也不得发布回退事件 |
+| `cancelAllOrders()` 合成更新缺少 `exchangeTs` | 若本地订单状态早于命令请求，合成 canceled 可以入库；若命令期间已有更新到达且时间戳不足以比较，合成更新不得覆盖 |
 
 ### 5. Good / Base / Bad Cases
 
@@ -226,7 +233,9 @@ bun run type-check
   - `cancelOrder()` 缺少双标识时本地校验失败
   - 漏 WS 终态时，REST open set 缺口必须触发单笔终态查询，最终 `getOpenOrders()` 清理、`getOrder()` 保留终态。
   - 终态查询 not found/retention miss 时，不合成终态，order status 进入 `degraded`。
-  - command ack 后较旧 WS/bootstrap/reconcile 更新不得倒灌；相同 `exchangeTs` 下 filled 数量不倒退。
+  - command ack 后较旧 WS/bootstrap/reconcile 更新不得倒灌；WS filled 先于 REST ack 到达时，REST ack 不得把订单回退为 open，也不得发布 `order.updated(open)` 回退事件。
+  - `cancelAllOrders()` 合成的 `exchangeTs: undefined` command 更新在无更新水位冲突时仍能入库；有更新水位冲突时不得覆盖。
+  - filled 数量不倒退，remaining 与被保留的 filled 数量一致，terminal / 高优先级状态不被低优先级状态回退。
 - live smoke
   - 单向持仓模式：不传 `positionSide`，以偏离 L1 5% 的 `LIMIT` 单真实挂单再撤单
   - 双向持仓模式：显式传 `positionSide`，跑同样的真实挂撤单

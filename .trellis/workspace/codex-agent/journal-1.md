@@ -1093,3 +1093,69 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 31: P0-2 order command watermark
+
+**Date**: 2026-06-10
+**Task**: P0-2 order command watermark
+**Branch**: `fix/order-command-watermark`
+
+### Summary
+
+修复 REST 命令 ack 与私有 WS 订单事件竞态：command 源走 watermark，filled/remaining 单调合并，补 createOrder 与 cancelAllOrders 竞态回归测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `474035c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 32: Refactor OrderManager structure
+
+**Date**: 2026-06-10
+**Task**: Refactor OrderManager structure
+**Branch**: `fix/order-command-watermark`
+
+### Summary
+
+拆分 OrderManager 内部结构：保留 manager 持有 records 和 runtime 编排，将 order identity、snapshot/status、store/index 纯逻辑拆入 src/managers/order/ 私有模块；同步更新 backend code organization spec，并通过 lint、type-check、order integration test 和默认测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ec1cd11` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

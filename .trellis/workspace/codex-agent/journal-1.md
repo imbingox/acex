@@ -1026,3 +1026,36 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: 全库 review 发现固化为 docs/improvement-todo.md
+
+**Date**: 2026-06-10
+**Task**: 全库 review 发现固化为 docs/improvement-todo.md
+**Branch**: `main`
+
+### Summary
+
+完成 acex 全库 review(订单/行情/账户链路+基础层+Binance 适配器),将 31 项发现按 P0/P1/P2 分级写入 docs/improvement-todo.md(含 file:line、修复方案、验证方式);cancelAllOrders 响应形状已通过 Binance 官方文档核实为 {code,msg} 对象(P0-1 坐实);后续按 P0-1→P0-2→P0-3 三个独立任务串行修复
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1783541` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

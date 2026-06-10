@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 28
+- **Total Sessions**: 29
 - **Last Active**: 2026-06-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1028 | Active |
+| `journal-1.md` | ~1061 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 29 | 2026-06-10 | 全库 review 发现固化为 docs/improvement-todo.md | `1783541` | `main` |
 | 28 | 2026-06-10 | OrderManager 内部 localOrderId 身份模型 + pending claim (PR #56) | `acbdfd8`, `d4cbafb` | `feat/order-manager-local-order-id` |
 | 27 | 2026-06-09 | OrderManager 存储分层与 closed 订单裁剪 | `89f846e` | `feat/order-manager-store-tiering` |
 | 26 | 2026-06-09 | Binance private REST reconciliation | `3b01486`, `95ae3f2` | `feat/binance-open-orders-reconcile` |

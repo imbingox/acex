@@ -95,6 +95,44 @@ test("REST updates cannot overwrite newer local state when request started earli
   ).toBe(false);
 });
 
+test("command updates without exchange timestamps apply when local state predates the command", () => {
+  expect(
+    shouldApplyWatermarkedUpdate(
+      {
+        exchangeTs: 1_000_000,
+        receivedAt: 1_000_050,
+      },
+      {
+        receivedAt: 1_000_200,
+      },
+      {
+        source: "command",
+        requestStartedAt: 1_000_100,
+        graceMs: 10_000,
+      },
+    ),
+  ).toBe(true);
+});
+
+test("command updates without exchange timestamps cannot overwrite state newer than the command", () => {
+  expect(
+    shouldApplyWatermarkedUpdate(
+      {
+        exchangeTs: 1_000_000,
+        receivedAt: 1_000_150,
+      },
+      {
+        receivedAt: 1_000_200,
+      },
+      {
+        source: "command",
+        requestStartedAt: 1_000_100,
+        graceMs: 10_000,
+      },
+    ),
+  ).toBe(false);
+});
+
 test("snapshot deletion guard prevents deleting records newer than the REST request", () => {
   expect(
     canDeleteMissingFromSnapshot(

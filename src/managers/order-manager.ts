@@ -320,12 +320,13 @@ export class OrderManagerImpl
         ...input,
         clientOrderId: venueClientOrderId,
       };
+      const requestStartedAt = this.context.now();
       const update = await this.context.createOrder(commandInput);
       const snapshot = this.applyCommandUpdate(
         input.accountId,
         account.venue,
         update,
-        { localOrderId },
+        { localOrderId, requestStartedAt },
       );
       this.clearPendingClientOrderClaim(
         record,
@@ -361,8 +362,11 @@ export class OrderManagerImpl
     this.validateCancelOrderInput(input, account.venue);
 
     try {
+      const requestStartedAt = this.context.now();
       const update = await this.context.cancelOrder(input);
-      return this.applyCommandUpdate(input.accountId, account.venue, update);
+      return this.applyCommandUpdate(input.accountId, account.venue, update, {
+        requestStartedAt,
+      });
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CANCEL_FAILED",
@@ -383,8 +387,11 @@ export class OrderManagerImpl
     this.context.ensurePrivateCredentials(input.accountId);
 
     try {
+      const requestStartedAt = this.context.now();
       const updates = await this.context.cancelAllOrders(input);
-      return this.applyCommandUpdates(input.accountId, account.venue, updates);
+      return this.applyCommandUpdates(input.accountId, account.venue, updates, {
+        requestStartedAt,
+      });
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CANCEL_ALL_FAILED",
@@ -1311,14 +1318,12 @@ export class OrderManagerImpl
   ): OrderSnapshot {
     const amount = new BigNumber(input.amount);
     const rawFilled = new BigNumber(input.filled);
-    const filled =
-      previous &&
-      input.exchangeTs !== undefined &&
-      previous.exchangeTs === input.exchangeTs
-        ? BigNumber.maximum(rawFilled, previous.filled)
-        : rawFilled;
+    const filled = previous
+      ? BigNumber.maximum(rawFilled, previous.filled)
+      : rawFilled;
+    const filledWasClamped = !filled.eq(rawFilled);
     const remaining =
-      input.remaining === undefined
+      input.remaining === undefined || filledWasClamped
         ? amount.minus(filled)
         : new BigNumber(input.remaining);
 
@@ -1361,12 +1366,7 @@ export class OrderManagerImpl
       return input.status;
     }
 
-    if (
-      input.exchangeTs !== undefined &&
-      previous.exchangeTs !== undefined &&
-      input.exchangeTs === previous.exchangeTs &&
-      orderPriority(input.status) < orderPriority(previous.status)
-    ) {
+    if (orderPriority(input.status) < orderPriority(previous.status)) {
       return previous.status;
     }
 
@@ -1513,7 +1513,7 @@ export class OrderManagerImpl
     accountId: string,
     venue: Venue,
     update: RawOrderUpdate,
-    options: { localOrderId?: string } = {},
+    options: { localOrderId?: string; requestStartedAt?: number } = {},
   ): OrderSnapshot {
     const record = this.getOrCreateRecord(accountId, venue);
     const resolution = this.resolveLocalOrderIdForUpdate(
@@ -1526,6 +1526,16 @@ export class OrderManagerImpl
     const previous = previousLocation
       ? this.getSnapshotAtLocation(record, previousLocation)
       : undefined;
+    if (
+      previous &&
+      !shouldApplyWatermarkedUpdate(previous, update, {
+        requestStartedAt: options.requestStartedAt,
+        source: "command",
+      })
+    ) {
+      return previous;
+    }
+
     const snapshot = this.createSnapshot(accountId, venue, update, previous);
     this.setSnapshot(record, localOrderId, snapshot, previousLocation);
     return snapshot;
@@ -1535,9 +1545,10 @@ export class OrderManagerImpl
     accountId: string,
     venue: Venue,
     updates: RawOrderUpdate[],
+    options: { requestStartedAt?: number } = {},
   ): OrderSnapshot[] {
     return updates.map((update) =>
-      this.applyCommandUpdate(accountId, venue, update),
+      this.applyCommandUpdate(accountId, venue, update, options),
     );
   }
 

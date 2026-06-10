@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.4.0-beta.14
+
+### Patch Changes
+
+- a57b1a0: Include `README.md` and `CHANGELOG.md` in the published npm package so downstream consumers can inspect package usage and release notes from the installed tarball.
+
 ## 0.4.0-beta.13
 
 ### Patch Changes

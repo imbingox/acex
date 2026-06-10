@@ -17,7 +17,9 @@
   "files": [
     "index.ts",
     "src/",
-    "docs/api.md"
+    "docs/api.md",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "changeset": "changeset",
@@ -25,7 +27,9 @@
     "changeset:pre:exit": "changeset pre exit && if [ -f .changeset/pre.json ]; then biome check --write .changeset/pre.json; fi",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "pack:check": "bun run scripts/check-npm-pack.ts",
     "release": "changeset publish",
+    "release:notes": "bun run scripts/extract-changelog-section.ts",
     "type-check": "tsc --noEmit",
     "test": "bun test --max-concurrency=1 tests/unit tests/integration",
     "test:live:account": "bun run scripts/live-account-smoke.ts",

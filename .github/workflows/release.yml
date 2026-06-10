@@ -85,6 +85,11 @@ jobs:
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_TAG="v${PACKAGE_VERSION}"
+
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
           if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
             echo "already_published=true" >> "$GITHUB_OUTPUT"
@@ -93,16 +98,66 @@ jobs:
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check beta npm package contents
+        if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-publish-state.outputs.already_published != 'true'
+        run: bun run pack:check
+
       - name: Publish beta to npm
         if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-publish-state.outputs.already_published != 'true'
         env:
-          NPM_CONFIG_PROVENANCE: false
+          NPM_CONFIG_PROVENANCE: true
           NPM_CONFIG_TAG: beta
         run: bun run release
 
-      - name: Push beta git tags
-        if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-publish-state.outputs.already_published != 'true'
-        run: git push --follow-tags origin HEAD:${GITHUB_REF_NAME}
+      - name: Ensure beta git tag exists
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: |
+          RELEASE_TAG="${{ steps.beta-publish-state.outputs.release_tag }}"
+          git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
+
+          if ! git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            git tag "${RELEASE_TAG}"
+          fi
+
+          TAG_TARGET=$(git rev-list -n 1 "${RELEASE_TAG}")
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          if [ "${TAG_TARGET}" != "${HEAD_SHA}" ]; then
+            echo "Tag ${RELEASE_TAG} points to ${TAG_TARGET}, not current HEAD ${HEAD_SHA}." >&2
+            exit 1
+          fi
+
+      - name: Push beta git tag
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: git push origin HEAD:${GITHUB_REF_NAME} "refs/tags/${{ steps.beta-publish-state.outputs.release_tag }}"
+
+      - name: Check whether beta GitHub Release already exists
+        id: beta-github-release
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.beta-publish-state.outputs.release_tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "GitHub Release ${{ steps.beta-publish-state.outputs.release_tag }} already exists; skipping creation."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create beta GitHub Release notes
+        if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-github-release.outputs.exists != 'true'
+        run: bun --silent run release:notes ${{ steps.beta-publish-state.outputs.package_version }} > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create beta GitHub Release
+        if: steps.changesets.outputs.hasChangesets == 'false' && steps.beta-github-release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.beta-publish-state.outputs.release_tag }}" \
+            --title "${{ steps.beta-publish-state.outputs.release_tag }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --prerelease \
+            --verify-tag
 
   stable-release:
     if: github.event_name == 'workflow_dispatch'
@@ -152,13 +207,27 @@ jobs:
       - name: Run tests
         run: bun run test
 
+      - name: Read current stable release state
+        id: stable-current-state
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          if [[ "${PACKAGE_VERSION}" == *-* ]]; then
+            echo "stable_metadata_ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable_metadata_ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Exit prerelease mode
+        if: steps.stable-current-state.outputs.stable_metadata_ready != 'true'
         run: bun run changeset:pre:exit
 
       - name: Version packages for stable release
+        if: steps.stable-current-state.outputs.stable_metadata_ready != 'true'
         run: bun run version-packages
 
       - name: Ensure stable release produced changes
+        if: steps.stable-current-state.outputs.stable_metadata_ready != 'true'
         run: |
           if git diff --quiet; then
             echo "No stable release changes were generated. The repository may already be out of prerelease mode or there is nothing new to release." >&2
@@ -170,38 +239,109 @@ jobs:
         run: |
           PACKAGE_NAME=$(node -p "require('./package.json').name")
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          RELEASE_TAG="v${PACKAGE_VERSION}"
 
-          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
-
-          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
-            echo "Target version ${PACKAGE_NAME}@${PACKAGE_VERSION} is already published." >&2
+          if [[ "${PACKAGE_VERSION}" == *-* ]]; then
+            echo "Stable release target must not be a prerelease version: ${PACKAGE_VERSION}" >&2
             exit 1
           fi
 
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "package_version=${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "Target version ${PACKAGE_NAME}@${PACKAGE_VERSION} is already published; skipping stable npm publish."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "github_release_exists=true" >> "$GITHUB_OUTPUT"
+            echo "GitHub Release ${RELEASE_TAG} already exists; skipping creation."
+          else
+            echo "github_release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check stable npm package contents
+        run: bun run pack:check
+
+      - name: Create stable GitHub Release notes
+        if: steps.stable-publish-state.outputs.github_release_exists != 'true'
+        run: bun --silent run release:notes ${{ steps.stable-publish-state.outputs.package_version }} > "$RUNNER_TEMP/release-notes.md"
+
       - name: Commit stable release metadata
+        if: steps.stable-current-state.outputs.stable_metadata_ready != 'true'
         run: |
           git add -A
           git commit -m "chore(release): publish stable v${{ steps.stable-publish-state.outputs.package_version }} [skip release]"
 
       - name: Publish stable to npm
+        if: steps.stable-publish-state.outputs.already_published != 'true'
         env:
-          NPM_CONFIG_PROVENANCE: false
+          NPM_CONFIG_PROVENANCE: true
         run: bun run release
 
-      - name: Push stable commit and tags
-        run: git push --follow-tags origin HEAD:main
+      - name: Ensure stable git tag exists
+        run: |
+          RELEASE_TAG="${{ steps.stable-publish-state.outputs.release_tag }}"
+          git fetch origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" || true
+
+          if ! git rev-parse --verify --quiet "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            git tag "${RELEASE_TAG}"
+          fi
+
+          TAG_TARGET=$(git rev-list -n 1 "${RELEASE_TAG}")
+          HEAD_SHA=$(git rev-parse HEAD)
+
+          if [ "${TAG_TARGET}" != "${HEAD_SHA}" ]; then
+            echo "Tag ${RELEASE_TAG} points to ${TAG_TARGET}, not current HEAD ${HEAD_SHA}." >&2
+            exit 1
+          fi
+
+      - name: Push stable commit and tag
+        run: git push origin HEAD:main "refs/tags/${{ steps.stable-publish-state.outputs.release_tag }}"
+
+      - name: Create stable GitHub Release
+        if: steps.stable-publish-state.outputs.github_release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.stable-publish-state.outputs.release_tag }}" \
+            --title "${{ steps.stable-publish-state.outputs.release_tag }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --latest \
+            --verify-tag
 
       - name: Re-enter beta prerelease mode
+        id: beta-pre-state
         if: ${{ inputs.reenter_beta_mode }}
-        run: bun run changeset:pre:enter:beta
+        run: |
+          PRE_MODE=$(node -e "const fs = require('node:fs'); try { const pre = JSON.parse(fs.readFileSync('.changeset/pre.json', 'utf8')); process.stdout.write(String(pre.mode ?? '')); } catch {}")
+
+          if [ "${PRE_MODE}" = "pre" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already in beta prerelease mode; skipping."
+            exit 0
+          fi
+
+          bun run changeset:pre:enter:beta
+
+          if [ -n "$(git status --porcelain -- .changeset/pre.json)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Commit beta prerelease metadata
-        if: ${{ inputs.reenter_beta_mode }}
+        if: ${{ inputs.reenter_beta_mode && steps.beta-pre-state.outputs.changed == 'true' }}
         run: |
           git add .changeset/pre.json
           git commit -m "chore(release): re-enter beta prerelease mode [skip release]"
 
       - name: Push beta prerelease metadata
-        if: ${{ inputs.reenter_beta_mode }}
+        if: ${{ inputs.reenter_beta_mode && steps.beta-pre-state.outputs.changed == 'true' }}
         run: git push origin HEAD:main

@@ -19,7 +19,7 @@
 
 ## P0 — 实盘正确性（必须先修）
 
-### - [ ] P0-1 `cancelAllOrders` 按数组解析 PAPI 的 `{code,msg}` 响应，live 必抛错
+### - [x] P0-1 `cancelAllOrders` 按数组解析 PAPI 的 `{code,msg}` 响应，live 必抛错
 
 - **位置**：`src/adapters/binance/private-adapter.ts:857-878`
 - **问题**：代码将 `DELETE /papi/v1/um/allOpenOrders` 响应当作订单数组执行 `responses.flatMap(...)`。Binance 官方文档（Portfolio Margin → Cancel All UM Open Orders）给出的响应是对象：`{"code": 200, "msg": "The operation of cancel all open order is done."}`。运行时 `flatMap is not a function` → 被包装成 `ORDER_CANCEL_ALL_FAILED` 抛出，**而交易所侧实际已全撤成功**，造成"撤单失败"假象与本地状态分歧。
@@ -29,7 +29,7 @@
   2. 修正测试夹具为真实响应形状，新增按对象响应的集成测试。
   3. live-order-smoke 增加 `--cancel-all` 步骤（挂 2 个远端 GTX 单 → cancelAll → 断言 openOrders 为空）。
 - **验证方式**：文档级已核实（官方响应示例）；live 验证步骤见[附录 A](#附录-a-cancelallorders-live-验证步骤)。
-- **状态**：代码已修复（→ .trellis/tasks/06-10-cancel-all-response-shape），待 live 复核后勾选。
+- **状态**：代码已修复（→ .trellis/tasks/06-10-cancel-all-response-shape）并完成 live 复核（2026-06-10，`ETH/USDC:USDC`，2 笔 GTX 挂单全部由 `cancelAllOrders` 撤成 `canceled`，`remainingOpenOrders.count = 0`，`errors = []`）。
 
 ### - [ ] P0-2 REST 下单回包与 WS 成交竞态：已成交订单被回退成 `open`
 

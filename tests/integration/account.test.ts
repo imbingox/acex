@@ -12,6 +12,7 @@ import {
   installBinancePrivateAccountInfra,
   PAPI_ACCOUNT_WS_URL,
   PAPI_LISTEN_KEY,
+  papiAccountWsUrl,
 } from "../support/exchanges/binance.ts";
 import {
   FakeWebSocket,
@@ -229,6 +230,193 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   });
 
   await iterator.return?.();
+});
+
+test("Binance private stream rebuilds listenKey after listenKeyExpired", async () => {
+  const rotatedListenKey = "rotated-listen-key";
+  const requests = installBinancePrivateAccountInfra({
+    listenKeys: [PAPI_LISTEN_KEY, rotatedListenKey],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 200,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  socket.emitJson({
+    e: "listenKeyExpired",
+    E: 1710000001000,
+  });
+
+  const rotatedSocket = await waitForSocket(
+    papiAccountWsUrl(rotatedListenKey),
+    0,
+    300,
+  );
+  await waitForCondition(
+    () =>
+      client.account.getAccountStatus("main-binance")?.runtimeStatus ===
+      "healthy"
+        ? true
+        : undefined,
+    300,
+    "Binance private stream did not recover after listenKeyExpired",
+  );
+
+  expect(rotatedSocket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(
+    requests.filter(
+      (request) =>
+        request.method === "POST" &&
+        request.url.pathname === "/papi/v1/listenKey",
+    ),
+  ).toHaveLength(2);
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "DELETE" &&
+        request.url.pathname === "/papi/v1/listenKey" &&
+        request.url.searchParams.get("listenKey") === PAPI_LISTEN_KEY,
+    ),
+  ).toBe(true);
+});
+
+test("Binance private stream rebuilds listenKey after keepalive failure", async () => {
+  const rotatedListenKey = "keepalive-rotated-listen-key";
+  const requests = installBinancePrivateAccountInfra({
+    listenKeys: [PAPI_LISTEN_KEY, rotatedListenKey],
+    failListenKeyKeepAliveCount: 1_000,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 500,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      listenKeyKeepAliveMs: 5,
+    },
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  const rotatedSocket = await waitForSocket(
+    papiAccountWsUrl(rotatedListenKey),
+    0,
+    1_000,
+  );
+
+  expect(rotatedSocket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(
+    requests.filter(
+      (request) =>
+        request.method === "PUT" &&
+        request.url.pathname === "/papi/v1/listenKey",
+    ).length,
+  ).toBeGreaterThanOrEqual(3);
+  expect(
+    requests.filter(
+      (request) =>
+        request.method === "POST" &&
+        request.url.pathname === "/papi/v1/listenKey",
+    ),
+  ).toHaveLength(2);
+});
+
+test("Binance private stream watchdog marks heartbeat timeout and rebuilds listenKey", async () => {
+  const rotatedListenKey = "watchdog-rotated-listen-key";
+  installBinancePrivateAccountInfra({
+    listenKeys: [PAPI_LISTEN_KEY, rotatedListenKey],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 500,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      binance: {
+        privateStreamStaleAfterMs: 50,
+      },
+    },
+  });
+  const statusIterator = client.account.events
+    .status({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  await client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  await waitForSocket(PAPI_ACCOUNT_WS_URL);
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      runtimeStatus: "bootstrap_pending",
+      ready: false,
+    },
+  });
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      runtimeStatus: "healthy",
+      ready: true,
+    },
+  });
+  expect(await nextEvent(statusIterator, 500)).toMatchObject({
+    status: {
+      runtimeStatus: "reconnecting",
+      ready: true,
+      reason: "heartbeat_timeout",
+    },
+  });
+
+  const rotatedSocket = await waitForSocket(
+    papiAccountWsUrl(rotatedListenKey),
+    0,
+    500,
+  );
+  expect(rotatedSocket.readyState).toBe(FakeWebSocket.OPEN);
+
+  await statusIterator.return?.();
 });
 
 test("client clock drives Binance signed request timestamps", async () => {

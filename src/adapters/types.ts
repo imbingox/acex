@@ -212,6 +212,7 @@ export interface PrivateStreamCallbacks {
   onAccountSnapshot(snapshot: RawAccountBootstrap): void;
   onAccountUpdate(update: RawAccountUpdate): void;
   onOrderUpdate(update: RawOrderUpdate): void;
+  onFreshnessChange(freshness: "stale", reason: "heartbeat_timeout"): void;
   onDisconnected(): void;
   onReconnected(): void;
   onError(error: Error): void;
@@ -222,6 +223,7 @@ export interface PrivateStreamOptions {
   reconnectDelayMs: number;
   reconnectMaxDelayMs: number;
   listenKeyKeepAliveMs: number;
+  staleAfterMs: number;
   now?: () => number;
 }
 

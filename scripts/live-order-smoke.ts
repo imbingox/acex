@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import {
   BigNumber,
   createClient,
@@ -26,6 +27,7 @@ interface CliOptions {
   symbol: string;
   durationSec: number;
   disconnectAfterSec?: number;
+  expireListenKeyAfterSec?: number;
   reconnectWaitSec: number;
   showOrders: boolean;
   cancelAll: boolean;
@@ -77,6 +79,15 @@ interface ReconnectSummary {
   recoveredOpenOrderCount: number;
 }
 
+interface ListenKeyExpirationSummary {
+  expiredAt: string;
+  expiredListenKeySuffix: string;
+  statusAfterDelete: Record<string, unknown>;
+  reconnectedListenKeySuffix: string;
+  recoveredStatus: Record<string, unknown>;
+  recoveredOpenOrderCount: number;
+}
+
 interface CancelAllSummary {
   symbol: string;
   placedOrders: OpenOrderSummary[];
@@ -94,6 +105,7 @@ interface SmokeResult {
   firstEvent: OrderEventSummary;
   updateEventsAfterFirstEvent: number;
   reconnect?: ReconnectSummary;
+  listenKeyExpiration?: ListenKeyExpirationSummary;
   cancelAll?: CancelAllSummary;
 }
 
@@ -102,6 +114,108 @@ const DEFAULT_SYMBOL = "BTC/USDT:USDT";
 const DEFAULT_DURATION_SEC = 10;
 const DEFAULT_RECONNECT_WAIT_SEC = 10;
 const CANCEL_ALL_TEST_ORDER_COUNT = 2;
+const BINANCE_PAPI_REST_BASE_URL = "https://papi.binance.com";
+const DEFAULT_RECV_WINDOW = "5000";
+const DELETE_LISTEN_KEY_TIMEOUT_MS = 10_000;
+const LISTEN_KEY_SUMMARY_SUFFIX_LENGTH = 6;
+
+function signQuery(query: string, secret: string): string {
+  return createHmac("sha256", secret).update(query).digest("hex");
+}
+
+function extractListenKey(socketUrl: string): string {
+  const url = new URL(socketUrl);
+  const listenKey = url.pathname.split("/").filter(Boolean).at(-1);
+  if (!listenKey) {
+    throw new Error(`Unable to extract listenKey from websocket URL: ${url}`);
+  }
+
+  return listenKey;
+}
+
+function listenKeySuffix(listenKey: string): string {
+  return listenKey.slice(-LISTEN_KEY_SUMMARY_SUFFIX_LENGTH);
+}
+
+function extractListenKeySuffix(socketUrl: string): string {
+  return listenKeySuffix(extractListenKey(socketUrl));
+}
+
+function isAbortOrTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const name = (error as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+async function deleteListenKey(options: {
+  apiKey: string;
+  secret: string;
+  listenKey: string;
+}): Promise<void> {
+  const params = new URLSearchParams({
+    listenKey: options.listenKey,
+    timestamp: `${Date.now()}`,
+    recvWindow: DEFAULT_RECV_WINDOW,
+  });
+  params.set("signature", signQuery(params.toString(), options.secret));
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `${BINANCE_PAPI_REST_BASE_URL}/papi/v1/listenKey?${params.toString()}`,
+      {
+        method: "DELETE",
+        headers: {
+          "X-MBX-APIKEY": options.apiKey,
+        },
+        signal: AbortSignal.timeout(DELETE_LISTEN_KEY_TIMEOUT_MS),
+      },
+    );
+  } catch (error) {
+    if (isAbortOrTimeoutError(error)) {
+      throw new Error(
+        `Timed out deleting Binance PAPI listenKey after ${DELETE_LISTEN_KEY_TIMEOUT_MS}ms`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to delete listenKey: ${response.status} ${response.statusText} ${await response.text()}`,
+    );
+  }
+}
+
+async function waitForRotatedListenKeySocket(options: {
+  previousUrl: string;
+  minIndex: number;
+  timeoutMs: number;
+  label: string;
+}): Promise<TrackedWebSocket> {
+  return await waitForCondition(
+    () =>
+      TrackedWebSocket.instances
+        .slice(options.minIndex)
+        .find((socket) => socket.url !== options.previousUrl),
+    options.timeoutMs,
+    options.label,
+  );
+}
+
+function latestTrackedSocket(minIndex: number): TrackedWebSocket | undefined {
+  return TrackedWebSocket.instances
+    .slice(minIndex)
+    .reduce<TrackedWebSocket | undefined>(
+      (latest, socket) =>
+        !latest || socket.createdAt > latest.createdAt ? socket : latest,
+      undefined,
+    );
+}
 
 function printHelp(): void {
   writeStdout(`Usage:
@@ -116,6 +230,8 @@ Options:
   --symbol <symbol>          Symbol for optional cancel-all smoke (default: ${DEFAULT_SYMBOL})
   --duration <seconds>       Total observation duration (default: ${DEFAULT_DURATION_SEC})
   --disconnect-after <sec>   Force-close the private websocket after N seconds and verify reconnect
+  --expire-listen-key-after <sec>
+                             DELETE the active listenKey after N seconds and verify recovery
   --reconnect-wait <sec>     Max reconnect recovery wait (default: ${DEFAULT_RECONNECT_WAIT_SEC})
   --show-orders              Include cached open-order details in output
   --cancel-all               Place 2 far GTX limit orders, cancel all by symbol, and verify no opens remain
@@ -125,6 +241,7 @@ Options:
 Examples:
   bun run test:live:order -- --duration 10
   bun run test:live:order -- --duration 60 --disconnect-after 5 --show-orders
+  bun run test:live:order -- --duration 60 --expire-listen-key-after 5 --show-orders
   bun run test:live:order -- --cancel-all --symbol BTC/USDT:USDT --position-side long`);
 }
 
@@ -164,6 +281,12 @@ function parseArgs(argv: string[]): CliOptions {
           "--disconnect-after",
         );
         break;
+      case "--expire-listen-key-after":
+        options.expireListenKeyAfterSec = parseNumber(
+          argv[++index] ?? "",
+          "--expire-listen-key-after",
+        );
+        break;
       case "--reconnect-wait":
         options.reconnectWaitSec = parseNumber(
           argv[++index] ?? "",
@@ -194,6 +317,14 @@ function parseArgs(argv: string[]): CliOptions {
   }
   if (!options.symbol) {
     throw new Error("--symbol cannot be empty");
+  }
+  if (
+    options.disconnectAfterSec !== undefined &&
+    options.expireListenKeyAfterSec !== undefined
+  ) {
+    throw new Error(
+      "--disconnect-after and --expire-listen-key-after are mutually exclusive",
+    );
   }
 
   return options;
@@ -446,8 +577,11 @@ async function runCancelAllSmoke(options: {
 async function smokeOrders(options: {
   client: ReturnType<typeof createClient>;
   accountId: string;
+  apiKey: string;
+  secret: string;
   durationMs: number;
   disconnectAfterMs?: number;
+  expireListenKeyAfterMs?: number;
   reconnectWaitMs: number;
   showOrders: boolean;
 }): Promise<SmokeResult> {
@@ -486,11 +620,16 @@ async function smokeOrders(options: {
 
     let updateEventsAfterFirstEvent = 0;
     let reconnect: ReconnectSummary | undefined;
+    let listenKeyExpiration: ListenKeyExpirationSummary | undefined;
     const startedAt = Date.now();
     const disconnectAt =
       options.disconnectAfterMs === undefined
         ? undefined
         : startedAt + options.disconnectAfterMs;
+    const expireListenKeyAt =
+      options.expireListenKeyAfterMs === undefined
+        ? undefined
+        : startedAt + options.expireListenKeyAfterMs;
     const deadline = startedAt + options.durationMs;
 
     if (disconnectAt !== undefined) {
@@ -556,6 +695,73 @@ async function smokeOrders(options: {
           },
         );
       }
+    } else if (expireListenKeyAt !== undefined) {
+      const expiresWithinDeadline = expireListenKeyAt <= deadline;
+      updateEventsAfterFirstEvent += await collectEventsUntil(
+        iterator,
+        expiresWithinDeadline ? expireListenKeyAt : deadline,
+        {
+          doneLabel: "Order update stream closed unexpectedly",
+        },
+      );
+
+      if (expiresWithinDeadline) {
+        const socketToExpire = latestTrackedSocket(socketIndex) ?? socket;
+        const socketCountBeforeDelete = TrackedWebSocket.instances.length;
+        const listenKey = extractListenKey(socketToExpire.url);
+        await deleteListenKey({
+          apiKey: options.apiKey,
+          secret: options.secret,
+          listenKey,
+        });
+        const statusAfterDelete = cloneStatus(
+          options.client.order.getOrderStatus(options.accountId),
+        );
+
+        const reconnectedSocket = await waitForRotatedListenKeySocket({
+          previousUrl: socketToExpire.url,
+          minIndex: socketCountBeforeDelete,
+          timeoutMs: options.reconnectWaitMs,
+          label: "Timed out waiting for rotated listenKey recovery websocket",
+        });
+
+        const recoveredStatus = await waitForCondition(
+          () => {
+            const current = options.client.order.getOrderStatus(
+              options.accountId,
+            );
+            if (current?.runtimeStatus === "healthy" && current.ready) {
+              return cloneStatus(current);
+            }
+            return undefined;
+          },
+          options.reconnectWaitMs,
+          "Timed out waiting for listenKey recovery",
+        );
+
+        listenKeyExpiration = {
+          expiredAt: new Date().toISOString(),
+          expiredListenKeySuffix: listenKeySuffix(listenKey),
+          statusAfterDelete,
+          reconnectedListenKeySuffix: extractListenKeySuffix(
+            reconnectedSocket.url,
+          ),
+          recoveredStatus,
+          recoveredOpenOrderCount: options.client.order.getOpenOrders(
+            options.accountId,
+          ).length,
+        };
+      }
+
+      if (deadline > Date.now()) {
+        updateEventsAfterFirstEvent += await collectEventsUntil(
+          iterator,
+          deadline,
+          {
+            doneLabel: "Order update stream closed unexpectedly",
+          },
+        );
+      }
     } else {
       updateEventsAfterFirstEvent += await collectEventsUntil(
         iterator,
@@ -578,6 +784,7 @@ async function smokeOrders(options: {
       firstEvent: summarizeEvent(firstEvent),
       updateEventsAfterFirstEvent,
       reconnect,
+      listenKeyExpiration,
     };
   } finally {
     await iterator.return?.();
@@ -588,11 +795,14 @@ async function main(): Promise<void> {
   const cli = parseArgs(Bun.argv.slice(2));
   const apiKey = requireEnv("BINANCE_PAPI_API_KEY");
   const secret = requireEnv("BINANCE_PAPI_SECRET");
+  const listenKeyKeepAliveMs =
+    cli.expireListenKeyAfterSec === undefined ? undefined : 5_000;
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 15_000,
       streamReconnectDelayMs: 1_000,
       streamReconnectMaxDelayMs: 3_000,
+      listenKeyKeepAliveMs,
     },
   });
   const errors: ErrorSummary[] = [];
@@ -625,11 +835,17 @@ async function main(): Promise<void> {
     const result = await smokeOrders({
       client,
       accountId: cli.accountId,
+      apiKey,
+      secret,
       durationMs: cli.durationSec * 1_000,
       disconnectAfterMs:
         cli.disconnectAfterSec === undefined
           ? undefined
           : cli.disconnectAfterSec * 1_000,
+      expireListenKeyAfterMs:
+        cli.expireListenKeyAfterSec === undefined
+          ? undefined
+          : cli.expireListenKeyAfterSec * 1_000,
       reconnectWaitMs: cli.reconnectWaitSec * 1_000,
       showOrders: cli.showOrders,
     });

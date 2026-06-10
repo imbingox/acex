@@ -39,6 +39,7 @@
     "test:live:order": "bun run scripts/live-order-smoke.ts",
     "test:live:order:smoke": "bun run scripts/live-order-smoke.ts --duration 10",
     "test:live:order:soak": "bun run scripts/live-order-smoke.ts --duration 60 --disconnect-after 5",
+    "test:live:order:listen-key": "bun run scripts/live-order-smoke.ts --duration 60 --expire-listen-key-after 5",
     "version-packages": "changeset version && files=\"package.json\"; if [ -f .changeset/pre.json ]; then files=\"$files .changeset/pre.json\"; fi; if [ -f CHANGELOG.md ]; then files=\"$files CHANGELOG.md\"; fi; biome check --write $files",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test --max-concurrency=1 tests/integration",

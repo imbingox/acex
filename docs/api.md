@@ -100,7 +100,7 @@ const risk = client.account.getRiskSnapshot("main-binance");
 const openOrders = client.order.getOpenOrders("main-binance");
 ```
 
-Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护；默认每 60s 还会用 `/papi/v1/balance`、`/papi/v1/account`、`/papi/v1/um/positionRisk` 和订单 REST 接口做 private reconcile。Binance 全账户 `/papi/v1/um/openOrders` 不带 symbol 时 request weight 较高，默认 60s 是保守值。
+Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护；默认每 60s 还会用 `/papi/v1/balance`、`/papi/v1/account`、`/papi/v1/um/positionRisk` 和订单 REST 接口做 private reconcile。Binance 全账户 `/papi/v1/um/openOrders` 不带 symbol 时 request weight 较高，默认 60s 是保守值。读取余额、仓位或风险数据时必须订阅 `client.account.subscribeAccount()`；`client.order.subscribeOrders()` 只维护订单缓存，即使底层复用同一条 private WS，也不会维护 account 仓位缓存。
 
 ### 2.4 注册 Juplend 只读账户
 
@@ -242,6 +242,7 @@ const client = createClient({
     binance: {
       riskPollIntervalMs: 5_000,
       privateReconcileIntervalMs: 60_000,
+      privateStreamStaleAfterMs: 65 * 60_000,
     },
     juplend: {
       pollIntervalMs: 30_000,
@@ -392,7 +393,7 @@ interface AccountManager {
 
 `AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，数组视图用 `getBalances()`。
 
-Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
+Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。WS `ACCOUNT_UPDATE` 会更新发生变化的余额和仓位；`/papi/v1/account` + `/papi/v1/um/positionRisk` refresh 用于校准风险字段和 mark-to-market 仓位字段。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
 
 Account 事件用于消费余额、仓位、风险或全量快照替换：
 
@@ -586,6 +587,7 @@ interface CreateClientOptions {
     binance?: {
       riskPollIntervalMs?: number;
       privateReconcileIntervalMs?: number;
+      privateStreamStaleAfterMs?: number;
     };
     juplend?: {
       pollIntervalMs?: number;

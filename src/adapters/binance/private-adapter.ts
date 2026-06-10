@@ -155,9 +155,16 @@ interface BinanceOrderTradeUpdateMessage {
   o?: BinanceOrderTradeUpdatePayload;
 }
 
+interface BinanceListenKeyExpiredMessage {
+  e?: string;
+  E?: number;
+  listenKey?: string;
+}
+
 type BinancePrivateMessage =
   | BinanceAccountUpdateMessage
-  | BinanceOrderTradeUpdateMessage;
+  | BinanceOrderTradeUpdateMessage
+  | BinanceListenKeyExpiredMessage;
 
 const BINANCE_PAPI_REST_BASE_URL = "https://papi.binance.com";
 const BINANCE_PAPI_WS_BASE_URL = "wss://fstream.binance.com/pm/ws";
@@ -223,6 +230,10 @@ function getStringOption(
 ): string | undefined {
   const value = options?.[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function toError(value: unknown, fallback: string): Error {
+  return value instanceof Error ? value : new Error(fallback);
 }
 
 function signQuery(query: string, secret: string): string {
@@ -534,7 +545,9 @@ function mapAccountUpdatePosition(
 
 function parsePrivateMessage(data: string): BinancePrivateMessage | undefined {
   const parsed = JSON.parse(data) as BinancePrivateMessage;
-  return parsed.e === "ACCOUNT_UPDATE" || parsed.e === "ORDER_TRADE_UPDATE"
+  return parsed.e === "ACCOUNT_UPDATE" ||
+    parsed.e === "ORDER_TRADE_UPDATE" ||
+    parsed.e === "listenKeyExpired"
     ? parsed
     : undefined;
 }
@@ -543,6 +556,12 @@ function isAccountUpdateMessage(
   message: BinancePrivateMessage,
 ): message is BinanceAccountUpdateMessage {
   return message.e === "ACCOUNT_UPDATE";
+}
+
+function isListenKeyExpiredMessage(
+  message: BinancePrivateMessage,
+): message is BinanceListenKeyExpiredMessage {
+  return message.e === "listenKeyExpired";
 }
 
 function mapAccountUpdate(
@@ -920,75 +939,158 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     options: PrivateStreamOptions,
     accountOptions?: Record<string, unknown>,
   ): StreamHandle {
+    interface PrivateStreamSession {
+      readonly listenKey: string;
+      websocket?: StreamHandle;
+      keepAliveTimer?: TimerHandle;
+      stopped: boolean;
+    }
+
+    type RecoveryReason =
+      | "heartbeat_timeout"
+      | "keepalive_failed"
+      | "listen_key_expired";
+
     let closed = false;
-    let listenKey: string | undefined;
-    let keepAliveTimer: TimerHandle | undefined;
-    let websocket: StreamHandle | undefined;
+    let activeSession: PrivateStreamSession | undefined;
+    let recoveryInFlight: Promise<void> | undefined;
+    let recoveryRetryTimer: ReturnType<typeof setTimeout> | undefined;
     let openedOnce = false;
 
-    const clearKeepAlive = () => {
-      if (keepAliveTimer) {
-        clearInterval(keepAliveTimer);
-        keepAliveTimer = undefined;
+    const clearRecoveryRetry = () => {
+      if (recoveryRetryTimer) {
+        clearTimeout(recoveryRetryTimer);
+        recoveryRetryTimer = undefined;
       }
     };
 
-    const closeListenKey = () => {
-      if (!listenKey) {
-        return;
-      }
-
-      const key = listenKey;
-      listenKey = undefined;
-      void this.closeUserDataStream(credentials, key, accountOptions).catch(
-        (error) => {
+    const closeListenKey = (listenKey: string) => {
+      void this.closeUserDataStream(
+        credentials,
+        listenKey,
+        accountOptions,
+      ).catch((error) => {
+        if (!closed) {
           callbacks.onError(
-            error instanceof Error
-              ? error
-              : new Error("Failed to close Binance PAPI listenKey"),
+            toError(error, "Failed to close Binance PAPI listenKey"),
           );
-        },
-      );
+        }
+      });
     };
 
-    const ready = (async () => {
-      listenKey = await this.startUserDataStream(credentials, accountOptions);
-      if (closed) {
-        closeListenKey();
+    const closeSession = (
+      session: PrivateStreamSession | undefined,
+      shouldCloseListenKey: boolean,
+    ) => {
+      if (!session || session.stopped) {
         return;
       }
 
-      keepAliveTimer = setInterval(() => {
-        if (!listenKey) {
+      session.stopped = true;
+      if (session.keepAliveTimer) {
+        clearInterval(session.keepAliveTimer);
+        session.keepAliveTimer = undefined;
+      }
+      session.websocket?.close();
+      session.websocket = undefined;
+      if (shouldCloseListenKey) {
+        closeListenKey(session.listenKey);
+      }
+    };
+
+    const activateSession = (nextSession: PrivateStreamSession) => {
+      if (closed) {
+        closeSession(nextSession, true);
+        return;
+      }
+
+      const previousSession = activeSession;
+      activeSession = nextSession;
+      closeSession(previousSession, true);
+
+      if (openedOnce) {
+        callbacks.onReconnected();
+      } else {
+        openedOnce = true;
+      }
+    };
+
+    const scheduleRecoveryRetry = (reason: RecoveryReason) => {
+      if (closed || recoveryRetryTimer) {
+        return;
+      }
+
+      recoveryRetryTimer = setTimeout(() => {
+        recoveryRetryTimer = undefined;
+        recoverPrivateStream(reason);
+      }, options.reconnectDelayMs);
+    };
+
+    const createSession = async (): Promise<
+      PrivateStreamSession | undefined
+    > => {
+      const listenKey = await this.startUserDataStream(
+        credentials,
+        accountOptions,
+      );
+      if (closed) {
+        closeListenKey(listenKey);
+        return undefined;
+      }
+
+      const nextSession: PrivateStreamSession = {
+        listenKey,
+        stopped: false,
+      };
+
+      nextSession.keepAliveTimer = setInterval(() => {
+        if (closed || activeSession !== nextSession) {
           return;
         }
 
         void this.keepAliveUserDataStream(
           credentials,
-          listenKey,
+          nextSession.listenKey,
           accountOptions,
         ).catch((error) => {
+          if (closed || activeSession !== nextSession) {
+            return;
+          }
+
           callbacks.onError(
-            error instanceof Error
-              ? error
-              : new Error("Failed to keep Binance PAPI listenKey alive"),
+            toError(error, "Failed to keep Binance PAPI listenKey alive"),
           );
+          recoverPrivateStream("keepalive_failed");
         });
       }, options.listenKeyKeepAliveMs);
 
-      websocket = createManagedWebSocket<BinancePrivateMessage>({
+      nextSession.websocket = createManagedWebSocket<BinancePrivateMessage>({
         url: `${BINANCE_PAPI_WS_BASE_URL}/${listenKey}`,
         initialMessageTimeoutMs: options.openTimeoutMs,
         readyWhen: "open",
         now: options.now,
         parseMessage: parsePrivateMessage,
         onOpen() {
+          if (closed || activeSession !== nextSession) {
+            return;
+          }
+
           if (openedOnce) {
             callbacks.onReconnected();
+          } else {
+            openedOnce = true;
           }
-          openedOnce = true;
         },
         onMessage(message, receivedAt) {
+          if (closed || activeSession !== nextSession) {
+            return;
+          }
+
+          if (isListenKeyExpiredMessage(message)) {
+            recoverPrivateStream("listen_key_expired");
+            return;
+          }
+
           if (isAccountUpdateMessage(message)) {
             callbacks.onAccountUpdate(mapAccountUpdate(message, receivedAt));
             return;
@@ -1000,12 +1102,30 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
           }
         },
         onUnexpectedClose() {
+          if (closed || activeSession !== nextSession) {
+            return;
+          }
+
           callbacks.onDisconnected();
         },
         onError() {
+          if (closed || activeSession !== nextSession) {
+            return;
+          }
+
           callbacks.onError(
             new Error("WebSocket error for Binance PAPI private stream"),
           );
+        },
+        messageWatchdog: {
+          staleAfterMs: options.staleAfterMs,
+          onStale() {
+            if (closed || activeSession !== nextSession) {
+              return;
+            }
+
+            recoverPrivateStream("heartbeat_timeout");
+          },
         },
         reconnect: {
           initialDelayMs: options.reconnectDelayMs,
@@ -1014,7 +1134,60 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         },
       });
 
-      await websocket.ready;
+      try {
+        await nextSession.websocket.ready;
+      } catch (error) {
+        closeSession(nextSession, true);
+        throw error;
+      }
+
+      return nextSession;
+    };
+
+    const recoverPrivateStream = (reason: RecoveryReason) => {
+      if (closed || recoveryInFlight) {
+        return;
+      }
+
+      clearRecoveryRetry();
+      if (reason === "heartbeat_timeout") {
+        callbacks.onFreshnessChange("stale", "heartbeat_timeout");
+      } else {
+        callbacks.onDisconnected();
+      }
+
+      const recovery = (async () => {
+        const previousSession = activeSession;
+        activeSession = undefined;
+        closeSession(previousSession, true);
+
+        try {
+          const nextSession = await createSession();
+          if (nextSession) {
+            activateSession(nextSession);
+          }
+        } catch (error) {
+          if (!closed) {
+            callbacks.onError(
+              toError(error, "Failed to rebuild Binance PAPI private stream"),
+            );
+            scheduleRecoveryRetry(reason);
+          }
+        }
+      })().finally(() => {
+        if (recoveryInFlight === recovery) {
+          recoveryInFlight = undefined;
+        }
+      });
+
+      recoveryInFlight = recovery;
+    };
+
+    const ready = (async () => {
+      const initialSession = await createSession();
+      if (initialSession) {
+        activateSession(initialSession);
+      }
     })();
 
     return {
@@ -1025,9 +1198,9 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         }
 
         closed = true;
-        clearKeepAlive();
-        websocket?.close();
-        closeListenKey();
+        clearRecoveryRetry();
+        closeSession(activeSession, true);
+        activeSession = undefined;
       },
     };
   }

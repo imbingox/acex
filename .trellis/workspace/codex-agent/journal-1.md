@@ -1159,3 +1159,37 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 33: Binance private listenKey recovery
+
+**Date**: 2026-06-10
+**Task**: Binance private listenKey recovery
+**Branch**: `fix/private-listenkey-recovery`
+
+### Summary
+
+修复 Binance PAPI 私有流 listenKey 失效后的自动轮换恢复，补充 keepalive/watchdog 恢复链路、live smoke 复核入口，并根据 review 加固 listenKey 复核摘要脱敏与 DELETE timeout。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3581ced` | (see git log) |
+| `f95e07b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

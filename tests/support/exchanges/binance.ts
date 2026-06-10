@@ -13,7 +13,10 @@ export const BINANCE_USDM_MARKET_WS_BASE_URL =
   "wss://fstream.binance.com/market/ws";
 export const BINANCE_COINM_WS_BASE_URL = "wss://dstream.binance.com/ws";
 export const PAPI_LISTEN_KEY = "test-listen-key";
-export const PAPI_ACCOUNT_WS_URL = `wss://fstream.binance.com/pm/ws/${PAPI_LISTEN_KEY}`;
+export function papiAccountWsUrl(listenKey = PAPI_LISTEN_KEY): string {
+  return `wss://fstream.binance.com/pm/ws/${listenKey}`;
+}
+export const PAPI_ACCOUNT_WS_URL = papiAccountWsUrl();
 
 interface BinanceControlFrame {
   readonly method?: string;
@@ -364,6 +367,8 @@ export function installBinancePrivateAccountInfra(options?: {
   createOrder?: unknown;
   createOrderDelayMs?: number;
   cancelOrder?: unknown;
+  listenKeys?: string[];
+  failListenKeyKeepAliveCount?: number;
 }): FetchRequestRecord[] {
   const requests: FetchRequestRecord[] = [];
 
@@ -375,6 +380,8 @@ export function installBinancePrivateAccountInfra(options?: {
   let balanceRequestCount = 0;
   let openOrdersRequestCount = 0;
   let queryOrderRequestCount = 0;
+  let listenKeyRequestCount = 0;
+  let listenKeyKeepAliveFailureCount = 0;
 
   const nextResponse = (
     responses: unknown[] | undefined,
@@ -653,8 +660,25 @@ export function installBinancePrivateAccountInfra(options?: {
             msg: "The operation of cancel all open order is done.",
           });
         case "POST /papi/v1/listenKey":
-          return jsonResponse({ listenKey: PAPI_LISTEN_KEY });
+          return jsonResponse({
+            listenKey: nextResponse(
+              options?.listenKeys,
+              PAPI_LISTEN_KEY,
+              listenKeyRequestCount++,
+            ),
+          });
         case "PUT /papi/v1/listenKey":
+          if (
+            listenKeyKeepAliveFailureCount <
+            (options?.failListenKeyKeepAliveCount ?? 0)
+          ) {
+            listenKeyKeepAliveFailureCount += 1;
+            return textResponse('{"code":-1001,"msg":"Internal error"}', {
+              status: 500,
+              statusText: "Internal Server Error",
+            });
+          }
+          return jsonResponse({});
         case "DELETE /papi/v1/listenKey":
           return jsonResponse({});
         default:

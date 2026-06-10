@@ -96,6 +96,7 @@ export interface AccountRuntimeOptions {
   binance?: {
     riskPollIntervalMs?: number;
     privateReconcileIntervalMs?: number;
+    privateStreamStaleAfterMs?: number;
   };
   juplend?: {
     pollIntervalMs?: number;

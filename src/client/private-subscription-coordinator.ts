@@ -47,6 +47,7 @@ const DEFAULT_STREAM_OPEN_TIMEOUT_MS = 15_000;
 const DEFAULT_STREAM_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS = 10_000;
 const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
+const DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS = 65 * 60_000;
 const DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS = 60_000;
 const MAX_ORDER_TERMINAL_BACKFILLS_PER_RECONCILE = 20;
@@ -90,6 +91,7 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamReconnectDelayMs: number;
   private readonly streamReconnectMaxDelayMs: number;
   private readonly listenKeyKeepAliveMs: number;
+  private readonly binancePrivateStreamStaleAfterMs: number;
   private readonly binanceRiskPollIntervalMs: number;
   private readonly binancePrivateReconcileIntervalMs: number | undefined;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
@@ -116,6 +118,10 @@ export class PrivateSubscriptionCoordinator {
       DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS;
     this.listenKeyKeepAliveMs =
       options.listenKeyKeepAliveMs ?? DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
+    this.binancePrivateStreamStaleAfterMs = normalizePositiveInterval(
+      options.binance?.privateStreamStaleAfterMs,
+      DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS,
+    );
     this.binanceRiskPollIntervalMs = normalizePositiveInterval(
       options.binance?.riskPollIntervalMs,
       DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
@@ -1180,6 +1186,30 @@ export class PrivateSubscriptionCoordinator {
             update,
           );
         },
+        onFreshnessChange: (_freshness, reason) => {
+          if (record.accountSubscribed) {
+            this.accountConsumer.onPrivateAccountStreamState(
+              record.accountId,
+              record.venue,
+              {
+                runtimeStatus: "reconnecting",
+                ready: record.accountReady,
+                reason,
+              },
+            );
+          }
+          if (record.ordersSubscribed) {
+            this.orderConsumer.onPrivateOrderStreamState(
+              record.accountId,
+              record.venue,
+              {
+                runtimeStatus: "reconnecting",
+                ready: record.orderReady,
+                reason,
+              },
+            );
+          }
+        },
         onDisconnected: () => {
           if (record.accountSubscribed) {
             this.accountConsumer.onPrivateAccountStreamState(
@@ -1236,6 +1266,7 @@ export class PrivateSubscriptionCoordinator {
         reconnectDelayMs: this.streamReconnectDelayMs,
         reconnectMaxDelayMs: this.streamReconnectMaxDelayMs,
         listenKeyKeepAliveMs: this.listenKeyKeepAliveMs,
+        staleAfterMs: this.binancePrivateStreamStaleAfterMs,
         now: () => this.context.now(),
       },
       { ...account.options, accountId: account.accountId },

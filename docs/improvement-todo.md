@@ -40,7 +40,7 @@
 - **验证方式**：单测构造"WS FILLED 先到、REST ack 后到"序列，断言状态不回退、不发布回退事件；现有 `tests/unit/watermark.test.ts` 增补 command 源用例。
 - **状态**：代码已修复（→ .trellis/tasks/06-10-order-command-watermark），`bun run lint` / `bun run type-check` / `bun run test` 通过；该项无需 live 验证。
 
-### - [ ] P0-3 `listenKeyExpired` 被丢弃 + 私有流无 watchdog → 私有数据流静默死亡
+### - [x] P0-3 `listenKeyExpired` 被丢弃 + 私有流无 watchdog → 私有数据流静默死亡
 
 - **位置**：`src/adapters/binance/private-adapter.ts:530`（`parsePrivateMessage` 只放行 `ACCOUNT_UPDATE`/`ORDER_TRADE_UPDATE`）、`:942`（`createManagedWebSocket` 未配置 `messageWatchdog`，重连固定复用旧 listenKey URL）
 - **问题**：listenKey 失效后（keepalive 连续失败、Binance 主动作废、`listenKeyExpired` 事件），重连的 socket 能 open（`readyWhen: "open"` 即视为就绪）但永远无事件。SDK 不报错、不重建 listenKey，订单/账户实时性**静默退化**为 60s 一次的 REST reconcile。对挂单密集策略是严重风险。
@@ -48,8 +48,8 @@
   1. `parsePrivateMessage` 放行 `listenKeyExpired`，收到后重建 listenKey 并以新 URL 重建 WS（触发 `onReconnected` → reconcile）。
   2. keepalive（PUT）重试耗尽后同样走重建路径，而非仅 `callbacks.onError`。
   3. 私有流配置 `messageWatchdog`（PAPI 用户流静默期可较长，建议 staleAfterMs 设为分钟级，stale 时主动断开重建并上报 `heartbeat_timeout`）。
-- **验证方式**：单测用 fake WS 模拟 `listenKeyExpired` 与 keepalive 失败；live soak（`test:live:order:soak`）增加"主动作废 listenKey"场景（DELETE listenKey 后观察自动恢复）。
-- **状态**：未开始。
+- **验证方式**：单测用 fake WS 模拟 `listenKeyExpired` 与 keepalive 失败；live 复核用 `bun run test:live:order:listen-key` 主动作废 listenKey（DELETE listenKey 后观察自动恢复）。
+- **状态**：代码已修复（→ .trellis/tasks/06-10-private-stream-listenkey-recovery），`bun run lint` / `bun run type-check` / `bun run test` 通过；`bun run scripts/live-order-smoke.ts --duration 60 --expire-listen-key-after 5` 已用真实凭证复核，DELETE listenKey 后进入 `reconnecting/ws_disconnected`，新 listenKey WebSocket 上线并恢复 `healthy`。
 
 ---
 

@@ -362,6 +362,7 @@ export function installBinancePrivateAccountInfra(options?: {
   queryOrderResponses?: unknown[];
   failQueryOrder?: boolean;
   createOrder?: unknown;
+  createOrderDelayMs?: number;
   cancelOrder?: unknown;
   cancelAllOrders?: unknown;
 }): FetchRequestRecord[] {
@@ -587,11 +588,15 @@ export function installBinancePrivateAccountInfra(options?: {
             ),
           );
         case "POST /papi/v1/um/order":
+          if (options?.createOrderDelayMs) {
+            await Bun.sleep(options.createOrderDelayMs);
+          }
           return jsonResponse(
             options?.createOrder ?? {
               symbol: "BTCUSDT",
               orderId: 2001,
-              clientOrderId: "cid-2001",
+              clientOrderId:
+                url.searchParams.get("newClientOrderId") ?? "cid-2001",
               side: "BUY",
               type: "LIMIT",
               status: "NEW",

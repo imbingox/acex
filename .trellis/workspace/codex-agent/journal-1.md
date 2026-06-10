@@ -1059,3 +1059,37 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: cancelAllOrders PAPI 响应形状修复 + live 复核
+
+**Date**: 2026-06-10
+**Task**: cancelAllOrders PAPI 响应形状修复 + live 复核
+**Branch**: `fix/cancel-all-response-shape`
+
+### Summary
+
+修复 Binance PAPI cancelAllOrders 将 {code,msg} 响应当数组解析的问题，改为预取 openOrders 后合成 canceled snapshots；补对象响应夹具、成功/失败回归测试、live-order-smoke --cancel-all 和 patch changeset；默认质量门禁 lint/type-check/test 全绿（186 pass）。用户执行 live 复核通过：ETH/USDC:USDC 两笔 GTX 挂单均由 cancelAllOrders 撤成 canceled，remainingOpenOrders.count=0，errors=[]；已勾选 docs/improvement-todo.md P0-1。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e98dba3` | (see git log) |
+| `7551af4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

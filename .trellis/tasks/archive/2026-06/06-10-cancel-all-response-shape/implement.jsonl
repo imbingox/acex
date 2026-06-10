@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "cancelAllOrders 公开契约与 Binance REST 落点约束——修复必须保持 Promise<OrderSnapshot[]> 契约不变"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "RawOrderUpdate 契约（终态需带 orderId、字段语义）——合成 canceled 更新时必须遵守"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "错误包装与 venueError 透传约定——DELETE 失败路径按此处理"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与 changeset 要求"}

@@ -364,7 +364,6 @@ export function installBinancePrivateAccountInfra(options?: {
   createOrder?: unknown;
   createOrderDelayMs?: number;
   cancelOrder?: unknown;
-  cancelAllOrders?: unknown;
 }): FetchRequestRecord[] {
   const requests: FetchRequestRecord[] = [];
 
@@ -383,6 +382,22 @@ export function installBinancePrivateAccountInfra(options?: {
     index: number,
   ): unknown =>
     responses?.[index] ?? responses?.[responses.length - 1] ?? fallback;
+  const filterOpenOrdersBySymbol = (
+    response: unknown,
+    symbol: string | null,
+  ): unknown => {
+    if (!symbol || !Array.isArray(response)) {
+      return response;
+    }
+
+    return response.filter((order) => {
+      if (!order || typeof order !== "object" || Array.isArray(order)) {
+        return false;
+      }
+
+      return (order as { symbol?: unknown }).symbol === symbol;
+    });
+  };
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -549,10 +564,13 @@ export function installBinancePrivateAccountInfra(options?: {
             await Bun.sleep(options.openOrdersDelayMs);
           }
           return jsonResponse(
-            nextResponse(
-              options?.openOrderResponses,
-              options?.openOrders ?? binanceFixtures.papi.openOrders,
-              openOrdersRequestCount++,
+            filterOpenOrdersBySymbol(
+              nextResponse(
+                options?.openOrderResponses,
+                options?.openOrders ?? binanceFixtures.papi.openOrders,
+                openOrdersRequestCount++,
+              ),
+              url.searchParams.get("symbol"),
             ),
           );
         case "GET /papi/v1/um/order":
@@ -630,26 +648,10 @@ export function installBinancePrivateAccountInfra(options?: {
             },
           );
         case "DELETE /papi/v1/um/allOpenOrders":
-          return jsonResponse(
-            options?.cancelAllOrders ?? [
-              {
-                symbol: "BTCUSDT",
-                orderId: 1001,
-                clientOrderId: "cid-1001",
-                side: "BUY",
-                type: "LIMIT",
-                status: "CANCELED",
-                price: "100500.00",
-                stopPrice: "0",
-                origQty: "0.020",
-                executedQty: "0.005",
-                avgPrice: "100400.00",
-                reduceOnly: false,
-                positionSide: "BOTH",
-                updateTime: 1710000000350,
-              },
-            ],
-          );
+          return jsonResponse({
+            code: 200,
+            msg: "The operation of cancel all open order is done.",
+          });
         case "POST /papi/v1/listenKey":
           return jsonResponse({ listenKey: PAPI_LISTEN_KEY });
         case "PUT /papi/v1/listenKey":

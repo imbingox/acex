@@ -1,4 +1,9 @@
-import { createClient, type OrderEvent, type OrderSnapshot } from "../index.ts";
+import {
+  BigNumber,
+  createClient,
+  type OrderEvent,
+  type OrderSnapshot,
+} from "../index.ts";
 import {
   cloneStatus,
   collectEventsUntil,
@@ -18,10 +23,13 @@ import {
 
 interface CliOptions {
   accountId: string;
+  symbol: string;
   durationSec: number;
   disconnectAfterSec?: number;
   reconnectWaitSec: number;
   showOrders: boolean;
+  cancelAll: boolean;
+  positionSide?: OrderSnapshot["positionSide"];
 }
 
 interface OrderEventSummary {
@@ -69,6 +77,14 @@ interface ReconnectSummary {
   recoveredOpenOrderCount: number;
 }
 
+interface CancelAllSummary {
+  symbol: string;
+  placedOrders: OpenOrderSummary[];
+  canceledCount: number;
+  canceledOrders: OpenOrderSummary[];
+  remainingOpenOrders: OpenOrdersSnapshot;
+}
+
 interface SmokeResult {
   accountId: string;
   subscribeLatencyMs: number;
@@ -78,11 +94,14 @@ interface SmokeResult {
   firstEvent: OrderEventSummary;
   updateEventsAfterFirstEvent: number;
   reconnect?: ReconnectSummary;
+  cancelAll?: CancelAllSummary;
 }
 
 const DEFAULT_ACCOUNT_ID = "live-binance";
+const DEFAULT_SYMBOL = "BTC/USDT:USDT";
 const DEFAULT_DURATION_SEC = 10;
 const DEFAULT_RECONNECT_WAIT_SEC = 10;
+const CANCEL_ALL_TEST_ORDER_COUNT = 2;
 
 function printHelp(): void {
   writeStdout(`Usage:
@@ -94,23 +113,29 @@ Environment:
 
 Options:
   --account-id <id>          SDK account id (default: ${DEFAULT_ACCOUNT_ID})
+  --symbol <symbol>          Symbol for optional cancel-all smoke (default: ${DEFAULT_SYMBOL})
   --duration <seconds>       Total observation duration (default: ${DEFAULT_DURATION_SEC})
   --disconnect-after <sec>   Force-close the private websocket after N seconds and verify reconnect
   --reconnect-wait <sec>     Max reconnect recovery wait (default: ${DEFAULT_RECONNECT_WAIT_SEC})
   --show-orders              Include cached open-order details in output
+  --cancel-all               Place 2 far GTX limit orders, cancel all by symbol, and verify no opens remain
+  --position-side <side>     Optional order position side: net, long, or short
   --help                     Show this help
 
 Examples:
   bun run test:live:order -- --duration 10
-  bun run test:live:order -- --duration 60 --disconnect-after 5 --show-orders`);
+  bun run test:live:order -- --duration 60 --disconnect-after 5 --show-orders
+  bun run test:live:order -- --cancel-all --symbol BTC/USDT:USDT --position-side long`);
 }
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     accountId: DEFAULT_ACCOUNT_ID,
+    symbol: DEFAULT_SYMBOL,
     durationSec: DEFAULT_DURATION_SEC,
     reconnectWaitSec: DEFAULT_RECONNECT_WAIT_SEC,
     showOrders: false,
+    cancelAll: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -126,6 +151,9 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case "--account-id":
         options.accountId = argv[++index] ?? "";
+        break;
+      case "--symbol":
+        options.symbol = argv[++index] ?? "";
         break;
       case "--duration":
         options.durationSec = parseNumber(argv[++index] ?? "", "--duration");
@@ -145,6 +173,17 @@ function parseArgs(argv: string[]): CliOptions {
       case "--show-orders":
         options.showOrders = true;
         break;
+      case "--cancel-all":
+        options.cancelAll = true;
+        break;
+      case "--position-side": {
+        const value = argv[++index];
+        if (value !== "net" && value !== "long" && value !== "short") {
+          throw new Error(`Invalid value for --position-side: ${value ?? ""}`);
+        }
+        options.positionSide = value;
+        break;
+      }
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -152,6 +191,9 @@ function parseArgs(argv: string[]): CliOptions {
 
   if (!options.accountId) {
     throw new Error("--account-id cannot be empty");
+  }
+  if (!options.symbol) {
+    throw new Error("--symbol cannot be empty");
   }
 
   return options;
@@ -225,6 +267,180 @@ function summarizeEvent(event: OrderEvent): OrderEventSummary {
     status: event.snapshot.status,
     ts: event.ts,
   };
+}
+
+function maxBigNumber(values: BigNumber[]): BigNumber {
+  return values.reduce((max, value) =>
+    value.isGreaterThan(max) ? value : max,
+  );
+}
+
+function normalizeCancelAllTestOrder(options: {
+  client: ReturnType<typeof createClient>;
+  symbol: string;
+  price: BigNumber;
+  amount: BigNumber;
+}): { price: string; amount: string } {
+  let amount = options.amount;
+  let lastRejectReason: string | undefined;
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const normalized = options.client.market.normalizeOrderInput({
+      venue: "binance",
+      symbol: options.symbol,
+      price: options.price.toFixed(),
+      amount: amount.toFixed(),
+    });
+
+    if (normalized.accepted) {
+      return {
+        price: normalized.price,
+        amount: normalized.amount,
+      };
+    }
+
+    lastRejectReason = normalized.rejectReason;
+    amount = amount.multipliedBy(2);
+  }
+
+  throw new Error(
+    `Unable to normalize cancel-all test order: ${
+      lastRejectReason ?? "unknown"
+    }`,
+  );
+}
+
+async function runCancelAllSmoke(options: {
+  client: ReturnType<typeof createClient>;
+  accountId: string;
+  symbol: string;
+  positionSide?: OrderSnapshot["positionSide"];
+}): Promise<CancelAllSummary> {
+  const existingOpenOrders = options.client.order.getOpenOrders(
+    options.accountId,
+    options.symbol,
+  );
+  if (existingOpenOrders.length > 0) {
+    throw new Error(
+      `Refusing cancel-all smoke with ${existingOpenOrders.length} pre-existing open orders for ${options.symbol}`,
+    );
+  }
+
+  const key = {
+    venue: "binance" as const,
+    symbol: options.symbol,
+  };
+  let l1Subscribed = false;
+  let cleanupNeeded = false;
+  const placedOrders: OrderSnapshot[] = [];
+
+  try {
+    await options.client.market.subscribeL1Book(key);
+    l1Subscribed = true;
+
+    const market = options.client.market.getMarket("binance", options.symbol);
+    const book = options.client.market.getL1Book(key);
+    if (!market || !book) {
+      throw new Error(`Missing market data for ${options.symbol}`);
+    }
+
+    const bidPrice = new BigNumber(book.bidPrice);
+    if (!bidPrice.isFinite() || bidPrice.isLessThanOrEqualTo(0)) {
+      throw new Error(
+        `Invalid bid price for ${options.symbol}: ${book.bidPrice}`,
+      );
+    }
+
+    const price = bidPrice.multipliedBy("0.7");
+    const minAmount =
+      market.minAmount === undefined
+        ? new BigNumber(0)
+        : new BigNumber(market.minAmount);
+    const minNotional =
+      market.minNotional === undefined
+        ? new BigNumber(0)
+        : new BigNumber(market.minNotional);
+    const amountStep = new BigNumber(market.amountStep);
+    const amountFromNotional = minNotional.isGreaterThan(0)
+      ? minNotional.multipliedBy(2).dividedBy(price)
+      : new BigNumber(0);
+    const amount = maxBigNumber([
+      amountFromNotional,
+      minAmount.multipliedBy(2),
+      amountStep.multipliedBy(2),
+    ]);
+    const normalized = normalizeCancelAllTestOrder({
+      client: options.client,
+      symbol: options.symbol,
+      price,
+      amount,
+    });
+
+    cleanupNeeded = true;
+    for (let index = 0; index < CANCEL_ALL_TEST_ORDER_COUNT; index += 1) {
+      placedOrders.push(
+        await options.client.order.createOrder({
+          accountId: options.accountId,
+          symbol: options.symbol,
+          side: "buy",
+          type: "limit",
+          price: normalized.price,
+          amount: normalized.amount,
+          postOnly: true,
+          positionSide: options.positionSide,
+        }),
+      );
+    }
+
+    const canceledOrders = await options.client.order.cancelAllOrders({
+      accountId: options.accountId,
+      symbol: options.symbol,
+    });
+    cleanupNeeded = false;
+
+    if (canceledOrders.length < CANCEL_ALL_TEST_ORDER_COUNT) {
+      throw new Error(
+        `Expected at least ${CANCEL_ALL_TEST_ORDER_COUNT} canceled snapshots, got ${canceledOrders.length}`,
+      );
+    }
+
+    const remainingOpenOrders = options.client.order.getOpenOrders(
+      options.accountId,
+      options.symbol,
+    );
+    if (remainingOpenOrders.length > 0) {
+      throw new Error(
+        `Expected no open orders after cancel-all for ${options.symbol}, got ${remainingOpenOrders.length}`,
+      );
+    }
+
+    return {
+      symbol: options.symbol,
+      placedOrders: placedOrders.map(summarizeOrder),
+      canceledCount: canceledOrders.length,
+      canceledOrders: canceledOrders.map(summarizeOrder),
+      remainingOpenOrders: summarizeOpenOrders(remainingOpenOrders, true),
+    };
+  } finally {
+    if (cleanupNeeded) {
+      try {
+        await options.client.order.cancelAllOrders({
+          accountId: options.accountId,
+          symbol: options.symbol,
+        });
+      } catch (error) {
+        writeStderr(
+          `Cancel-all cleanup failed: ${
+            error instanceof Error ? error.message : `${error}`
+          }`,
+        );
+      }
+    }
+
+    if (l1Subscribed) {
+      await options.client.market.unsubscribeL1Book(key);
+    }
+  }
 }
 
 async function smokeOrders(options: {
@@ -417,6 +633,14 @@ async function main(): Promise<void> {
       reconnectWaitMs: cli.reconnectWaitSec * 1_000,
       showOrders: cli.showOrders,
     });
+    if (cli.cancelAll) {
+      result.cancelAll = await runCancelAllSmoke({
+        client,
+        accountId: cli.accountId,
+        symbol: cli.symbol,
+        positionSide: cli.positionSide,
+      });
+    }
 
     const summary = {
       checkedAt: new Date().toISOString(),

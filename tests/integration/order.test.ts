@@ -1390,7 +1390,7 @@ test("cancelOrder accepts clientOrderId and updates the cached snapshot", async 
   expect(request?.url.searchParams.get("orderId")).toBeNull();
 });
 
-test("cancelAllOrders scopes by symbol and only updates matching cached orders", async () => {
+test("cancelAllOrders parses object response and only updates matching cached orders", async () => {
   const requests = installBinancePrivateAccountInfra({
     openOrders: [
       {
@@ -1426,24 +1426,6 @@ test("cancelAllOrders scopes by symbol and only updates matching cached orders",
         updateTime: 1710000000310,
       },
     ],
-    cancelAllOrders: [
-      {
-        symbol: "BTCUSDT",
-        orderId: 1001,
-        clientOrderId: "cid-1001",
-        side: "BUY",
-        type: "LIMIT",
-        status: "CANCELED",
-        price: "100500.00",
-        stopPrice: "0",
-        origQty: "0.020",
-        executedQty: "0.005",
-        avgPrice: "100400.00",
-        reduceOnly: false,
-        positionSide: "BOTH",
-        updateTime: 1710000000360,
-      },
-    ],
   });
   const client = createClient({
     account: {
@@ -1473,9 +1455,17 @@ test("cancelAllOrders scopes by symbol and only updates matching cached orders",
   });
 
   expect(canceled).toHaveLength(1);
+  expect(canceled.every((snapshot) => snapshot.status === "canceled")).toBe(
+    true,
+  );
+  expect(canceled.map((snapshot) => snapshot.symbol)).toEqual([
+    "BTC/USDT:USDT",
+  ]);
   expect(canceled[0]).toMatchObject({
     orderId: "1001",
+    clientOrderId: "cid-1001",
     status: "canceled",
+    filled: new BigNumber("0.005").toFixed(),
   });
   expect(
     client.order.getOpenOrders("main-binance", "BTC/USDT:USDT"),
@@ -1483,6 +1473,55 @@ test("cancelAllOrders scopes by symbol and only updates matching cached orders",
   expect(
     client.order.getOpenOrders("main-binance", "ETH/USDT:USDT"),
   ).toHaveLength(1);
+
+  const prefetchRequest = requests.find(
+    (entry) =>
+      entry.method === "GET" &&
+      entry.url.pathname === "/papi/v1/um/openOrders" &&
+      entry.url.searchParams.get("symbol") === "BTCUSDT",
+  );
+  expect(prefetchRequest).toBeDefined();
+
+  const request = requests.find(
+    (entry) =>
+      entry.method === "DELETE" &&
+      entry.url.pathname === "/papi/v1/um/allOpenOrders",
+  );
+  expect(request).toBeDefined();
+  expect(request?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+});
+
+test("cancelAllOrders returns empty snapshots when pre-fetch finds no open orders", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [],
+  });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+
+  const canceled = await client.order.cancelAllOrders({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+  });
+
+  expect(canceled).toEqual([]);
+
+  const prefetchRequest = requests.find(
+    (entry) =>
+      entry.method === "GET" &&
+      entry.url.pathname === "/papi/v1/um/openOrders" &&
+      entry.url.searchParams.get("symbol") === "BTCUSDT",
+  );
+  expect(prefetchRequest).toBeDefined();
 
   const request = requests.find(
     (entry) =>

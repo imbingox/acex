@@ -79,7 +79,7 @@ DELETE /papi/v1/um/allOpenOrders
 
 #### 3.3 REST 结果与本地状态同步
 
-- `createOrder()` / `cancelOrder()` / `cancelAllOrders()` resolve 的结果来自 **REST 成功响应标准化后的 `OrderSnapshot`**。
+- `createOrder()` / `cancelOrder()` resolve 的结果来自 **REST 成功响应标准化后的 `OrderSnapshot`**；`cancelAllOrders()` 的结果是 **预取合成**（见 3.5），DELETE 响应本身不含订单。
 - Manager 必须在命令成功后，先把 REST 返回更新应用到本地 order cache。
 - private WS 后续到来的 `order.updated` / `order.canceled` / `order.filled` 事件，是生命周期变化流，**不是命令 ack 的唯一来源**。
 - Binance private REST reconcile 不能把 `/papi/v1/um/openOrders` 当作订单生命周期真源；它只能作为 current open set 检测。某个本地 open order 从 REST open set 消失时，必须用 `/papi/v1/um/order`（或后续 `allOrders` 窗口回补）证明终态后再发布 `order.filled` / `order.canceled` / `order.rejected` / `order.updated`。
@@ -95,6 +95,16 @@ DELETE /papi/v1/um/allOpenOrders
   - `minAmount`
   - `minNotional`
 
+#### 3.5 `cancelAllOrders()` venue 响应形状与合成语义
+
+- `DELETE /papi/v1/um/allOpenOrders` 的成功响应是 **`{"code": 200, "msg": "..."}` 对象，不是订单数组**（与 fapi 同形；官方文档已核实）。任何按数组解析该响应的实现都是错误的，live 必抛 `TypeError`。
+- adapter 合成流程固定为三步：
+  1. `GET /papi/v1/um/openOrders?symbol=...` 预取待撤订单（幂等读，可重试）；
+  2. `DELETE /papi/v1/um/allOpenOrders?symbol=...`（不可重试）；响应 `code` 存在且 `${code} !== "200"` 时视为失败；
+  3. 把预取订单覆盖为 `status: "canceled"`、`receivedAt` 取 DELETE 成功后的时刻、`exchangeTs: undefined`（合成更新不得伪造交易所时间戳）后返回。
+- 预取为空时仍要执行 DELETE（幂等），并返回 `[]`。
+- 已知取舍：①、② 之间成交的订单会被短暂合成为 canceled，由 WS 终态事件 / reconcile 纠正。
+
 ### 4. Validation & Error Matrix
 
 | 场景 | 约定 |
@@ -108,6 +118,7 @@ DELETE /papi/v1/um/allOpenOrders
 | `price` / `amount` 不满足交易所精度或最小名义金额 | 交易所拒单；SDK 对外包装为对应命令失败 |
 | REST 成功但 WS 更新稍后才到 | 命令先返回规范化 snapshot，本地缓存先更新，后续 WS 再收敛 |
 | `cancelAllOrders()` 在目标 symbol 没有活跃订单 | 返回 `OrderSnapshot[]`，允许为空 |
+| `DELETE um/allOpenOrders` 响应 `code` 存在且非 200/"200" | adapter 抛错，SDK 对外包装为 `ORDER_CANCEL_ALL_FAILED`（HTTP 层失败仍经 `TransportError.rawBody` 透出 `venueError`） |
 | REST openOrders 缺少本地 open order 且 `queryOrder` 返回 filled/canceled | 应用终态，`getOpenOrders()` 不再返回该订单，`getOrder()` 仍可读终态 |
 | REST openOrders 缺少本地 open order 但终态查询 not found/retention miss | 不合成终态；保留原 snapshot，order status 标记 `degraded` |
 | 较旧 REST/WS/order bootstrap 更新到达 | 不能覆盖较新的 command ack / WS / reconcile 状态；相同 `exchangeTs` 下 terminal status 不被 open 覆盖，filled 数量不倒退 |
@@ -211,6 +222,7 @@ bun run type-check
 - `tests/integration/order.test.ts`
   - `createOrder()` 成功时返回规范化 snapshot
   - `cancelOrder()` / `cancelAllOrders()` 成功时返回规范化 snapshot
+  - `cancelAllOrders()`：预取 GET 与 DELETE 都带 `symbol` query；`{code,msg}` 对象响应被正确解析；返回 snapshot 全部 `canceled` 且仅含目标 symbol；预取为空时返回 `[]` 且 DELETE 仍发出
   - `cancelOrder()` 缺少双标识时本地校验失败
   - 漏 WS 终态时，REST open set 缺口必须触发单笔终态查询，最终 `getOpenOrders()` 清理、`getOrder()` 保留终态。
   - 终态查询 not found/retention miss 时，不合成终态，order status 进入 `degraded`。
@@ -220,6 +232,9 @@ bun run type-check
   - 双向持仓模式：显式传 `positionSide`，跑同样的真实挂撤单
   - 断言 `order.updated` 和 `order.canceled` 事件都能收到
   - 断言最终 `getOpenOrders()` 中不残留测试单
+  - `--cancel-all`（默认关闭）：挂 2 笔远离盘口 postOnly 单 → `cancelAllOrders()` → 断言返回 ≥2 且 `getOpenOrders()` 清空；目标 symbol 已有挂单时必须拒绝执行
+
+> **Warning**: 测试夹具必须按 **venue 官方文档的响应示例** 构造，禁止按现有代码的假设反推。本 scenario 的历史教训：`DELETE um/allOpenOrders` 夹具曾按代码错误假设 mock 成订单数组，186 个测试全绿但 live 必崩。
 
 ### 7. Wrong vs Correct
 
@@ -296,6 +311,48 @@ for (const order of disappeared) {
 - `getOpenOrders()` 收敛到交易所当前 open set。
 - `getOrder()` 仍保留可证明的最终订单状态。
 - 无法证明终态时不伪造生命周期事件。
+
+#### Wrong — 把 `allOpenOrders` 响应当订单数组
+
+```ts
+const responses = await this.signedRequest<BinancePapiOpenOrder[]>(
+  "DELETE",
+  "/papi/v1/um/allOpenOrders",
+  ...
+);
+return responses.flatMap((response) => mapOpenOrder(response, receivedAt));
+```
+
+问题：
+
+- 真实响应是 `{code, msg}` 对象，`flatMap` 在 live 上必抛 `TypeError`，被包装成 `ORDER_CANCEL_ALL_FAILED`——而交易所侧已全撤成功，调用方看到"撤单失败"假象。
+
+#### Correct — 对象解析 + 预取合成
+
+```ts
+const openOrders = await this.signedRequest<BinancePapiOpenOrder[]>(
+  "GET", "/papi/v1/um/openOrders", credentials, accountOptions,
+  { symbol }, SAFE_READ_RETRY_POLICY,
+);
+const response = await this.signedRequest<BinancePapiCancelAllResponse>(
+  "DELETE", "/papi/v1/um/allOpenOrders", credentials, accountOptions,
+  { symbol }, NO_RETRY_POLICY,
+);
+if (response.code !== undefined && `${response.code}` !== "200") {
+  throw new Error(`... code=${response.code}, msg=${response.msg ?? ""}`);
+}
+const receivedAt = Date.now();
+return openOrders.flatMap((order) => {
+  const mapped = mapOpenOrder(order, receivedAt);
+  return mapped
+    ? [{ ...mapped, status: "canceled", exchangeTs: undefined, receivedAt }]
+    : [];
+});
+```
+
+效果：
+
+- 撤单成功与失败的判定基于真实响应契约；返回的 canceled snapshot 携带 venue identity，可被本地缓存与后续 WS/reconcile 正常收敛。
 
 ---
 

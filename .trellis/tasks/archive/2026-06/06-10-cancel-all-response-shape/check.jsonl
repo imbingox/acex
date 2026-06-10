@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "校验公开契约与 REST 落点未被破坏"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "校验合成 RawOrderUpdate 符合契约（终态 orderId、时间戳语义）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/type-check/test 与 changeset 完整性检查"}

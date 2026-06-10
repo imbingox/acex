@@ -34,9 +34,12 @@ bun install --frozen-lockfile
 bun run lint
 bun run type-check
 bun run test
+bun run pack:check
 bun run version-packages
+bun --silent run release:notes <version>
 bun run release
 git push --follow-tags
+gh release create <tag>
 ```
 
 当前关键脚本：
@@ -46,6 +49,8 @@ bun run changeset
 bun run version-packages
 bun run changeset:pre:exit
 bun run changeset:pre:enter:beta
+bun run pack:check
+bun --silent run release:notes
 bun run release
 ```
 
@@ -79,6 +84,7 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
   - `pull-requests: write`
   - `id-token: write`
 - `id-token: write` 用于 npm Trusted Publishing / provenance。
+- 发布 workflow 不应设置 `NPM_CONFIG_PROVENANCE=false`；Trusted Publishing 场景下 provenance 应显式保持启用，例如 `NPM_CONFIG_PROVENANCE=true`。
 - `package.json.repository.url` 必须指向当前 GitHub 仓库，避免 npm publish 时被自动修正。
 - 当前仓库应写成 `git+https://github.com/imbingox/acex.git`，与 npm package metadata 规范化结果一致。
 - npm 包 settings 中 Trusted Publisher 绑定的 workflow 文件名必须是 `release.yml`。
@@ -90,19 +96,33 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
   - `bun run lint`
   - `bun run type-check`
   - `bun run test`
+  - `bun run pack:check`
 - `version-packages` 不能只跑裸 `changeset version`；必须在版本文件生成后立刻格式化存在的 `.changeset/pre.json`、`package.json`，以及存在时的 `CHANGELOG.md`，避免 beta/stable 发布时因为格式问题把 workflow 跑挂。
+- `bun run pack:check` 必须在 `changeset publish` 前运行，用真实 npm tarball 预览确认 `files` contract 没有漏掉下游需要的文档或入口。
+- npm 包必须包含 `README.md` 与 `CHANGELOG.md`，不能把 `.changeset/*.md` 当成下游发布说明。
 
 #### 3.5 Git tag contract
 
 - 任何 npm 发布完成后，都必须执行 `git push --follow-tags`，把版本 tag 推回仓库。
 - 自动 beta 发布和手动 stable 发布都必须满足这个约束。
 - 不能只发布 npm 包而不推 git tag，否则仓库版本与 npm 版本会失去可追溯性。
+- 创建 GitHub Release 前必须确认本地 `v<version>` tag 存在且指向当前 HEAD；若远端缺 tag，workflow 应创建/推送该 tag 后再执行 `gh release create --verify-tag`。
+- 推送 tag 必须显式推送 `refs/tags/v<version>`，不能只依赖 `git push --follow-tags`，因为补建场景可能创建轻量 tag。
 - 当前仓库使用 Changesets 默认 git tag 行为。
 - 对当前这个单包根仓库，Changesets 默认 tag 仍然是 `v<version>`。
 - beta 示例：`v0.1.0-beta.4`
 - stable 示例：`v0.1.0`
 
-#### 3.6 Changesets 与 beta / stable 策略
+#### 3.6 GitHub Release contract
+
+- npm publish 成功并推送 tag 后，workflow 必须为同一个 `v<version>` tag 创建 GitHub Release。
+- beta GitHub Release 必须标记为 prerelease；stable GitHub Release 必须标记为 latest。
+- GitHub Release notes 必须来自 Changesets 生成的 `CHANGELOG.md` 对应版本小节，而不是只依赖 GitHub 自动 PR 摘要；workflow 写入 notes 文件时必须用 `bun --silent run release:notes <version>`，避免 Bun 的脚本命令回显进入 release notes。
+- release notes 临时文件必须写到 `$RUNNER_TEMP`，不能被 stable release 的 `git add -A` 提交进仓库。
+- 如果 beta npm 版本已经发布过但 GitHub Release 缺失，workflow 应允许跳过重复 npm publish 后补建 GitHub Release。
+- 如果 stable npm 版本已经发布过但 GitHub Release 缺失，workflow 应跳过重复 npm publish，确保同版本 tag 存在并补建 stable GitHub Release。
+
+#### 3.7 Changesets 与 beta / stable 策略
 
 - 仓库当前使用 Changesets prerelease mode，tag 为 `beta`。
 - 自动 beta 发布依赖 prerelease mode，本质上由 `changeset pre enter beta` 生成的 `.changeset/pre.json` 驱动。
@@ -112,11 +132,12 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
   - 再发布正式包到默认稳定 tag
 - `changeset pre exit` 后 `.changeset/pre.json` 会被删除，所以 `version-packages` 必须兼容该文件不存在。
 - stable 发布成功后，如需继续 beta 节奏，workflow 应默认重新执行 `changeset pre enter beta` 并把新的 `.changeset/pre.json` 推回 `main`。
+- stable workflow 必须可重入：当 `main` 已经包含 stable metadata 且 npm 版本已存在时，不得再次执行 `pre exit` / `version-packages` / `changeset publish`，只执行缺失的 tag、GitHub Release、beta pre-mode 补齐步骤。
 - stable 发布完成并重新进入 beta 后，`.changeset/pre.json.initialVersions` 必须等于刚发布的 stable 版本；例如 `0.2.0` 发布后应记录 `0.2.0`，下一轮 `minor` changeset 才会进入 `0.3.0-beta.x`。
 - 正常节奏下不要手改 `package.json.version` 来推进版本号：新增用户可见能力只写 `.changeset/*.md`，beta release PR 和 stable workflow 负责消费 changeset、生成版本、发布 npm、推送 tag、重新进入下一轮 beta。
 - 只有在 npm 上已存在目标 stable 版本、且历史 prerelease 基线已错位时，才允许一次性人工修正 stable 版本；修正后必须立即发布、推送 tag、重新执行 `changeset pre enter beta`，把后续版本号重新交还给 Changesets 状态机。
 
-#### 3.7 业务改动必须带 changeset
+#### 3.8 业务改动必须带 changeset
 
 - 任何会影响 npm 用户的 PR 都必须包含一个新的 `.changeset/*.md`，不能只改代码不写 changeset。
 - changeset 文件名使用 kebab-case，放在 `.changeset/` 根目录，例如 `.changeset/fresh-funding-rate.md`。
@@ -145,9 +166,14 @@ Changeset bump 选择矩阵：
 | 手动 stable workflow 从 `main` 触发 | 先 `pre exit` + `version`，再 publish stable + push tags |
 | 当前单包根仓库下 tag 名称不符合 `v<version>` | 视为发布行为偏离当前 contract |
 | Trusted Publisher 未在 npm 上配置 | `changeset publish` 失败，npm 拒绝认证 |
+| workflow 关闭 provenance | 视为偏离 Trusted Publishing contract，应移除 `NPM_CONFIG_PROVENANCE=false` |
 | `package.json.repository.url` 与 GitHub 仓库不一致 | Trusted Publishing 校验失败 |
 | `bun run lint` / `type-check` / `test` 任一失败 | workflow 直接失败，不允许发布 |
+| `bun run pack:check` 失败或 tarball 缺少 `README.md` / `CHANGELOG.md` | workflow 失败，不允许发布 |
 | 当前 beta 版本已经发布过，又有无 changeset 提交落到 `main` | workflow 应跳过重复 publish，不能直接因为 version already exists 失败 |
+| npm 版本已存在但对应 GitHub Release 不存在 | 跳过 npm publish，补建同 tag 的 GitHub Release |
+| npm 版本已存在但远端 tag 不存在 | 在当前 release metadata commit 上创建 `v<version>` tag 并显式推送该 tag |
+| npm 版本已存在且 GitHub Release 已存在，但 beta pre-mode 未恢复 | 跳过重复 publish/release，继续执行 `changeset pre enter beta` 和 metadata push |
 | 想发布稳定版到默认稳定 tag | 不能只改 npm tag；必须先处理 prerelease mode 和版本策略 |
 | stable 发布后没有重新进入 beta pre mode | 后续 `push main` 不应发 beta；必须补执行 `changeset pre enter beta` 并提交 `.changeset/pre.json` |
 | `.changeset/pre.json.initialVersions` 不是最近 stable 版本 | 下一轮 beta 基线会错位；必须先修正 pre mode 状态，再合并新功能 changeset |
@@ -199,6 +225,8 @@ on:
 - stable workflow 发布后默认 `reenter_beta_mode=true`，并提交新的 `.changeset/pre.json`，可以接受。
 - `0.2.0` stable 发布后 `.changeset/pre.json.initialVersions` 为 `0.2.0`，后续 `minor` 进入 `0.3.0-beta.x`，可以接受。
 - PR 里同时有 feature、bug fix、docs 和 tests，只写一个覆盖用户可见变化的 changeset，可以接受。
+- npm publish 后用同一个 `v<version>` tag 创建 GitHub Release，并从 `CHANGELOG.md` 对应小节生成 notes，可以接受。
+- stable workflow 重新运行时发现目标版本已在 npm 上存在，跳过 npm publish 但继续补 tag / GitHub Release / beta prerelease metadata，可以接受。
 
 #### Bad
 
@@ -246,12 +274,16 @@ Refactor market manager internals.
 bun run lint
 bun run type-check
 bun run test
+bun run pack:check
+bun --silent run release:notes <version>
 ```
 
 检查点：
 
 - workflow YAML 语法正确，路径固定在 `.github/workflows/`
 - 仓库现有质量命令在本地可执行
+- `bun run pack:check` 解析 `npm pack --dry-run --json`，缺少 `README.md` 或 `CHANGELOG.md` 时必须非零退出
+- `bun --silent run release:notes <version>` 能提取 `CHANGELOG.md` 中对应版本小节且不包含 Bun 命令回显；找不到版本时必须失败
 - 用户可见代码变更必须有 `.changeset/*.md`
 - changeset bump 级别必须与 public contract 变化匹配；0.x beta 阶段的破坏性 public contract 变更使用 `minor`
 - changeset summary 必须描述用户可见行为变化
@@ -259,6 +291,8 @@ bun run test
 - `.changeset/config.json`、`.changeset/pre.json`、workflow 的 prerelease/stable 策略一致
 - `package.json.repository.url` 与仓库远端一致
 - beta/stable 发布后 git tag 会被 push 回远端
+- beta/stable 发布后同一个 tag 会创建 GitHub Release
+- npm 已发布但 tag 或 GitHub Release 缺失时，workflow 能补齐缺失产物且不重复 npm publish
 - 当前仓库下 git tag 名称为 `v<version>`
 - stable 发布后如继续 beta，`.changeset/pre.json.initialVersions` 等于刚发布的 stable 版本
 - npm dist-tag 中 `latest` 指向最新 stable 版本，`beta` 指向最新 beta 版本
@@ -279,6 +313,7 @@ bun run test
 - 没有 Trusted Publishing 依赖的 `id-token: write`
 - 也没有发布前检查
 - 还缺失 `git push --follow-tags`
+- 没有 GitHub Release notes
 
 #### Correct
 
@@ -300,6 +335,12 @@ bun run test
 
 - name: Publish package
   run: bun run release
+
+- name: Push git tags
+  run: git push --follow-tags
+
+- name: Create GitHub Release
+  run: gh release create "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
 ```
 
 效果：

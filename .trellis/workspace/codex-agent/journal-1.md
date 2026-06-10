@@ -992,3 +992,37 @@ Implemented Binance private REST reconciliation for account and order convergenc
 ### Next Steps
 
 - None - task complete
+
+
+## Session 28: OrderManager 内部 localOrderId 身份模型 + pending claim (PR #56)
+
+**Date**: 2026-06-10
+**Task**: OrderManager 内部 localOrderId 身份模型 + pending claim (PR #56)
+**Branch**: `feat/order-manager-local-order-id`
+
+### Summary
+
+Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 id(localOrderId 内部主键 / venueOrderId / venueClientOrderId)、四索引、external-order-claim、下单 pending claim(防 REST 返回前早到 WS 双建)、未传 cid 时 SDK 生成并发送合规 acex-* cid;public API/类型零改动;submitting/WS 异步下单 out of scope。codex 实现 + Claude 独立 review(重跑三门 + 逐段审 diff,修复 issuedLocalOrderIds 无界增长内存泄漏)。开 PR #56,并按 PR review 把 order-manager.ts 中文注释改英文。lint/type-check/test 全绿(185 pass)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `acbdfd8` | (see git log) |
+| `d4cbafb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

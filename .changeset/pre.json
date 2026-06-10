@@ -7,6 +7,7 @@
   "changesets": [
     "acex-error-details",
     "binance-tradfi-public-market",
+    "cancel-all-response-shape",
     "market-catalog-reload",
     "market-ws-connection-multiplexing",
     "order-manager-local-order-id",

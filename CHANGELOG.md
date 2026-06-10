@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.4.0-beta.12
+
+### Patch Changes
+
+- e98dba3: Fix Binance `cancelAllOrders` parsing of the PAPI `{code,msg}` response as an order array, which previously always threw against the live API after the venue had already canceled the orders. The adapter now pre-fetches symbol open orders and returns them as canceled snapshots after the cancel-all response succeeds.
+
 ## 0.4.0-beta.11
 
 ### Patch Changes

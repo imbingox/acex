@@ -241,8 +241,6 @@ function addLocalOrderIdToSetIndex(
   key: string,
   localOrderId: string,
 ): void {
-  removeLocalOrderIdFromSetIndex(index, key, localOrderId);
-
   const localOrderIds = index.get(key);
   if (localOrderIds) {
     localOrderIds.add(localOrderId);

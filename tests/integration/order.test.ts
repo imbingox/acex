@@ -123,6 +123,7 @@ interface OrderManagerDebugView {
 
 interface ClientDebugView {
   createOrder(input: unknown): Promise<unknown>;
+  cancelAllOrders(input: unknown): Promise<unknown>;
   orderManager: OrderManagerDebugView;
 }
 
@@ -1161,6 +1162,52 @@ test("createOrder rejects invalid caller-provided clientOrderId before REST", as
   ).toBe(false);
 });
 
+test("createOrder propagates command ack write failures", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.createOrder = async () => ({
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "LIMIT",
+    status: "open",
+    amount: "0.010",
+    filled: "0",
+    remaining: "0.010",
+    receivedAt: 1710000000200,
+  });
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+  expect(
+    debugClient.orderManager.records.get("main-binance")
+      ?.pendingClientOrderIdIndex.size,
+  ).toBe(0);
+});
+
 test("createOrder clears pending claim after explicit adapter failure", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient();
@@ -1729,6 +1776,46 @@ test("cancelAllOrders parses object response and only updates matching cached or
   );
   expect(request).toBeDefined();
   expect(request?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+});
+
+test("cancelAllOrders propagates command ack write failures", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.cancelAllOrders = async () => [
+    {
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "LIMIT",
+      status: "canceled",
+      amount: "0.010",
+      filled: "0",
+      remaining: "0.010",
+      receivedAt: 1710000000200,
+    },
+  ];
+
+  const failure = await client.order
+    .cancelAllOrders({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CANCEL_ALL_FAILED");
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
 });
 
 test("cancelAllOrders synthesized ack cannot roll back a websocket fill during the command", async () => {

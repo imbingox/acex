@@ -197,6 +197,17 @@ export class OrderManagerImpl
         update,
         { localOrderId, requestStartedAt },
       );
+      if (!snapshot) {
+        throw this.createError(
+          "ORDER_CREATE_FAILED",
+          `Failed to store created order snapshot for ${input.accountId}: ${input.symbol}`,
+          {
+            accountId: input.accountId,
+            venue: account.venue,
+            symbol: input.symbol,
+          },
+        );
+      }
       this.clearPendingClientOrderClaim(
         record,
         venueClientOrderId,
@@ -233,9 +244,27 @@ export class OrderManagerImpl
     try {
       const requestStartedAt = this.context.now();
       const update = await this.context.cancelOrder(input);
-      return this.applyCommandUpdate(input.accountId, account.venue, update, {
-        requestStartedAt,
-      });
+      const snapshot = this.applyCommandUpdate(
+        input.accountId,
+        account.venue,
+        update,
+        {
+          requestStartedAt,
+        },
+      );
+      if (!snapshot) {
+        throw this.createError(
+          "ORDER_CANCEL_FAILED",
+          `Failed to store canceled order snapshot for ${input.accountId}: ${input.symbol}`,
+          {
+            accountId: input.accountId,
+            venue: account.venue,
+            symbol: input.symbol,
+          },
+        );
+      }
+
+      return snapshot;
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CANCEL_FAILED",
@@ -258,9 +287,27 @@ export class OrderManagerImpl
     try {
       const requestStartedAt = this.context.now();
       const updates = await this.context.cancelAllOrders(input);
-      return this.applyCommandUpdates(input.accountId, account.venue, updates, {
-        requestStartedAt,
-      });
+      const snapshots = this.applyCommandUpdates(
+        input.accountId,
+        account.venue,
+        updates,
+        {
+          requestStartedAt,
+        },
+      );
+      if (!snapshots) {
+        throw this.createError(
+          "ORDER_CANCEL_ALL_FAILED",
+          `Failed to store canceled order snapshots for ${input.accountId}: ${input.symbol}`,
+          {
+            accountId: input.accountId,
+            venue: account.venue,
+            symbol: input.symbol,
+          },
+        );
+      }
+
+      return snapshots;
     } catch (error) {
       throw this.wrapCommandError(
         "ORDER_CANCEL_ALL_FAILED",
@@ -891,7 +938,7 @@ export class OrderManagerImpl
     venue: Venue,
     update: RawOrderUpdate,
     options: { localOrderId?: string; requestStartedAt?: number } = {},
-  ): OrderSnapshot {
+  ): OrderSnapshot | undefined {
     const record = this.getOrCreateRecord(accountId, venue);
     const resolution = this.resolveLocalOrderIdForUpdate(
       record,
@@ -914,8 +961,9 @@ export class OrderManagerImpl
     }
 
     const snapshot = createSnapshot(accountId, venue, update, previous);
-    this.writeSnapshot(record, localOrderId, snapshot, previousLocation);
-    return snapshot;
+    return this.writeSnapshot(record, localOrderId, snapshot, previousLocation)
+      ? snapshot
+      : undefined;
   }
 
   private applyCommandUpdates(
@@ -923,10 +971,22 @@ export class OrderManagerImpl
     venue: Venue,
     updates: RawOrderUpdate[],
     options: { requestStartedAt?: number } = {},
-  ): OrderSnapshot[] {
-    return updates.map((update) =>
-      this.applyCommandUpdate(accountId, venue, update, options),
-    );
+  ): OrderSnapshot[] | undefined {
+    const snapshots: OrderSnapshot[] = [];
+    for (const update of updates) {
+      const snapshot = this.applyCommandUpdate(
+        accountId,
+        venue,
+        update,
+        options,
+      );
+      if (!snapshot) {
+        return undefined;
+      }
+      snapshots.push(snapshot);
+    }
+
+    return snapshots;
   }
 
   private createError(

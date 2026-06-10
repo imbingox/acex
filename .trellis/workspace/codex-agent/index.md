@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 31
+- **Total Sessions**: 32
 - **Last Active**: 2026-06-10
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1128 | Active |
+| `journal-1.md` | ~1161 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 32 | 2026-06-10 | Refactor OrderManager structure | `ec1cd11` | `fix/order-command-watermark` |
 | 31 | 2026-06-10 | P0-2 order command watermark | `474035c` | `fix/order-command-watermark` |
 | 30 | 2026-06-10 | cancelAllOrders PAPI 响应形状修复 + live 复核 | `e98dba3`, `7551af4` | `fix/cancel-all-response-shape` |
 | 29 | 2026-06-10 | 全库 review 发现固化为 docs/improvement-todo.md | `1783541` | `main` |

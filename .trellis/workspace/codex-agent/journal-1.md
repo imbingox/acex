@@ -1126,3 +1126,36 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: Refactor OrderManager structure
+
+**Date**: 2026-06-10
+**Task**: Refactor OrderManager structure
+**Branch**: `fix/order-command-watermark`
+
+### Summary
+
+拆分 OrderManager 内部结构：保留 manager 持有 records 和 runtime 编排，将 order identity、snapshot/status、store/index 纯逻辑拆入 src/managers/order/ 私有模块；同步更新 backend code organization spec，并通过 lint、type-check、order integration test 和默认测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ec1cd11` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

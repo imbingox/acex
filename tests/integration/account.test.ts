@@ -342,7 +342,7 @@ test("Binance private stream rebuilds listenKey after keepalive failure", async 
         request.method === "PUT" &&
         request.url.pathname === "/papi/v1/listenKey",
     ).length,
-  ).toBeGreaterThanOrEqual(3);
+  ).toBe(1);
   expect(
     requests.filter(
       (request) =>

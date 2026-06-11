@@ -253,7 +253,7 @@ const client = createClient({
 });
 ```
 
-`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 reactive limiter。Binance `riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`sandbox`、`logger`、`logLevel` 目前是预留位。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
 ### 4.2 `start()` / `stop()`
 
@@ -599,6 +599,9 @@ interface CreateClientOptions {
   sandbox?: boolean;
   clock?: { now(): number };
   rateLimiter?: RateLimiter;
+  rateLimit?: {
+    utilizationTarget?: number;
+  };
   logger?: Logger;
   logLevel?: "debug" | "info" | "warn" | "error";
   market?: {
@@ -641,14 +644,77 @@ interface RateLimitUsage {
   orderCount?: Record<string, number>;
 }
 
+type RateLimitPriority = "normal" | "cancel" | "risk" | (string & {});
+type RateLimitBucketKind = "request_weight" | "orders" | (string & {});
+type RateLimitScopeDimension = "venue" | "account" | "endpoint";
+
+interface RateLimitBucketReserve {
+  priority: RateLimitPriority;
+  units: number;
+}
+
+interface RateLimitBucketDescriptor {
+  id: string;
+  kind: RateLimitBucketKind;
+  limit: number;
+  intervalMs: number;
+  scope: readonly RateLimitScopeDimension[];
+  utilizationTarget?: number;
+  reserve?: RateLimitBucketReserve;
+}
+
+interface RateLimitCost {
+  bucketId: string;
+  cost: number;
+}
+
+interface RateLimitPlan {
+  id: string;
+  costs: readonly RateLimitCost[];
+  priority?: RateLimitPriority;
+}
+
+interface RateLimitTopology {
+  id: string;
+  buckets: readonly RateLimitBucketDescriptor[];
+  plans: readonly RateLimitPlan[];
+}
+
+interface RateLimitReservation {
+  readonly __opaqueRateLimitReservation?: never;
+}
+
+interface RateLimitTopologyRegistry {
+  registerRateLimitTopology(topology: RateLimitTopology): void;
+}
+
+interface RateLimitBucketSnapshot {
+  bucketId: string;
+  kind: RateLimitBucketKind;
+  limit: number;
+  intervalMs: number;
+  utilizationTarget?: number;
+  reserve?: RateLimitBucketReserve;
+  used?: number;
+  windowStartMs?: number;
+  windowEndMs?: number;
+  blockedUntil?: number;
+  retryAfterMs?: number;
+  state: "ok" | "rate_limited" | "banned";
+  updatedAt?: number;
+}
+
 interface RateLimitRequestContext {
   scope: RateLimitScope;
+  planId?: string;
+  priority?: RateLimitPriority;
 }
 
 interface RateLimitResponseContext {
   status: number;
   headers?: Headers;
   usage?: RateLimitUsage;
+  reservation?: RateLimitReservation;
 }
 
 interface RateLimitTransportErrorContext {
@@ -656,6 +722,8 @@ interface RateLimitTransportErrorContext {
   headers?: Headers;
   retryAfterMs?: number;
   usage?: RateLimitUsage;
+  reservation?: RateLimitReservation;
+  requestNotSent?: boolean;
 }
 
 interface RateLimitSnapshot {
@@ -665,10 +733,13 @@ interface RateLimitSnapshot {
   retryAfterMs?: number;
   state: "ok" | "rate_limited" | "banned";
   updatedAt?: number;
+  buckets?: RateLimitBucketSnapshot[];
 }
 
 interface RateLimiter {
-  beforeRequest(ctx: RateLimitRequestContext): Promise<void> | void;
+  beforeRequest(
+    ctx: RateLimitRequestContext,
+  ): Promise<RateLimitReservation | void> | RateLimitReservation | void;
   afterResponse(
     ctx: RateLimitRequestContext,
     response: RateLimitResponseContext,

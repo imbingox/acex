@@ -11,8 +11,12 @@ import type {
   RateLimitScope,
 } from "../../types/index.ts";
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
+import { getBinanceCatalogRateLimitPlanId } from "./rate-limit-topology.ts";
 
-type FetchLike = typeof fetch;
+type FetchLike = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export type BinanceMarketFamily = "spot" | "usdm" | "coinm";
 
@@ -240,8 +244,13 @@ async function requestCatalogJson<T>(
     venue: "binance",
     endpointKey,
   };
+  const requestContext = {
+    scope,
+    planId: getBinanceCatalogRateLimitPlanId(endpointKey),
+  };
 
-  await rateLimiter?.beforeRequest({ scope });
+  const reservation =
+    (await rateLimiter?.beforeRequest(requestContext)) ?? undefined;
 
   try {
     const response = await httpRequest<T>({
@@ -252,32 +261,28 @@ async function requestCatalogJson<T>(
       jsonParseMode: "response",
       retryPolicy: {
         idempotent: true,
-        maxAttempts: 3,
+        maxAttempts: 1,
       },
       messages: BINANCE_CATALOG_HTTP_MESSAGES,
     });
 
-    await rateLimiter?.afterResponse(
-      { scope },
-      {
-        status: response.status,
-        headers: response.headers,
-        usage: parseBinanceRateLimitUsage(response.headers),
-      },
-    );
+    await rateLimiter?.afterResponse(requestContext, {
+      status: response.status,
+      headers: response.headers,
+      usage: parseBinanceRateLimitUsage(response.headers),
+      reservation,
+    });
 
     return response.body;
   } catch (error) {
     if (isTransportError(error)) {
-      await rateLimiter?.onTransportError(
-        { scope },
-        {
-          status: error.status,
-          headers: error.headers,
-          retryAfterMs: error.retryAfterMs,
-          usage: parseBinanceRateLimitUsage(error.headers),
-        },
-      );
+      await rateLimiter?.onTransportError(requestContext, {
+        status: error.status,
+        headers: error.headers,
+        retryAfterMs: error.retryAfterMs,
+        usage: parseBinanceRateLimitUsage(error.headers),
+        reservation,
+      });
     }
 
     throw error;

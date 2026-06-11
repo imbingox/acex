@@ -508,10 +508,9 @@ export function parseRetryAfterMs(value: string | null): number | undefined;
 venue 侧实际注入的 `HttpRetryPolicy`（`src/adapters/binance/private-adapter.ts`）：
 
 ```text
-SAFE_READ_RETRY_POLICY            idempotent:true,  maxAttempts:3   只读 GET（account / positionRisk / openOrders…）
-NO_RETRY_POLICY                   idempotent:false, maxAttempts:1   createOrder / cancelOrder / cancelAllOrders + 签名请求默认
-LISTEN_KEY_KEEPALIVE_RETRY_POLICY idempotent:true,  maxAttempts:3   listenKey PUT keepalive
-// catalog / juplend 只读 GET：inline { idempotent:true, maxAttempts:3 }
+SINGLE_ATTEMPT_IDEMPOTENT_POLICY idempotent:true,  maxAttempts:1   Binance 只读 GET + listenKey keepalive
+NO_RETRY_POLICY                  idempotent:false, maxAttempts:1   createOrder / cancelOrder / cancelAllOrders + 签名请求默认
+// Binance catalog / server-time：inline { idempotent:true, maxAttempts:1 }
 ```
 
 ### 3. Contracts
@@ -524,7 +523,8 @@ LISTEN_KEY_KEEPALIVE_RETRY_POLICY idempotent:true,  maxAttempts:3   listenKey PU
 #### 3.12 per-call 幂等 = 调用点显式声明
 
 - 重试性由**调用点**通过 `retryPolicy.idempotent` 显式声明，不由 client 猜 HTTP 方法。`idempotent:false` ⇒ 任何 kind 都不重试（见 `retryableForKind`）。
-- 写操作（下单 / 撤单 / 任何 POST·DELETE 副作用请求）**必须** `NO_RETRY_POLICY`；只读 GET 用 `SAFE_READ`；listenKey keepalive 用受限重试策略。
+- 写操作（下单 / 撤单 / 任何 POST·DELETE 副作用请求）**必须** `NO_RETRY_POLICY`。
+- Binance REST 请求如果已经走 `RateLimiter.beforeRequest()` admission，则 `httpRequest.retryPolicy.maxAttempts` 必须为 `1`，包括 catalog、server-time、私有只读 GET、listenKey POST/PUT/DELETE、订单命令。原因是交易所按实际 HTTP attempt 计费；在一次 reservation 下内部重试会让本地预算低估真实消耗。需要重试时应重新进入 adapter 调用路径并重新 admission，或未来显式实现 per-attempt reservation。
 - 即便 `idempotent:true`，可重试的 kind 也只有 `network` / `timeout` / `http(5xx)`；`rate_limited` / `http(4xx)` / `parse` 一律 `retryable:false`。
 
 #### 3.13 抛 typed `TransportError`，不构造 `AcexError`
@@ -553,21 +553,24 @@ LISTEN_KEY_KEEPALIVE_RETRY_POLICY idempotent:true,  maxAttempts:3   listenKey PU
 
 #### 3.17 限流器 seam（RateLimiter）
 
-REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默认实现 `ReactiveRateLimiter`（`src/internal/rate-limiter.ts`，Layer 0、venue-agnostic）。经 public `CreateClientOptions.rateLimiter?` 注入（默认 reactive），与 `clock?` 同范式。
+REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默认实现 `ReactiveRateLimiter`（`src/internal/rate-limiter.ts`，Layer 0、venue-agnostic；当前继承 `BudgetRateLimiter` 兼容旧名字）。经 public `CreateClientOptions.rateLimiter?` 注入（默认 reactive），与 `clock?` 同范式。
 
-- **hook 形**：`beforeRequest(ctx)` / `afterResponse(ctx, response)` / `onTransportError(ctx, error)` / `getSnapshot(scope)`（可同步或返回 `Promise`）。adapter 在每次 REST 调用前后调用这些 hook。
+- **hook 形**：`beforeRequest(ctx)` / `afterResponse(ctx, response)` / `onTransportError(ctx, error)` / `getSnapshot(scope)`（可同步或返回 `Promise`）。adapter 在每次 REST 调用前后调用这些 hook。`beforeRequest()` 可返回 opaque `RateLimitReservation`，adapter 必须原样传给 `afterResponse()` / `onTransportError()`；返回 `void` 或 `Promise<void>` 的旧 custom limiter 仍是合法实现，**不得把 public 返回类型收窄成只允许 `undefined`**。
 - **scope 粒度**：`{ venue, accountId?, endpointKey }`，`endpointKey` 取 `"<METHOD> <path>"`。weight 是 IP 维度、order-count 另算 —— `RateLimitUsage` 分 `weight` / `orderCount` 两轨，按 interval key（如 `"1m"`）存。
-- **venue-agnostic 核 + venue 层解析**：通用核**不得**出现任何交易所 header 常量；Binance 的 `X-MBX-USED-WEIGHT-*` / `X-MBX-ORDER-COUNT-*` 解析只在 venue 层（`src/adapters/binance/rate-limit.ts`，用 `Headers.get()` 大小写不敏感、保留未知 interval），解析出的 `RateLimitUsage` 再喂给核。
-- **默认 reactive 行为**：happy path **不主动 throttle**（行为与无 limiter 等价）；只在收到 `429`/`418` 后按 `Retry-After`（已解析为 `retryAfterMs`）设 `blockedUntil`，下一次同 scope 请求在 `beforeRequest` 等待至 `blockedUntil`。`429`⇒`rate_limited`、`418`⇒`banned`（无 `Retry-After` 时 ban 默认更长）。proactive 权重桶留作同 seam 下 opt-in，不在默认实现内。
+- **plan/topology 扩展**：adapter 可以在构造期 feature-detect optional `RateLimitTopologyRegistry.registerRateLimitTopology(topology)` 并注册 venue-owned bucket/plan 表；注册缺失时必须无事发生。相同 descriptor 重复注册必须幂等，冲突 descriptor 必须拒绝覆盖。请求上下文可带 `planId` 和 `priority`，但 `planId` 必须是 adapter 选择的语义 id，不要把它固定等同于 `endpointKey`（同 endpoint 可能有成本变体）。
+- **venue-agnostic 核 + venue 层解析/拓扑**：通用核**不得**出现任何交易所 header 常量、endpoint 路径、权重数字或 bucket id。Binance 的 `X-MBX-USED-WEIGHT-*` / `X-MBX-ORDER-COUNT-*` 解析只在 venue 层（`src/adapters/binance/rate-limit.ts`，用 `Headers.get()` 大小写不敏感、保留未知 interval），Binance bucket/plan/cost 表只放在 `src/adapters/binance/`。
+- **默认 budget 行为**：注册 topology 且请求带 known `planId` 时，默认 limiter 在 `beforeRequest` 中按 bucket 固定窗口主动 admission：wall-clock 对齐 `windowStart = floor(now / intervalMs) * intervalMs`，多桶 check+reserve 必须 all-or-none，预扣成功返回 opaque reservation。响应 hook 用 venue 解析出的 `RateLimitUsage` 回填 bucket 用量；reservation 的 bucket window 比当前 state 旧、或比当前本地窗口旧时必须忽略，不能复活旧窗口，也不能把旧响应 header 写进新窗口。未注册 topology / unknown plan / 旧 limiter fallback 到 endpoint-scope reactive 行为。known plan 下 `418` block request-weight bucket，`429` 若单桶可判断则 block 单桶，多桶或不可辨时保守 block plan 涉及的桶；`429` 缺 `Retry-After` 时，known bucket fallback 到当前 fixed window end + small jitter，不能退化成 1ms 短 block。`418` 缺 `Retry-After` 时默认 ban fallback 从 2 分钟起，连续 fallback 418 指数延长并封顶到 3 天，重复 block 只能延长不能缩短。
+- **reserve headroom**：`RateLimitBucketDescriptor.reserve?: { priority, units }` 是 public topology contract。默认 limiter 对普通请求使用 `floor(limit * utilizationTarget) - reserve.units`，对匹配 `reserve.priority` 的请求允许使用 published `limit`，但仍正常预扣成本，不能无限 bypass。Binance 只在 PAPI request-weight 桶配置 `priority:"cancel"` 的 300 units/min reserve；整个撤单工作流（`cancelOrder`、`cancelAllOrders` prefetch GET + DELETE）必须传 `priority:"cancel"`。
+- **退款语义**：transport error 默认不退预扣预算，避免订单已到交易所但本地超时/断网时错误放量；只有 adapter 明确传 `requestNotSent:true` 的 pre-HTTP 本地失败才可按 reservation 精确退款。
 - **签名时序**：Binance 签名请求的 `beforeRequest` 退避必须在生成签名 `timestamp` **之前**，避免退避 sleep 导致签名时间过旧。
 - **不构造 AcexError**：限流失败仍是 typed transport error（`kind:"rate_limited"`）冒泡；coordinator 经 `transportReason()` 映射到 runtime reason `"rate_limited"`（§3.6）。**非幂等请求遇 429/418 不自动重放**，只暴露状态 + retry metadata。
-- **公共面**：`RateLimiter` 接口与 `RateLimit*` 类型为 public 契约；usage snapshot 不挂上 `AcexClient` public API（仅作 seam 类型）。HTTP 客户端本身仍不公共可替换。
+- **公共面**：`RateLimiter` 接口与 `RateLimit*` 类型为 public 契约；bucket-level snapshot 可以挂在 `RateLimitSnapshot.buckets`，但不挂上 `AcexClient` public API（仅作 seam 类型）。HTTP 客户端本身仍不公共可替换。
 
 ### 4. Validation & Error Matrix
 
 | 场景 | `kind` | `retryable`（`idempotent:true` 时） | 备注 |
 |---|---|---|---|
-| `429` / `418` | `rate_limited` | **false** | 解析 `retryAfterMs`；默认 reactive limiter 记录退避，HTTP retry 不自动重放 |
+| `429` / `418` | `rate_limited` | **false** | 解析 `retryAfterMs`；默认 budget limiter 记录 bucket block，HTTP retry 不自动重放 |
 | `5xx` | `http` | **true** | 唯一可重试的 http 状态段 |
 | `4xx`（非 429/418） | `http` | false | 业务错误，重试无意义 |
 | JSON 解析失败 | `parse` | false | `rawBody` 脱敏后保留 |
@@ -598,7 +601,20 @@ const response = await httpRequest<OrderAck>({
 
 #### Base
 
-只读 catalog / polling 用 `{ idempotent:true, maxAttempts:3 }`：网络抖动可重试，但 4xx/限流立即失败，文案复刻迁移前的原始格式（如 `BINANCE_CATALOG_HTTP_MESSAGES.http` 复刻 `Binance request failed: <status> <statusText>`），保证迁移等价。
+受 RateLimiter 保护的 Binance 只读 catalog / polling 用 `{ idempotent:true, maxAttempts:1 }`：5xx / network / timeout 直接以 typed `TransportError` 暴露给上层恢复流程，不在一次 limiter reservation 下自动重放。文案复刻迁移前的原始格式（如 `BINANCE_CATALOG_HTTP_MESSAGES.http` 复刻 `Binance request failed: <status> <statusText>`），保证除重试预算修正外的行为等价。
+
+Binance PAPI request-weight bucket 使用 cancel reserve，普通请求不能动用保留区，撤单请求仍计成本但可使用 published limit：
+
+```ts
+{
+  id: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+  kind: "request_weight",
+  limit: 6_000,
+  intervalMs: 60_000,
+  scope: ["venue"],
+  reserve: { priority: "cancel", units: 300 },
+}
+```
 
 #### Bad
 
@@ -608,7 +624,14 @@ const res = await fetch(signedUrl);
 if (!res.ok) throw new AcexError("ORDER_CREATE_FAILED", await res.text()); // 双重违约
 
 // ❌ 下单用可重试策略：网络抖动下重复下单
-retryPolicy: SAFE_READ_RETRY_POLICY, // 写操作严禁
+retryPolicy: SINGLE_ATTEMPT_IDEMPOTENT_POLICY, // 写操作严禁
+
+// ❌ 受 RateLimiter 保护的 Binance REST 在一次 admission 下多次 attempt：预算会低估
+retryPolicy: { idempotent: true, maxAttempts: 3 }
+
+// ❌ 撤单 DELETE 标了 cancel，但 cancelAllOrders 的 prefetch GET 没标：
+// prefetch 会被 normal cap 卡住，整个撤单流程仍可能无法启动
+this.signedRequest("GET", "/papi/v1/um/openOrders", ..., undefined)
 ```
 
 问题：泄漏签名、可能重复下单、在 internal/adapter 层构造 `AcexError`（违反 §3.6 / §3.13）。
@@ -621,6 +644,7 @@ retryPolicy: SAFE_READ_RETRY_POLICY, // 写操作严禁
   - parse 失败 ⇒ `kind:"parse"`、`retryable:false`。
   - timeout / upstream abort / network 三者区分，且 `idempotent:false` 时不重试。
 - adapter 迁移到共享 client 时，必须提供**等价矩阵**：逐 REST 端点列出迁移前后的 method / 重试语义 / 错误 message 文案，标注 intended diff（如脱敏带来的 message 变化），其余必须保持等价。
+- 改 Binance REST retry policy 或 RateLimiter admission 时，必须有回归测试证明受 limiter 保护的路径是单 attempt（例如 catalog、private safe read、listenKey keepalive），known bucket 的 `429` 无 `Retry-After` 会阻塞到 fixed window end + jitter，以及 normal 预算耗尽时 cancel priority 能使用 reserve 但仍消耗 bucket usage。
 - 全套 `bun run lint && bun run type-check && bun run test` 绿。
 
 ### 7. Wrong vs Correct

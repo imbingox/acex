@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "核心 spec:订单生命周期、open/closed 表语义、reconcile 契约;新增 unknown 终态需同步此文件"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "驱逐/claim 清理需发布 runtime error,遵循错误包装与脱敏契约"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "fetchOrder 回查走 adapter SPI,遵守适配器分层契约"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "OrderStatus 公开枚举扩成员的类型与导出约定"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "公开枚举扩成员需要 minor changeset"}
+{"file": ".trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2/prd.md", "reason": "需求、三个 ADR(unknown 终态/计数语义与默认值/TTL 驱动机制)、验收标准"}

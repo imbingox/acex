@@ -185,7 +185,7 @@
 
 - **位置**：`src/errors.ts:30`（`venueError.code` 直接透传原始码）
 - **问题**：策略层想区分"余额不足/post-only 会吃单/订单不存在/价格超滤"必须写 Binance 专属逻辑。
-- **修复方案**：定义小而稳的归一枚举（`insufficient_balance` / `would_take` / `order_not_found` / `filter_violation` / `rate_limited` / `unknown`），适配器提供映射表，原始码继续保留在 `venueError`。
+- **修复方案**：定义小而稳的归一枚举（`insufficient_balance` / `would_take` / `order_not_found` / `filter_violation` / `rate_limited` / `timestamp_out_of_sync` / `unknown`），适配器提供映射表，原始码继续保留在 `venueError`。
 - **验证方式**：单测覆盖 -2010/-2011/-2013/-4131 等常见码映射。
 - **状态**：代码已完成（→ .trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5，与 P1-A3 合并实现）：`VenueErrorReason` 七成员枚举 + `details.venueError.reason`；映射表按官方文档核实（PAPI UM 余额/保证金不足是 -2018/-2019 而非 spot 的 -2010；-5022 GTX 拒单 → `would_take`；-2010 等语义不确定码归 `unknown`），依据见任务 research/binance-error-codes.md。
 

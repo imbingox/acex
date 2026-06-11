@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "internal/ 与 managers/ 分层约定，AsyncEventBus 改动与各 manager events 工厂的归属"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "EVENT_BUFFER_OVERFLOW runtime error 的构造与 errorBus 发布约定（AcexInternalError、code 注册）"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "EventStreamOptions 公开类型定义与导出约定"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与命名约定（unit 覆盖 bus 行为、集成覆盖 status 去重）"}

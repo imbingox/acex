@@ -42,73 +42,160 @@ export interface RateLimitUsage {
   orderCount?: Record<string, number>;
 }
 
+/**
+ * Request priority used by rate-limit plans and per-request contexts.
+ *
+ * `"normal"` is the default path. `"cancel"` is intended for cancellation or
+ * other unwind traffic that may use reserved bucket headroom. `"risk"` is for
+ * risk/account maintenance traffic. Custom strings are allowed so venue
+ * adapters can add narrower priorities without changing the public union.
+ */
 export type RateLimitPriority = "normal" | "cancel" | "risk" | (string & {});
 
+/**
+ * Logical bucket family reported by an exchange.
+ *
+ * `"request_weight"` tracks REST weight-style budgets. `"orders"` tracks order
+ * count budgets separately. Custom strings are allowed for venue-specific
+ * bucket families.
+ */
 export type RateLimitBucketKind = "request_weight" | "orders" | (string & {});
 
+/**
+ * Scope dimensions that define how a bucket state is keyed.
+ *
+ * `"venue"` shares one bucket per venue, `"account"` adds accountId isolation,
+ * and `"endpoint"` adds endpointKey isolation.
+ */
 export type RateLimitScopeDimension = "venue" | "account" | "endpoint";
 
+/** Priority-specific bucket headroom held back from other priorities. */
 export interface RateLimitBucketReserve {
+  /** Priority that may consume the full published bucket limit. */
   priority: RateLimitPriority;
+  /** Number of bucket units reserved from non-matching priorities. */
   units: number;
 }
 
+/** Fixed-window budget bucket owned by a venue topology. */
 export interface RateLimitBucketDescriptor {
+  /** Stable bucket id referenced by RateLimitCost.bucketId. */
   id: string;
+  /** Exchange budget family, such as request weight or order count. */
   kind: RateLimitBucketKind;
+  /** Published bucket capacity in the same units as RateLimitCost.cost. */
   limit: number;
+  /** Fixed-window interval length in milliseconds. */
   intervalMs: number;
+  /** Dimensions included when deriving the bucket state key. */
   scope: readonly RateLimitScopeDimension[];
+  /**
+   * Fraction of limit the default limiter should normally target before
+   * reserve handling. Omitted means the limiter-wide default.
+   */
   utilizationTarget?: number;
+  /**
+   * Optional priority reserve. Non-matching priorities use the target limit
+   * minus reserve.units, clamped to zero; the matching priority may use limit.
+   */
   reserve?: RateLimitBucketReserve;
 }
 
+/** Cost of one plan against one bucket. */
 export interface RateLimitCost {
+  /** Bucket id declared in the same topology. */
   bucketId: string;
+  /** Units consumed in that bucket when this plan is admitted. */
   cost: number;
 }
 
+/** Request admission plan selected by an adapter for a semantic operation. */
 export interface RateLimitPlan {
+  /** Stable semantic plan id, not necessarily identical to endpointKey. */
   id: string;
+  /** Bucket costs that must all be admitted atomically. */
   costs: readonly RateLimitCost[];
+  /** Default priority for requests using this plan. */
   priority?: RateLimitPriority;
 }
 
+/**
+ * Venue-owned rate-limit topology.
+ *
+ * Buckets describe fixed-window budgets. Plans map adapter operations to the
+ * bucket costs consumed by one request.
+ */
 export interface RateLimitTopology {
+  /** Stable topology id, typically venue-scoped. */
   id: string;
+  /** Bucket descriptors referenced by plans. */
   buckets: readonly RateLimitBucketDescriptor[];
+  /** Operation plans that map requests to bucket costs. */
   plans: readonly RateLimitPlan[];
 }
 
+/**
+ * Opaque admission token returned by RateLimiter.beforeRequest().
+ *
+ * Adapters must not inspect or construct this token. They pass it back through
+ * RateLimitResponseContext.reservation or RateLimitTransportErrorContext.
+ */
 export interface RateLimitReservation {
   readonly __opaqueRateLimitReservation?: never;
 }
 
 export interface RateLimitTopologyRegistry {
+  /**
+   * Registers a venue topology with the limiter.
+   *
+   * Re-registering an identical descriptor is idempotent. A conflicting bucket
+   * or plan descriptor should be rejected instead of overwritten.
+   */
   registerRateLimitTopology(topology: RateLimitTopology): void;
 }
 
+/** Explicit no-token result for custom limiters that only wait or observe. */
 // biome-ignore lint/suspicious/noConfusingVoidType: Existing custom limiters return void; the SPI must keep that source-compatible.
 export type RateLimitNoReservation = void;
 
+/**
+ * Return type for RateLimiter.beforeRequest().
+ *
+ * Return void/Promise<void> when no token is needed. Return a reservation when
+ * later response/error hooks need to reconcile the admitted request.
+ */
 export type RateLimitBeforeRequestResult =
   | Promise<RateLimitReservation | RateLimitNoReservation>
   | RateLimitReservation
   | RateLimitNoReservation;
 
+/** Diagnostic snapshot for one registered bucket at the current scope. */
 export interface RateLimitBucketSnapshot {
+  /** Bucket id from the registered descriptor. */
   bucketId: string;
+  /** Bucket family from the registered descriptor. */
   kind: RateLimitBucketKind;
+  /** Published bucket capacity. */
   limit: number;
+  /** Fixed-window interval length in milliseconds. */
   intervalMs: number;
+  /** Effective utilization target used for normal admission. */
   utilizationTarget?: number;
+  /** Priority reserve copied from the descriptor, when configured. */
   reserve?: RateLimitBucketReserve;
+  /** Units observed or pre-reserved in the active window. */
   used?: number;
+  /** Active fixed-window start time as epoch milliseconds. */
   windowStartMs?: number;
+  /** Active fixed-window end time as epoch milliseconds. */
   windowEndMs?: number;
+  /** Epoch milliseconds until which this bucket is blocked. */
   blockedUntil?: number;
+  /** Most recent Retry-After duration in milliseconds, when available. */
   retryAfterMs?: number;
+  /** `"ok"` admits normally, `"rate_limited"` waits, `"banned"` is a ban. */
   state: "ok" | "rate_limited" | "banned";
+  /** Last update time as epoch milliseconds. */
   updatedAt?: number;
 }
 
@@ -149,6 +236,33 @@ export interface RateLimitSnapshot {
 }
 
 export interface RateLimiter {
+  /**
+   * Waits for request admission and optionally returns an opaque reservation.
+   *
+   * @example
+   * ```ts
+   * const reservations = new WeakMap<RateLimitReservation, { cost: number }>();
+   *
+   * const limiter: RateLimiter = {
+   *   async beforeRequest() {
+   *     const reservation: RateLimitReservation = {};
+   *     reservations.set(reservation, { cost: 1 });
+   *     return reservation;
+   *   },
+   *   afterResponse(_ctx, response) {
+   *     if (response.reservation) reservations.delete(response.reservation);
+   *   },
+   *   onTransportError(_ctx, error) {
+   *     if (error.reservation && error.requestNotSent) {
+   *       reservations.delete(error.reservation);
+   *     }
+   *   },
+   *   getSnapshot(scope) {
+   *     return { scope, state: "ok" };
+   *   },
+   * };
+   * ```
+   */
   beforeRequest(ctx: RateLimitRequestContext): RateLimitBeforeRequestResult;
   afterResponse(
     ctx: RateLimitRequestContext,

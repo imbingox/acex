@@ -417,9 +417,11 @@ export class BudgetRateLimiter
     bucket: RateLimitBucketDescriptor,
     priority: RateLimitPriority,
   ): number {
-    const targetLimit = Math.floor(
+    const rawTargetLimit = Math.floor(
       bucket.limit * (bucket.utilizationTarget ?? this.utilizationTarget),
     );
+    const targetLimit =
+      bucket.limit > 0 ? Math.max(1, rawTargetLimit) : rawTargetLimit;
     if (!bucket.reserve) {
       return targetLimit;
     }

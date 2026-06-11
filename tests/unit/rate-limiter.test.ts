@@ -713,6 +713,68 @@ test("BudgetRateLimiter proactively waits when fixed-window budget is exhausted"
   ]);
 });
 
+test("BudgetRateLimiter admits one-unit buckets under utilization target", async () => {
+  let now = 100;
+  let allowSleep = false;
+  const sleeps: number[] = [];
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    sleep: async (ms) => {
+      if (!allowSleep) {
+        throw new Error(`Unexpected sleep before first admission: ${ms}`);
+      }
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+  limiter.registerRateLimitTopology({
+    id: "tiny-budget-test",
+    buckets: [
+      {
+        id: "bucket:tiny",
+        kind: "request_weight",
+        limit: 1,
+        intervalMs: 1_000,
+        scope: ["venue"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:tiny",
+        costs: [{ bucketId: "bucket:tiny", cost: 1 }],
+      },
+    ],
+  });
+
+  const context = {
+    scope: accountScope,
+    planId: "plan:tiny",
+  };
+
+  expect(await limiter.beforeRequest(context)).toBeDefined();
+  expect(sleeps).toEqual([]);
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:tiny",
+      used: 1,
+      windowStartMs: 0,
+      windowEndMs: 1_000,
+    }),
+  ]);
+
+  allowSleep = true;
+  expect(await limiter.beforeRequest(context)).toBeDefined();
+  expect(sleeps).toEqual([900]);
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:tiny",
+      used: 1,
+      windowStartMs: 1_000,
+      windowEndMs: 2_000,
+    }),
+  ]);
+});
+
 test("BudgetRateLimiter preserves reserve headroom for matching priority", async () => {
   let now = 100;
   const sleeps: number[] = [];

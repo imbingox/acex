@@ -15,6 +15,7 @@ import {
   buildAcexErrorDetails,
   type VenueErrorReason,
 } from "../errors.ts";
+import type { AsyncEventBusOverflowInfo } from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesHealthFilter } from "../internal/filters.ts";
 import { ReactiveRateLimiter } from "../internal/rate-limiter.ts";
@@ -26,6 +27,7 @@ import type {
   AccountManager,
   AcexClient,
   AcexInternalError,
+  BufferedEventStreamOptions,
   CancelAllOrdersInput,
   CancelOrderInput,
   ClientEventStreams,
@@ -75,14 +77,30 @@ class ClientEventStreamsImpl implements ClientEventStreams {
   constructor(
     private readonly healthBus: AsyncEventBus<HealthEvent>,
     private readonly errorBus: AsyncEventBus<AcexInternalError>,
+    private readonly onHealthOverflow: (
+      info: AsyncEventBusOverflowInfo,
+    ) => void,
   ) {}
 
-  errors(): AsyncIterable<AcexInternalError> {
-    return this.errorBus.stream();
+  errors(
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<AcexInternalError> {
+    return this.errorBus.stream(() => true, {
+      maxBuffer: options?.maxBuffer,
+    });
   }
 
-  health(filter?: HealthEventFilter): AsyncIterable<HealthEvent> {
-    return this.healthBus.stream((event) => matchesHealthFilter(event, filter));
+  health(
+    filter?: HealthEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<HealthEvent> {
+    return this.healthBus.stream(
+      (event) => matchesHealthFilter(event, filter),
+      {
+        maxBuffer: options?.maxBuffer,
+        onOverflow: this.onHealthOverflow,
+      },
+    );
   }
 }
 
@@ -149,7 +167,11 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.market = this.marketManager;
     this.account = this.accountManager;
     this.order = this.orderManager;
-    this.events = new ClientEventStreamsImpl(this.healthBus, this.errorBus);
+    this.events = new ClientEventStreamsImpl(
+      this.healthBus,
+      this.errorBus,
+      this.createOverflowHandler("client.health"),
+    );
   }
 
   // --- AcexClient public API ---
@@ -419,6 +441,21 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
   publishHealthEvent(event: HealthEvent): void {
     this.healthBus.publish(event);
+  }
+
+  private createOverflowHandler(
+    stream: string,
+  ): (info: AsyncEventBusOverflowInfo) => void {
+    return ({ maxBuffer }) => {
+      const error = new AcexError(
+        "EVENT_BUFFER_OVERFLOW",
+        `Event stream buffer overflow: ${stream}`,
+      );
+      this.publishRuntimeError("runtime", error, {
+        stream,
+        maxBuffer,
+      });
+    };
   }
 
   // --- Private ---

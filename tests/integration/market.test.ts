@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { AcexError, BigNumber, createClient } from "../../index.ts";
+import {
+  AcexError,
+  BigNumber,
+  createClient,
+  type MarketStatusChangedEvent,
+} from "../../index.ts";
 import {
   BINANCE_SPOT_WS_BASE_URL,
   BINANCE_USDM_MARKET_WS_BASE_URL,
@@ -47,6 +52,20 @@ async function expectNoEvent<T>(
       `Expected no event, received ${JSON.stringify(result.value.value)}`,
     );
   }
+}
+
+async function nextMatchingStatus(
+  iterator: AsyncIterator<MarketStatusChangedEvent>,
+  predicate: (event: MarketStatusChangedEvent) => boolean,
+): Promise<MarketStatusChangedEvent> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const event = await nextEvent(iterator);
+    if (predicate(event)) {
+      return event;
+    }
+  }
+
+  throw new Error("Timed out waiting for matching market status event");
 }
 
 test("loadMarkets exposes a unified binance market catalog", async () => {
@@ -1344,6 +1363,214 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
     freshness: "fresh",
     reason: undefined,
   });
+});
+
+test("unchanged l1 ticks do not republish status while buffer mode keeps every l1 event", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1StaleAfterMs: 50,
+    },
+  });
+  const filter = {
+    venue: "binance" as const,
+    symbol: "BTC/USDT:USDT",
+  };
+  const l1Iterator = client.market.events
+    .l1BookUpdates(filter, { mode: "buffer" })
+    [Symbol.asyncIterator]();
+  const statusIterator = client.market.events
+    .status(filter)
+    [Symbol.asyncIterator]();
+
+  await client.start();
+  const subscribePromise = client.market.subscribeL1Book(filter);
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    type: "market.status_changed",
+    status: {
+      activity: "active",
+      ready: false,
+    },
+  });
+
+  const totalTicks = 5;
+  for (let tick = 0; tick < totalTicks; tick += 1) {
+    await Bun.sleep(2);
+    emitBookTicker(socket, "BTCUSDT", `${102000 + tick}.10`);
+  }
+  await subscribePromise;
+
+  const readyStatus = await nextMatchingStatus(
+    statusIterator,
+    (event) => event.status.ready,
+  );
+  expect(readyStatus).toMatchObject({
+    type: "market.status_changed",
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "fresh",
+    },
+  });
+  await expectNoEvent(statusIterator, 20);
+
+  for (let tick = 0; tick < totalTicks; tick += 1) {
+    const event = await nextEvent(l1Iterator);
+    expect(event).toMatchObject({
+      type: "l1_book.updated",
+      snapshot: {
+        bidPrice: new BigNumber(`${102000 + tick}.10`).toFixed(),
+        version: tick + 1,
+      },
+    });
+  }
+
+  const currentStatus = client.market.getMarketStatus(filter);
+  expect(currentStatus?.lastReceivedAt).toBeGreaterThan(
+    readyStatus.status.lastReceivedAt ?? 0,
+  );
+
+  await l1Iterator.return?.();
+  await statusIterator.return?.();
+});
+
+test("l1BookUpdates defaults to latest-wins conflate for slow consumers", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1StaleAfterMs: 50,
+    },
+  });
+  const filter = {
+    venue: "binance" as const,
+    symbol: "BTC/USDT:USDT",
+  };
+
+  await client.start();
+  const subscribePromise = client.market.subscribeL1Book(filter);
+  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
+  emitBookTicker(socket, "BTCUSDT", "101000.10");
+  await subscribePromise;
+
+  const iterator = client.market.events
+    .l1BookUpdates(filter)
+    [Symbol.asyncIterator]();
+
+  emitBookTicker(socket, "BTCUSDT", "101001.10");
+  emitBookTicker(socket, "BTCUSDT", "101002.10");
+  emitBookTicker(socket, "BTCUSDT", "101003.10");
+
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "l1_book.updated",
+    snapshot: {
+      bidPrice: new BigNumber("101003.10").toFixed(),
+      version: 4,
+    },
+  });
+  await expectNoEvent(iterator, 20);
+  await iterator.return?.();
+});
+
+test("market status publishes when comparison fields change", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1StaleAfterMs: 50,
+      l1ReconnectDelayMs: 5,
+      l1ReconnectMaxDelayMs: 5,
+    },
+  });
+  const filter = {
+    venue: "binance" as const,
+    symbol: "BTC/USDT:USDT",
+  };
+  const statusIterator = client.market.events
+    .status(filter)
+    [Symbol.asyncIterator]();
+
+  await client.start();
+  const subscribePromise = client.market.subscribeL1Book(filter);
+  const firstSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
+  await waitForBinanceControlFrame(firstSocket, "SUBSCRIBE", [
+    "btcusdt@bookTicker",
+  ]);
+
+  expect(await nextEvent(statusIterator)).toMatchObject({
+    status: {
+      activity: "active",
+      ready: false,
+    },
+  });
+
+  emitBookTicker(firstSocket, "BTCUSDT", "101000.10");
+  await subscribePromise;
+  expect(
+    await nextMatchingStatus(statusIterator, (event) => event.status.ready),
+  ).toMatchObject({
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "fresh",
+      reason: undefined,
+    },
+  });
+
+  firstSocket.disconnect();
+  expect(
+    await nextMatchingStatus(
+      statusIterator,
+      (event) => event.status.reason === "ws_disconnected",
+    ),
+  ).toMatchObject({
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "stale",
+      reason: "ws_disconnected",
+    },
+  });
+
+  const secondSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 1, 100);
+  await waitForBinanceControlFrame(secondSocket, "SUBSCRIBE", [
+    "btcusdt@bookTicker",
+  ]);
+  emitBookTicker(secondSocket, "BTCUSDT", "101500.10");
+
+  expect(
+    await nextMatchingStatus(
+      statusIterator,
+      (event) => event.status.freshness === "fresh",
+    ),
+  ).toMatchObject({
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "fresh",
+      reason: undefined,
+    },
+  });
+
+  await client.market.unsubscribeL1Book(filter);
+  expect(
+    await nextMatchingStatus(
+      statusIterator,
+      (event) => event.status.activity === "inactive",
+    ),
+  ).toMatchObject({
+    status: {
+      activity: "inactive",
+      ready: false,
+    },
+  });
+
+  await statusIterator.return?.();
 });
 
 test("market all and status streams expose public event filtering", async () => {

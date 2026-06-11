@@ -19,10 +19,15 @@ import {
   buildAcexErrorDetails,
   formatAcexErrorMessage,
 } from "../errors.ts";
+import type {
+  AsyncEventBusOverflowInfo,
+  AsyncEventBusStreamOptions,
+} from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
 import type {
+  EventStreamOptions,
   FundingRateSnapshot,
   FundingRateUpdatedEvent,
   L1Book,
@@ -67,6 +72,14 @@ interface MarketRecord {
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
   fundingRateStream?: StreamHandle;
+  lastPublishedStatusKey?: MarketStatusPublicationKey;
+}
+
+interface MarketStatusPublicationKey {
+  activity: MarketDataStatus["activity"];
+  ready: MarketDataStatus["ready"];
+  freshness: MarketDataStatus["freshness"];
+  reason: MarketDataStatus["reason"];
 }
 
 interface CatalogFetchResult {
@@ -85,8 +98,36 @@ function marketKey(input: MarketKeyInput): string {
   return `${input.venue}:${input.symbol}`;
 }
 
+function marketEventConflateKey(event: MarketEvent): string {
+  return `${event.type}:${marketKey(event)}`;
+}
+
 function cloneMarketStatus(status: MarketDataStatus): MarketDataStatus {
   return { ...status };
+}
+
+function statusPublicationKey(
+  status: MarketDataStatus,
+): MarketStatusPublicationKey {
+  return {
+    activity: status.activity,
+    ready: status.ready,
+    freshness: status.freshness,
+    reason: status.reason,
+  };
+}
+
+function sameStatusPublicationKey(
+  current: MarketStatusPublicationKey,
+  previous: MarketStatusPublicationKey | undefined,
+): boolean {
+  return (
+    previous !== undefined &&
+    current.activity === previous.activity &&
+    current.ready === previous.ready &&
+    current.freshness === previous.freshness &&
+    current.reason === previous.reason
+  );
 }
 
 function cloneStreamStatus(
@@ -153,23 +194,49 @@ export class MarketManagerImpl
       options.l1ReconnectMaxDelayMs ?? DEFAULT_L1_RECONNECT_MAX_DELAY_MS;
 
     this.events = {
-      all: (filter) =>
-        this.marketBus.stream((event) => matchesMarketFilter(event, filter)),
-      fundingRateUpdates: (filter) =>
+      all: (filter, options) =>
+        this.marketBus.stream(
+          (event) => matchesMarketFilter(event, filter),
+          this.createStreamOptions(
+            "market.all",
+            options,
+            "buffer",
+            marketEventConflateKey,
+          ),
+        ),
+      fundingRateUpdates: (filter, options) =>
         this.marketBus.stream(
           (event): event is FundingRateUpdatedEvent =>
             event.type === "funding_rate.updated" &&
             matchesMarketFilter(event, filter),
+          this.createStreamOptions(
+            "market.fundingRateUpdates",
+            options,
+            "conflate",
+            marketKey,
+          ),
         ),
-      l1BookUpdates: (filter) =>
+      l1BookUpdates: (filter, options) =>
         this.marketBus.stream(
           (event): event is L1BookUpdatedEvent =>
             event.type === "l1_book.updated" &&
             matchesMarketFilter(event, filter),
+          this.createStreamOptions(
+            "market.l1BookUpdates",
+            options,
+            "conflate",
+            marketKey,
+          ),
         ),
-      status: (filter) =>
-        this.marketStatusBus.stream((event) =>
-          matchesMarketFilter(event, filter),
+      status: (filter, options) =>
+        this.marketStatusBus.stream(
+          (event) => matchesMarketFilter(event, filter),
+          this.createStreamOptions(
+            "market.status",
+            options,
+            "buffer",
+            marketKey,
+          ),
         ),
     };
   }
@@ -1064,6 +1131,14 @@ export class MarketManagerImpl
       record.status.lastReadyAt = this.resolveLastReadyAt(record);
     }
 
+    const publicationKey = statusPublicationKey(record.status);
+    if (
+      sameStatusPublicationKey(publicationKey, record.lastPublishedStatusKey)
+    ) {
+      return;
+    }
+
+    record.lastPublishedStatusKey = publicationKey;
     this.publishStatus(record);
   }
 
@@ -1182,6 +1257,35 @@ export class MarketManagerImpl
     this.marketStatusBus.publish(event);
     this.marketBus.publish(event);
     this.context.publishHealthEvent(event);
+  }
+
+  private createStreamOptions<U extends { venue: Venue; symbol: string }>(
+    stream: string,
+    options: EventStreamOptions | undefined,
+    defaultMode: "buffer" | "conflate",
+    conflateKey: (event: U) => string,
+  ): AsyncEventBusStreamOptions<U> {
+    return {
+      mode: options?.mode ?? defaultMode,
+      maxBuffer: options?.maxBuffer,
+      conflateKey,
+      onOverflow: this.createOverflowHandler(stream),
+    };
+  }
+
+  private createOverflowHandler(
+    stream: string,
+  ): (info: AsyncEventBusOverflowInfo) => void {
+    return ({ maxBuffer }) => {
+      const error = new AcexError(
+        "EVENT_BUFFER_OVERFLOW",
+        `Event stream buffer overflow: ${stream}`,
+      );
+      this.context.publishRuntimeError("market", error, {
+        stream,
+        maxBuffer,
+      });
+    };
   }
 
   private async resumeStreams(): Promise<void> {

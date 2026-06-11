@@ -372,6 +372,26 @@ console.log(time.serverTime, time.roundTripMs, time.estimatedOffsetMs);
 
 Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`，包括 Binance TradFi Perps）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 
+### 5.5 事件流 options
+
+Market 事件流支持可选第二参：
+
+```ts
+type EventStreamOptions = {
+  mode?: "conflate" | "buffer";
+  maxBuffer?: number;
+};
+
+client.market.events.l1BookUpdates(
+  { venue: "binance", symbol: "BTC/USDT:USDT" },
+  { mode: "buffer", maxBuffer: 50_000 },
+);
+```
+
+`l1BookUpdates()` 与 `fundingRateUpdates()` 默认使用 `conflate`，同一 `venue:symbol` 慢消费者只保留最新事件，适合策略热路径。需要录制每个 tick 时显式传 `{ mode: "buffer" }`。`market.events.all()` 与 `market.events.status()` 默认使用 `buffer`；显式传 `{ mode: "conflate" }` 时，`all()` 按 `type:venue:symbol` 合并，`status()` 按 `venue:symbol` 合并。
+
+`buffer` 模式默认每个订阅者最多积压 `10_000` 条事件，超过后丢弃最旧事件。每次积压 episode 只会向 `client.events.errors()` 发布一次 `EVENT_BUFFER_OVERFLOW` runtime error，事件 metadata 包含 `stream` 与 `maxBuffer`；队列排空后再次溢出会再次告警。`conflate` 模式天然有界，不使用 `maxBuffer`。
+
 ## 6. AccountManager
 
 ```ts
@@ -400,13 +420,15 @@ Account 事件用于消费余额、仓位、风险或全量快照替换：
 ```ts
 for await (const event of client.account.events.updates({
   accountId: "main-binance",
-})) {
+}, { maxBuffer: 20_000 })) {
   if (event.type === "risk.updated") {
     console.log(event.snapshot.riskRatio);
   }
   break;
 }
 ```
+
+Account 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；余额、仓位、风险和状态事件默认按 buffer 语义保留顺序。
 
 ## 7. OrderManager
 
@@ -456,7 +478,7 @@ Order 事件用于消费订单状态变化和 open orders 快照校准。Binance
 for await (const event of client.order.events.updates({
   accountId: "main-binance",
   symbol: "BTC/USDT:USDT",
-})) {
+}, { maxBuffer: 20_000 })) {
   if (event.type === "order.filled") {
     console.log(event.snapshot.filled);
   }
@@ -464,23 +486,28 @@ for await (const event of client.order.events.updates({
 }
 ```
 
+Order 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；订单中间状态和错误恢复信号默认按 buffer 语义保留顺序。
+
 ## 8. 健康与错误事件
 
 ```ts
 const health = client.getHealth();
 
-for await (const event of client.events.health({ venue: "binance" })) {
+for await (const event of client.events.health(
+  { venue: "binance" },
+  { maxBuffer: 20_000 },
+)) {
   console.log(event.type);
   break;
 }
 
-for await (const error of client.events.errors()) {
+for await (const error of client.events.errors({ maxBuffer: 20_000 })) {
   console.error(error.source, error.error);
   break;
 }
 ```
 
-`getHealth()` 聚合 client、market、account、order 的当前状态。`events.health(filter)` 只返回满足 filter 的事件；如果事件没有 filter 请求的字段，会被过滤掉。
+`getHealth()` 聚合 client、market、account、order 的当前状态。`events.health(filter, options?)` 只返回满足 filter 的事件；如果事件没有 filter 请求的字段，会被过滤掉。`events.health()` 与 `events.errors()` 只支持 `{ maxBuffer?: number }`，默认 buffer 上限同样是 `10_000`；`errors()` 自身溢出时只丢弃最旧错误事件，不再发布新的 overflow 错误，避免递归。
 
 ## 9. 数据类型速查
 

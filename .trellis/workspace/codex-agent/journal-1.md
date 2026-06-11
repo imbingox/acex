@@ -1261,3 +1261,36 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 36: 批次③ 事件流质量：conflation/背压 + status 发布去重（P1-B1 + P1-B2）
+
+**Date**: 2026-06-11
+**Task**: 批次③ 事件流质量：conflation/背压 + status 发布去重（P1-B1 + P1-B2）
+**Branch**: `feat/event-conflation-status-dedup`
+
+### Summary
+
+AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 episode 一次 EVENT_BUFFER_OVERFLOW + 排空重新武装）；公开事件流第二参 options（market 用 EventStreamOptions 含 mode、l1/funding 默认 conflate，order/account/health/errors 仅 BufferedEventStreamOptions），errorBus 自身溢出不告警防递归；recomputeAndPublishStatus 按 activity/ready/freshness/reason 去重、时间戳仍更新 record。codex 实现+spec、Claude 独立审 diff 与三门禁（213 pass）。minor changeset。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `35b8163` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

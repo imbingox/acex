@@ -670,7 +670,6 @@ export class OrderManagerImpl
       return;
     }
 
-    record.missingOrderConfirmations.delete(location.localOrderId);
     const receivedAt = this.context.now();
     const snapshot = createSnapshot(
       accountId,

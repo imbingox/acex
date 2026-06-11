@@ -33,6 +33,7 @@ import type {
   RawRiskUpdate,
   StreamHandle,
 } from "../types.ts";
+import { normalizeBinanceErrorCode } from "./error-codes.ts";
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
 
 type TimerHandle = ReturnType<typeof setInterval>;
@@ -183,7 +184,6 @@ const LISTEN_KEY_KEEPALIVE_RETRY_POLICY: HttpRetryPolicy = {
   idempotent: true,
   maxAttempts: 3,
 };
-const BINANCE_ORDER_NOT_FOUND_CODES = new Set(["-2011", "-2013"]);
 function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
   return {
     http: ({ status, statusText, url, rawBody }) =>
@@ -628,7 +628,7 @@ function isBinanceOrderNotFound(error: unknown): boolean {
 
   try {
     const parsed = JSON.parse(rawBody) as { code?: unknown };
-    return BINANCE_ORDER_NOT_FOUND_CODES.has(`${parsed.code}`);
+    return normalizeBinanceErrorCode(`${parsed.code}`) === "order_not_found";
   } catch {
     return false;
   }
@@ -675,6 +675,10 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       readonly rateLimiter?: RateLimiter;
     } = {},
   ) {}
+
+  normalizeVenueErrorCode(code: string) {
+    return normalizeBinanceErrorCode(code);
+  }
 
   async bootstrapAccount(
     credentials: AccountCredentials,

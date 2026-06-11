@@ -918,20 +918,43 @@ type OrderEvent =
 可预期错误统一抛 `AcexError`：
 
 ```ts
-import { AcexError } from "@imbingox/acex";
+import { AcexError, isOrderStateUnknown } from "@imbingox/acex";
 
 try {
-  await client.market.subscribeL1Book({ venue: "binance", symbol: "X/Y:Z" });
+  await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000",
+    amount: "0.01",
+    postOnly: true,
+  });
 } catch (error) {
   if (error instanceof AcexError) {
     console.log(error.code);
     console.log(error.details?.venueError?.code);
+    console.log(error.details?.venueError?.reason);
+    console.log(error.details?.orderState);
     console.log(error.details?.transport?.status);
+    console.log(isOrderStateUnknown(error));
   }
 }
 ```
 
-`details.venueError` 是读取交易所结构化拒绝原因的首选字段；`details.transport` 保存已脱敏的 HTTP / transport 诊断信息；`cause` 保留底层错误链。
+`details.venueError` 是读取交易所结构化拒绝原因的首选字段；`details.venueError.reason` 是 SDK 归一后的稳定原因，原始 `code/message` 会继续保留。`details.orderState` 只在订单命令错误中填写：`not_placed` 表示 SDK 判定订单未落地，`unknown` 表示请求可能已经到达交易所，应由调用方后续查询或对账确认。`details.transport` 保存已脱敏的 HTTP / transport 诊断信息；`cause` 保留底层错误链。
+
+归一错误原因：
+
+| `VenueErrorReason` | 典型含义 |
+|---|---|
+| `insufficient_balance` | 余额或保证金不足 |
+| `would_take` | Post Only / maker-only 订单会吃单而被拒 |
+| `order_not_found` | 订单不存在、已不在可撤订单簿或超过交易所可查询范围 |
+| `filter_violation` | 价格、数量、精度、最小名义金额或订单数量限制不满足 |
+| `rate_limited` | 请求权重、订单频率或账户排队被限流 |
+| `timestamp_out_of_sync` | 请求时间戳或 `recvWindow` 与交易所时间不匹配 |
+| `unknown` | 交易所原始码未归入稳定语义，调用方仍可读取原始 `code/message` |
 
 完整错误码：
 

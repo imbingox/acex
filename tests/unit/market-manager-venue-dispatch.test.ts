@@ -13,7 +13,7 @@ import type {
   ClientContext,
   RegisteredAccountRecord,
 } from "../../src/client/context.ts";
-import { AcexError } from "../../src/errors.ts";
+import { AcexError, type VenueErrorReason } from "../../src/errors.ts";
 import { MarketManagerImpl } from "../../src/managers/market-manager.ts";
 import type {
   AcexInternalError,
@@ -60,6 +60,13 @@ class StubMarketContext implements ClientContext {
   getPrivateOrderCapabilities(
     _venue: Venue,
   ): VenueOrderCapabilities | undefined {
+    return undefined;
+  }
+
+  normalizeVenueErrorCode(
+    _venue: Venue,
+    _code: string,
+  ): VenueErrorReason | undefined {
     return undefined;
   }
 
@@ -596,6 +603,7 @@ test("MarketManager fetchServerTime wraps Binance HTTP failures without retrying
   });
   expect((failure as AcexError).cause).toBeInstanceOf(Error);
   expect((failure as AcexError).details?.venueError).toBeUndefined();
+  expect((failure as AcexError).details?.orderState).toBeUndefined();
 
   expect(attempts).toBe(1);
   expect(context.errors).toHaveLength(1);

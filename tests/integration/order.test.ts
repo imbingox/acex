@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { AcexError, BigNumber, createClient } from "../../index.ts";
+import type { VenueErrorReason } from "../../index.ts";
+import {
+  AcexError,
+  BigNumber,
+  createClient,
+  isOrderStateUnknown,
+} from "../../index.ts";
 import { TransportError } from "../../src/internal/http-client.ts";
 import {
   installBinancePrivateAccountInfra,
@@ -125,6 +131,30 @@ interface ClientDebugView {
   createOrder(input: unknown): Promise<unknown>;
   cancelAllOrders(input: unknown): Promise<unknown>;
   orderManager: OrderManagerDebugView;
+}
+
+function setDebugCreateOrder(
+  client: object,
+  createOrder: (input: unknown) => Promise<unknown>,
+): void {
+  if (!Reflect.set(client, "createOrder", createOrder)) {
+    throw new Error("Failed to override debug createOrder");
+  }
+}
+
+function unsetDebugVenueErrorNormalizer(client: object, venue: string): void {
+  const privateAdapters = Reflect.get(client, "privateAdapters");
+  if (!(privateAdapters instanceof Map)) {
+    throw new Error("Expected debug private adapter map");
+  }
+
+  const adapter: unknown = privateAdapters.get(venue);
+  if (!adapter || typeof adapter !== "object") {
+    throw new Error(`Expected debug private adapter for ${venue}`);
+  }
+  if (!Reflect.set(adapter, "normalizeVenueErrorCode", undefined)) {
+    throw new Error("Failed to unset debug venue error normalizer");
+  }
 }
 
 async function createSubscribedOrderClient(options: {
@@ -1154,6 +1184,7 @@ test("createOrder rejects invalid caller-provided clientOrderId before REST", as
 
   expect(failure).toBeInstanceOf(AcexError);
   expect((failure as AcexError).code).toBe("ORDER_INPUT_INVALID");
+  expect((failure as AcexError).details?.orderState).toBe("not_placed");
   expect(
     requests.some(
       (entry) =>
@@ -1240,6 +1271,10 @@ test("createOrder clears pending claim after explicit adapter failure", async ()
 
   expect(failure).toBeInstanceOf(AcexError);
   expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+  expect((failure as AcexError).details?.transport).toBeUndefined();
+  expect((failure as AcexError).details?.venueError).toBeUndefined();
+  expect((failure as AcexError).details?.orderState).toBe("unknown");
+  expect(isOrderStateUnknown(failure)).toBe(true);
   expect(
     debugClient.orderManager.records.get("main-binance")
       ?.pendingClientOrderIdIndex.size,
@@ -1283,6 +1318,8 @@ test("createOrder retains pending claim after timeout", async () => {
 
   expect(failure).toBeInstanceOf(AcexError);
   expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+  expect((failure as AcexError).details?.orderState).toBe("unknown");
+  expect(isOrderStateUnknown(failure)).toBe(true);
 
   const pending = [
     ...(debugClient.orderManager.records
@@ -1291,6 +1328,167 @@ test("createOrder retains pending claim after timeout", async () => {
   ];
   expect(pending).toHaveLength(1);
   expect(pending[0]).toMatch(/^acex-/);
+});
+
+test("createOrder annotates orderState for transport failure outcomes", async () => {
+  const cases: Array<{
+    name: string;
+    error: TransportError;
+    orderState: "not_placed" | "unknown";
+    reason?: VenueErrorReason;
+  }> = [
+    {
+      name: "network",
+      error: new TransportError("Network failed", {
+        kind: "network",
+        attempts: 1,
+        retryable: true,
+        url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+      }),
+      orderState: "unknown",
+    },
+    {
+      name: "parse",
+      error: new TransportError("Parse failed", {
+        kind: "parse",
+        attempts: 1,
+        retryable: false,
+        rawBody: "<html>not json</html>",
+        url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+      }),
+      orderState: "unknown",
+    },
+    {
+      name: "http 5xx",
+      error: new TransportError("Binance unavailable", {
+        kind: "http",
+        status: 503,
+        statusText: "Service Unavailable",
+        attempts: 1,
+        retryable: true,
+        rawBody: "temporarily unavailable",
+        url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+      }),
+      orderState: "unknown",
+    },
+    {
+      name: "rate limited",
+      error: new TransportError("Too many requests", {
+        kind: "rate_limited",
+        status: 429,
+        statusText: "Too Many Requests",
+        retryAfterMs: 2000,
+        attempts: 1,
+        retryable: true,
+        rawBody: '{"code":-1003,"msg":"Too many requests"}',
+        url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+      }),
+      orderState: "not_placed",
+      reason: "rate_limited",
+    },
+    {
+      name: "venue reject",
+      error: new TransportError("Insufficient margin", {
+        kind: "http",
+        status: 400,
+        statusText: "Bad Request",
+        attempts: 1,
+        retryable: false,
+        rawBody: '{"code":-2019,"msg":"Margin is insufficient."}',
+        url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+      }),
+      orderState: "not_placed",
+      reason: "insufficient_balance",
+    },
+  ];
+
+  for (const testCase of cases) {
+    installBinancePrivateAccountInfra();
+    const client = createClient();
+
+    await client.registerAccount({
+      accountId: "main-binance",
+      venue: "binance",
+      credentials: {
+        apiKey: "key",
+        secret: "secret",
+      },
+    });
+    await client.start();
+
+    setDebugCreateOrder(client, async () => {
+      throw testCase.error;
+    });
+
+    const failure = await client.order
+      .createOrder({
+        accountId: "main-binance",
+        symbol: "BTC/USDT:USDT",
+        side: "buy",
+        type: "limit",
+        price: "101000.00",
+        amount: "0.010",
+      })
+      .catch((error) => error);
+
+    expect(failure).toBeInstanceOf(AcexError);
+    expect((failure as AcexError).details?.orderState).toBe(
+      testCase.orderState,
+    );
+    expect(isOrderStateUnknown(failure)).toBe(
+      testCase.orderState === "unknown",
+    );
+    expect((failure as AcexError).details?.venueError?.reason).toBe(
+      testCase.reason,
+    );
+  }
+});
+
+test("createOrder leaves venue error reason undefined without an adapter normalizer", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  unsetDebugVenueErrorNormalizer(client, "binance");
+  setDebugCreateOrder(client, async () => {
+    throw new TransportError("Insufficient margin", {
+      kind: "http",
+      status: 400,
+      statusText: "Bad Request",
+      attempts: 1,
+      retryable: false,
+      rawBody: '{"code":-2019,"msg":"Margin is insufficient."}',
+      url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+    });
+  });
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).details?.venueError).toMatchObject({
+    code: "-2019",
+    message: "Margin is insufficient.",
+  });
+  expect((failure as AcexError).details?.venueError?.reason).toBeUndefined();
+  expect((failure as AcexError).details?.orderState).toBe("not_placed");
 });
 
 test("createOrder pending claim reuses the generated cid for early websocket updates", async () => {
@@ -2744,6 +2942,9 @@ test("cancelOrder validates that at least one order identifier is provided", asy
     }),
   ).rejects.toMatchObject({
     code: "ORDER_INPUT_INVALID",
+    details: {
+      orderState: "not_placed",
+    },
   });
 });
 
@@ -2787,6 +2988,7 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
       venueError: {
         code: "-2010",
         message: "Order would immediately trigger.",
+        reason: "unknown",
       },
       transport: {
         kind: "http",
@@ -2795,8 +2997,10 @@ test("createOrder wraps adapter failures with a stable AcexError code", async ()
         retryable: false,
         attempts: 1,
       },
+      orderState: "not_placed",
     },
   });
+  expect(isOrderStateUnknown(failure)).toBe(false);
   expect(failure.cause).toBeInstanceOf(Error);
   expect(failure.message).toContain(
     "Binance rejected: Order would immediately trigger.",
@@ -2850,11 +3054,13 @@ test("cancelOrder exposes structured venue error details on adapter failures", a
       venueError: {
         code: "-2011",
         message: "Unknown order sent.",
+        reason: "order_not_found",
       },
       transport: {
         kind: "http",
         status: 400,
       },
+      orderState: "not_placed",
     },
   });
 });
@@ -2888,11 +3094,13 @@ test("cancelAllOrders exposes structured venue error details on adapter failures
       venueError: {
         code: "-2011",
         message: "Unknown order sent.",
+        reason: "order_not_found",
       },
       transport: {
         kind: "http",
         status: 400,
       },
+      orderState: "not_placed",
     },
   });
 });

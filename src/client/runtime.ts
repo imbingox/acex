@@ -13,6 +13,7 @@ import {
   AcexError,
   type AcexErrorCode,
   buildAcexErrorDetails,
+  type VenueErrorReason,
 } from "../errors.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesHealthFilter } from "../internal/filters.ts";
@@ -310,6 +311,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     venue: Venue,
   ): VenueOrderCapabilities | undefined {
     return this.privateAdapters.get(venue)?.orderCapabilities;
+  }
+
+  normalizeVenueErrorCode(
+    venue: Venue,
+    code: string,
+  ): VenueErrorReason | undefined {
+    return this.privateAdapters.get(venue)?.normalizeVenueErrorCode?.(code);
   }
 
   ensurePrivateCredentials(accountId: string): void {

@@ -4,6 +4,7 @@ import type {
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
 } from "../adapters/types.ts";
+import type { VenueErrorReason } from "../errors.ts";
 import type {
   AccountCredentials,
   AcexInternalError,
@@ -30,6 +31,10 @@ export interface ClientContext {
   assertStarted(): void;
   getRegisteredAccount(accountId: string): RegisteredAccountRecord;
   getPrivateOrderCapabilities(venue: Venue): VenueOrderCapabilities | undefined;
+  normalizeVenueErrorCode(
+    venue: Venue,
+    code: string,
+  ): VenueErrorReason | undefined;
   ensurePrivateCredentials(accountId: string): void;
   subscribePrivateAccountFeed(accountId: string): Promise<void>;
   unsubscribePrivateAccountFeed(accountId: string): void;

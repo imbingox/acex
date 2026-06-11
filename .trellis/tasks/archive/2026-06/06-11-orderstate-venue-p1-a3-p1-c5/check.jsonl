@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验收核心:错误矩阵、脱敏要求、导出约定;检查 spec 是否已随实现同步更新"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/type-check/test 质量门槛与测试分层要求"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "检查新增 public 类型是否符合类型安全与导出约定"}
+{"file": ".trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5/prd.md", "reason": "对照验收标准:映射用例、orderState 判定矩阵、changeset、docs/api.md 同步"}

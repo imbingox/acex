@@ -3,6 +3,7 @@ import {
   AcexError,
   buildAcexErrorDetails,
   formatAcexErrorMessage,
+  isOrderStateUnknown,
 } from "../../src/errors.ts";
 import { TransportError } from "../../src/internal/http-client.ts";
 
@@ -15,7 +16,9 @@ test("AcexError preserves code, cause, and details", () => {
     venueError: {
       code: "-2010",
       message: "Order would immediately trigger.",
+      reason: "unknown" as const,
     },
+    orderState: "unknown" as const,
   };
 
   const error = new AcexError("ORDER_CREATE_FAILED", "Failed", {
@@ -29,6 +32,8 @@ test("AcexError preserves code, cause, and details", () => {
   expect(error.message).toBe("Failed");
   expect(error.cause).toBe(cause);
   expect(error.details).toBe(details);
+  expect(isOrderStateUnknown(error)).toBe(true);
+  expect(isOrderStateUnknown(cause)).toBe(false);
 });
 
 test("buildAcexErrorDetails extracts Binance-style venue errors", () => {
@@ -69,6 +74,8 @@ test("buildAcexErrorDetails extracts Binance-style venue errors", () => {
       url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
     },
   });
+  expect(details?.venueError?.reason).toBeUndefined();
+  expect(details?.orderState).toBeUndefined();
   expect(formatAcexErrorMessage("Failed to create order", details)).toBe(
     "Failed to create order (Binance rejected: Order would immediately trigger.)",
   );

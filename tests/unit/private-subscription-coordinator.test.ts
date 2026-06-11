@@ -16,7 +16,7 @@ import type {
   RegisteredAccountRecord,
 } from "../../src/client/context.ts";
 import { PrivateSubscriptionCoordinator } from "../../src/client/private-subscription-coordinator.ts";
-import { AcexError } from "../../src/errors.ts";
+import { AcexError, type VenueErrorReason } from "../../src/errors.ts";
 import { TransportError } from "../../src/internal/http-client.ts";
 import type {
   AccountCredentials,
@@ -62,6 +62,13 @@ class StubContext implements ClientContext {
   getPrivateOrderCapabilities(
     _venue: Venue,
   ): VenueOrderCapabilities | undefined {
+    return undefined;
+  }
+
+  normalizeVenueErrorCode(
+    _venue: Venue,
+    _code: string,
+  ): VenueErrorReason | undefined {
     return undefined;
   }
 
@@ -939,11 +946,14 @@ test("account subscribe failures close unused streams, leave no refresh polling,
   );
 
   adapter.bootstrapAccountError = new Error("bootstrap failed");
-  await expect(
-    coordinator.subscribeAccountFeed("main-binance"),
-  ).rejects.toMatchObject({
+  const failure = await coordinator
+    .subscribeAccountFeed("main-binance")
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
     code: "ACCOUNT_BOOTSTRAP_FAILED",
   });
+  expect((failure as AcexError).details?.orderState).toBeUndefined();
 
   await Bun.sleep(20);
 

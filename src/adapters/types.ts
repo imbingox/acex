@@ -1,3 +1,4 @@
+import type { VenueErrorReason } from "../errors.ts";
 import type {
   AccountCredentials,
   CreateOrderType,
@@ -233,6 +234,7 @@ export interface PrivateUserDataAdapter {
   readonly notes: string[];
   readonly accountCapabilities: VenueAccountCapabilities;
   readonly orderCapabilities: VenueOrderCapabilities;
+  normalizeVenueErrorCode?(code: string): VenueErrorReason;
   bootstrapAccount(
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,

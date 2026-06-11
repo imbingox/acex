@@ -15,6 +15,19 @@
 | P1-C | 多交易所扩展性 | 5 |
 | P2 | 功能缺口与工程项 | 12 |
 
+## P1 批次规划（2026-06-11 梳理，按此顺序执行）
+
+| 批次 | 条目 | 说明 | 状态 |
+|---|---|---|---|
+| ① 错误体系统一 | A3 + C5 | C5 归一码是 A3 orderState 判定的输入，合并一个任务、一个 minor changeset | 代码完成 → .trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5 |
+| ② 订单生命周期收尾 | A1 + A2 | 都是"订单查不到/claim 悬挂"的终态化处理，共享 fetchOrder 回查模式与测试场景 | |
+| ③ 事件流质量 | B1 + B2 | 同在事件总线/状态发布路径；B2 是小修可捎带 | |
+| ④ 限流分层 | B3 | 工作量偏大，独立任务 | |
+| ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | |
+| ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | |
+| ⑦ 流层打磨 | B6 + B7 + B8 | 三个小项打包成一个任务 | |
+| ⑧ 多交易所开放点 | C1 + C2 + C3 + C4 | SPI/配置抽象；C3 有正确性成分（交割合约映射已错），如有需要可提前单独做 | |
+
 ---
 
 ## P0 — 实盘正确性（必须先修）
@@ -69,12 +82,13 @@
 - **修复方案**：claim 加 TTL；到期后用 `fetchOrder(origClientOrderId)` 确认一次——查得到则入库，查不到则清理。
 - **验证方式**：单测覆盖"超时 + 订单不存在"与"超时 + 订单实际成交"两条路径。
 
-### - [ ] P1-A3 错误体系缺一等的"订单状态未知"语义
+### - [x] P1-A3 错误体系缺一等的"订单状态未知"语义
 
 - **位置**：`src/errors.ts:35`（`AcexErrorTransportDetails`）
 - **问题**：调用方必须自己理解 `details.transport.kind === "timeout"` 意味着"订单可能已成交"。这是交易 SDK 最关键的错误语义，目前是隐式约定（`.trellis/spec/backend/error-handling.md` 也未覆盖）。
 - **修复方案**：`AcexError` 增加显式字段（如 `orderState: "not_placed" | "unknown"`）或提供 `isOrderStateUnknown(error)` 辅助函数；同步更新 error-handling spec 与 docs/api.md。
 - **验证方式**：单测断言 timeout/网络中断/венue 拒绝三类错误的 `orderState` 取值。
+- **状态**：代码已完成（→ .trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5，与 P1-C5 合并实现）：`details.orderState` + `isOrderStateUnknown()`，判定矩阵 timeout/network/parse/5xx → `unknown`，venue 拒单/输入校验/限流 → `not_placed`。
 
 ---
 
@@ -167,12 +181,13 @@
 - **修复方案**：协议接口增加可选 `heartbeat?: { intervalMs, frame(): string, isPong(msg): boolean }`，multiplexer 通用调度。
 - **验证方式**：fake 协议单测：按 interval 发 ping、pong 计入活性。
 
-### - [ ] P1-C5 venue 错误码不归一
+### - [x] P1-C5 venue 错误码不归一
 
 - **位置**：`src/errors.ts:30`（`venueError.code` 直接透传原始码）
 - **问题**：策略层想区分"余额不足/post-only 会吃单/订单不存在/价格超滤"必须写 Binance 专属逻辑。
-- **修复方案**：定义小而稳的归一枚举（`insufficient_balance` / `would_take` / `order_not_found` / `filter_violation` / `rate_limited` / `unknown`），适配器提供映射表，原始码继续保留在 `venueError`。
+- **修复方案**：定义小而稳的归一枚举（`insufficient_balance` / `would_take` / `order_not_found` / `filter_violation` / `rate_limited` / `timestamp_out_of_sync` / `unknown`），适配器提供映射表，原始码继续保留在 `venueError`。
 - **验证方式**：单测覆盖 -2010/-2011/-2013/-4131 等常见码映射。
+- **状态**：代码已完成（→ .trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5，与 P1-A3 合并实现）：`VenueErrorReason` 七成员枚举 + `details.venueError.reason`；映射表按官方文档核实（PAPI UM 余额/保证金不足是 -2018/-2019 而非 spot 的 -2010；-5022 GTX 拒单 → `would_take`；-2010 等语义不确定码归 `unknown`），依据见任务 research/binance-error-codes.md。
 
 ---
 

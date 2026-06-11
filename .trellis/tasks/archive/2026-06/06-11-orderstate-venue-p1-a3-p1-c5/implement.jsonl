@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "本任务的核心 spec:AcexError 结构、分层契约(adapter 只抛 TransportError,public 错误归 manager 包装)、导出约定、错误矩阵;实现后需同步更新此文件"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "若映射表走 SPI 可选方法需遵守适配器契约;确认 adapter 不构造 public AcexError 的边界"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "orderState 语义挂在订单命令错误上,需对齐 createOrder/cancelOrder/cancelAllOrders 的错误包装与公开契约"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "新增 public 枚举/optional 字段的类型约定与根导出规则"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "新增 public API 字段需要 minor changeset,遵守发布规范"}
+{"file": ".trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5/prd.md", "reason": "需求、ADR(Q1 API 形态/Q2 枚举成员)、验收标准、out of scope"}

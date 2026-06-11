@@ -10,6 +10,7 @@ import type {
   PrivateOrderDataConsumer,
   PrivateSubscriptionState,
 } from "../client/context.ts";
+import type { AcexErrorDetails, AcexErrorTransportKind } from "../errors.ts";
 import {
   AcexError,
   buildAcexErrorDetails,
@@ -73,6 +74,15 @@ import {
   selectLatestSnapshot,
   setSnapshot,
 } from "./order/store.ts";
+
+type OrderCommandErrorCode =
+  | "ORDER_CANCEL_ALL_FAILED"
+  | "ORDER_CANCEL_FAILED"
+  | "ORDER_CREATE_FAILED";
+
+type OrderErrorCode = OrderCommandErrorCode | "ORDER_INPUT_INVALID";
+
+type OrderCommandOrderState = NonNullable<AcexErrorDetails["orderState"]>;
 
 export class OrderManagerImpl
   implements
@@ -990,12 +1000,7 @@ export class OrderManagerImpl
   }
 
   private createError(
-    code:
-      | "VENUE_NOT_SUPPORTED"
-      | "ORDER_CANCEL_ALL_FAILED"
-      | "ORDER_CANCEL_FAILED"
-      | "ORDER_CREATE_FAILED"
-      | "ORDER_INPUT_INVALID",
+    code: "VENUE_NOT_SUPPORTED" | OrderCommandErrorCode | "ORDER_INPUT_INVALID",
     message: string,
     metadata: {
       accountId: string;
@@ -1003,17 +1008,14 @@ export class OrderManagerImpl
       symbol?: string;
     },
   ): AcexError {
-    const details = buildAcexErrorDetails(metadata);
+    const details = this.buildOrderErrorDetails(code, metadata);
     const error = new AcexError(code, message, { details });
     this.context.publishRuntimeError("order", error, metadata);
     return error;
   }
 
   private wrapCommandError(
-    code:
-      | "ORDER_CANCEL_ALL_FAILED"
-      | "ORDER_CANCEL_FAILED"
-      | "ORDER_CREATE_FAILED",
+    code: OrderCommandErrorCode,
     message: string,
     error: unknown,
     metadata: {
@@ -1031,10 +1033,103 @@ export class OrderManagerImpl
       error instanceof Error ? error : new Error(message),
       metadata,
     );
-    const details = buildAcexErrorDetails(metadata, error);
+    const details = this.buildOrderErrorDetails(code, metadata, error);
     return new AcexError(code, formatAcexErrorMessage(message, details), {
       cause: error,
       details,
     });
   }
+
+  private buildOrderErrorDetails(
+    code: "VENUE_NOT_SUPPORTED" | OrderErrorCode,
+    metadata: {
+      accountId: string;
+      venue: Venue;
+      symbol?: string;
+    },
+    error?: unknown,
+  ): AcexErrorDetails | undefined {
+    const details = buildAcexErrorDetails(metadata, error);
+    if (!details || !isOrderErrorCode(code)) {
+      return details;
+    }
+
+    const detailsWithReason = this.addVenueErrorReason(metadata.venue, details);
+    return {
+      ...detailsWithReason,
+      orderState: getOrderState(code, detailsWithReason),
+    };
+  }
+
+  private addVenueErrorReason(
+    venue: Venue,
+    details: AcexErrorDetails,
+  ): AcexErrorDetails {
+    const venueErrorCode = details.venueError?.code;
+    if (!venueErrorCode) {
+      return details;
+    }
+
+    const reason = this.context.normalizeVenueErrorCode(venue, venueErrorCode);
+    if (!reason) {
+      return details;
+    }
+
+    return {
+      ...details,
+      venueError: {
+        ...details.venueError,
+        reason,
+      },
+    };
+  }
+}
+
+function isOrderErrorCode(
+  code: "VENUE_NOT_SUPPORTED" | OrderErrorCode,
+): code is OrderErrorCode {
+  return (
+    code === "ORDER_INPUT_INVALID" ||
+    code === "ORDER_CREATE_FAILED" ||
+    code === "ORDER_CANCEL_FAILED" ||
+    code === "ORDER_CANCEL_ALL_FAILED"
+  );
+}
+
+function getOrderState(
+  code: OrderErrorCode,
+  details: AcexErrorDetails,
+): OrderCommandOrderState {
+  if (code === "ORDER_INPUT_INVALID") {
+    return "not_placed";
+  }
+
+  const transport = details.transport;
+  if (!transport) {
+    return details.venueError ? "not_placed" : "unknown";
+  }
+
+  if (isUnknownOrderTransportKind(transport.kind)) {
+    return "unknown";
+  }
+  if (transport.kind === "rate_limited") {
+    return "not_placed";
+  }
+  if (transport.status !== undefined && transport.status >= 500) {
+    return "unknown";
+  }
+  if (details.venueError) {
+    return "not_placed";
+  }
+  if (transport.status !== undefined && transport.status < 500) {
+    return "not_placed";
+  }
+
+  return "unknown";
+}
+
+function isUnknownOrderTransportKind(
+  kind: AcexErrorTransportKind | undefined,
+): boolean {
+  return kind === "timeout" || kind === "network" || kind === "parse";
 }

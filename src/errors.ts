@@ -27,9 +27,19 @@ export type AcexErrorTransportKind =
   | "rate_limited"
   | "parse";
 
+export type VenueErrorReason =
+  | "insufficient_balance"
+  | "would_take"
+  | "order_not_found"
+  | "filter_violation"
+  | "rate_limited"
+  | "timestamp_out_of_sync"
+  | "unknown";
+
 export interface AcexVenueErrorDetails {
   readonly code?: string;
   readonly message?: string;
+  readonly reason?: VenueErrorReason;
 }
 
 export interface AcexErrorTransportDetails {
@@ -49,6 +59,7 @@ export interface AcexErrorDetails {
   readonly symbol?: string;
   readonly venueError?: AcexVenueErrorDetails;
   readonly transport?: AcexErrorTransportDetails;
+  readonly orderState?: "not_placed" | "unknown";
 }
 
 export interface AcexErrorOptions {
@@ -89,6 +100,10 @@ export function buildAcexErrorDetails(
   };
 
   return hasDetails(details) ? details : undefined;
+}
+
+export function isOrderStateUnknown(error: unknown): boolean {
+  return error instanceof AcexError && error.details?.orderState === "unknown";
 }
 
 export function formatAcexErrorMessage(
@@ -166,7 +181,8 @@ function hasDetails(details: AcexErrorDetails): boolean {
       details.accountId ||
       details.symbol ||
       details.venueError ||
-      details.transport,
+      details.transport ||
+      details.orderState,
   );
 }
 

@@ -253,7 +253,7 @@ const client = createClient({
 });
 ```
 
-`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware reactive limiter：它会注册 Binance REST topology，把 429/418 block 落到对应 bucket，但当前仍不做主动预算 admission。`rateLimit.utilizationTarget` 预留给默认 limiter 的预算目标（默认 0.9），阶段 1 只进入 bucket snapshot/配置面。Binance `riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`sandbox`、`logger`、`logLevel` 目前是预留位。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket。Binance `riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
 ### 4.2 `start()` / `stop()`
 
@@ -689,6 +689,8 @@ interface RateLimitBucketSnapshot {
   intervalMs: number;
   utilizationTarget?: number;
   used?: number;
+  windowStartMs?: number;
+  windowEndMs?: number;
   blockedUntil?: number;
   retryAfterMs?: number;
   state: "ok" | "rate_limited" | "banned";
@@ -714,6 +716,7 @@ interface RateLimitTransportErrorContext {
   retryAfterMs?: number;
   usage?: RateLimitUsage;
   reservation?: RateLimitReservation;
+  requestNotSent?: boolean;
 }
 
 interface RateLimitSnapshot {

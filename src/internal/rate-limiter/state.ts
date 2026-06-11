@@ -32,6 +32,14 @@ function scopeValue(
   }
 }
 
+export function windowStartMs(now: number, intervalMs: number): number {
+  return Math.floor(now / intervalMs) * intervalMs;
+}
+
+export function windowEndMs(windowStart: number, intervalMs: number): number {
+  return windowStart + intervalMs;
+}
+
 export function maxOptional(
   left: number | undefined,
   right: number | undefined,

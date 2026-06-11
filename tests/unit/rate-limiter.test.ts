@@ -606,6 +606,321 @@ test("BudgetRateLimiter maps response usage to the current plan bucket", () => {
   ]);
 });
 
+test("BudgetRateLimiter proactively waits when fixed-window budget is exhausted", async () => {
+  let now = 100;
+  const sleeps: number[] = [];
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+  limiter.registerRateLimitTopology({
+    id: "active-budget-test",
+    buckets: [
+      {
+        id: "bucket:weight",
+        kind: "request_weight",
+        limit: 10,
+        intervalMs: 1_000,
+        scope: ["venue"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:weight",
+        costs: [{ bucketId: "bucket:weight", cost: 5 }],
+      },
+    ],
+  });
+
+  const context = {
+    scope: accountScope,
+    planId: "plan:weight",
+  };
+
+  expect(await limiter.beforeRequest(context)).toBeDefined();
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      used: 5,
+      windowStartMs: 0,
+      windowEndMs: 1_000,
+    }),
+  ]);
+
+  expect(await limiter.beforeRequest(context)).toBeDefined();
+  expect(sleeps).toEqual([900]);
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      used: 5,
+      windowStartMs: 1_000,
+      windowEndMs: 2_000,
+    }),
+  ]);
+});
+
+test("BudgetRateLimiter reconciles header usage and ignores stale reservation windows", async () => {
+  let now = 900;
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    utilizationTarget: 1,
+  });
+  limiter.registerRateLimitTopology({
+    id: "reservation-reconcile-test",
+    buckets: [
+      {
+        id: "bucket:weight",
+        kind: "request_weight",
+        limit: 10,
+        intervalMs: 1_000,
+        scope: ["venue"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:weight",
+        costs: [{ bucketId: "bucket:weight", cost: 1 }],
+      },
+    ],
+  });
+
+  const context = {
+    scope: accountScope,
+    planId: "plan:weight",
+  };
+  const oldReservation = await limiter.beforeRequest(context);
+  if (!oldReservation) {
+    throw new Error("expected rate limit reservation");
+  }
+
+  now = 1_000;
+  const newReservation = await limiter.beforeRequest(context);
+  if (!newReservation) {
+    throw new Error("expected rate limit reservation");
+  }
+
+  limiter.afterResponse(context, {
+    status: 200,
+    usage: {
+      weight: {
+        "1s": 9,
+      },
+    },
+    reservation: oldReservation,
+  });
+
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      used: 1,
+      windowStartMs: 1_000,
+      windowEndMs: 2_000,
+    }),
+  ]);
+
+  limiter.afterResponse(context, {
+    status: 200,
+    usage: {
+      weight: {
+        "1s": 2,
+      },
+    },
+    reservation: newReservation,
+  });
+
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      used: 2,
+      windowStartMs: 1_000,
+    }),
+  ]);
+});
+
+test("BudgetRateLimiter treats lower header usage after a local boundary as a new window", async () => {
+  let now = 100;
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    utilizationTarget: 1,
+  });
+  limiter.registerRateLimitTopology({
+    id: "header-rollover-test",
+    buckets: [
+      {
+        id: "bucket:weight",
+        kind: "request_weight",
+        limit: 10,
+        intervalMs: 1_000,
+        scope: ["venue"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:weight",
+        costs: [{ bucketId: "bucket:weight", cost: 1 }],
+      },
+    ],
+  });
+
+  const context = {
+    scope: accountScope,
+    planId: "plan:weight",
+  };
+  const reservation = await limiter.beforeRequest(context);
+  if (!reservation) {
+    throw new Error("expected rate limit reservation");
+  }
+
+  limiter.afterResponse(context, {
+    status: 200,
+    usage: {
+      weight: {
+        "1s": 8,
+      },
+    },
+    reservation,
+  });
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      used: 8,
+      windowStartMs: 0,
+    }),
+  ]);
+
+  now = 1_000;
+  limiter.afterResponse(context, {
+    status: 200,
+    usage: {
+      weight: {
+        "1s": 1,
+      },
+    },
+    reservation,
+  });
+
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      used: 1,
+      windowStartMs: 1_000,
+      windowEndMs: 2_000,
+    }),
+  ]);
+});
+
+test("BudgetRateLimiter refunds only requestNotSent reservations", async () => {
+  const limiter = new BudgetRateLimiter({
+    now: () => 100,
+    utilizationTarget: 1,
+  });
+  limiter.registerRateLimitTopology({
+    id: "refund-test",
+    buckets: [
+      {
+        id: "bucket:orders",
+        kind: "orders",
+        limit: 10,
+        intervalMs: 1_000,
+        scope: ["venue", "account"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:orders",
+        costs: [{ bucketId: "bucket:orders", cost: 3 }],
+      },
+    ],
+  });
+
+  const context = {
+    scope: accountScope,
+    planId: "plan:orders",
+  };
+  const refunded = await limiter.beforeRequest(context);
+  if (!refunded) {
+    throw new Error("expected rate limit reservation");
+  }
+  limiter.onTransportError(context, {
+    requestNotSent: true,
+    reservation: refunded,
+  });
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:orders",
+      used: 0,
+    }),
+  ]);
+
+  const retained = await limiter.beforeRequest(context);
+  if (!retained) {
+    throw new Error("expected rate limit reservation");
+  }
+  limiter.onTransportError(context, {
+    reservation: retained,
+  });
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:orders",
+      used: 3,
+    }),
+  ]);
+});
+
+test("BudgetRateLimiter keeps account-scoped order budgets isolated", async () => {
+  let now = 100;
+  const sleeps: number[] = [];
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+    utilizationTarget: 1,
+  });
+  limiter.registerRateLimitTopology({
+    id: "account-scope-budget-test",
+    buckets: [
+      {
+        id: "bucket:orders",
+        kind: "orders",
+        limit: 1,
+        intervalMs: 1_000,
+        scope: ["venue", "account"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:orders",
+        costs: [{ bucketId: "bucket:orders", cost: 1 }],
+      },
+    ],
+  });
+
+  const accountA = {
+    scope: {
+      ...accountScope,
+      accountId: "account-a",
+    },
+    planId: "plan:orders",
+  };
+  const accountB = {
+    scope: {
+      ...accountScope,
+      accountId: "account-b",
+    },
+    planId: "plan:orders",
+  };
+
+  expect(await limiter.beforeRequest(accountA)).toBeDefined();
+  expect(await limiter.beforeRequest(accountB)).toBeDefined();
+  expect(sleeps).toEqual([]);
+
+  expect(await limiter.beforeRequest(accountA)).toBeDefined();
+  expect(sleeps).toEqual([900]);
+});
+
 test("Binance topology uses semantic plans for host and openOrders variants", () => {
   expect(getBinanceCatalogRateLimitPlanId("GET /api/v3/exchangeInfo")).toBe(
     BINANCE_RATE_LIMIT_PLANS.spotExchangeInfo,

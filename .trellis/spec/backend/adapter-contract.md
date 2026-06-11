@@ -559,7 +559,8 @@ REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默
 - **scope 粒度**：`{ venue, accountId?, endpointKey }`，`endpointKey` 取 `"<METHOD> <path>"`。weight 是 IP 维度、order-count 另算 —— `RateLimitUsage` 分 `weight` / `orderCount` 两轨，按 interval key（如 `"1m"`）存。
 - **plan/topology 扩展**：adapter 可以在构造期 feature-detect optional `RateLimitTopologyRegistry.registerRateLimitTopology(topology)` 并注册 venue-owned bucket/plan 表；注册缺失时必须无事发生。相同 descriptor 重复注册必须幂等，冲突 descriptor 必须拒绝覆盖。请求上下文可带 `planId` 和 `priority`，但 `planId` 必须是 adapter 选择的语义 id，不要把它固定等同于 `endpointKey`（同 endpoint 可能有成本变体）。
 - **venue-agnostic 核 + venue 层解析/拓扑**：通用核**不得**出现任何交易所 header 常量、endpoint 路径、权重数字或 bucket id。Binance 的 `X-MBX-USED-WEIGHT-*` / `X-MBX-ORDER-COUNT-*` 解析只在 venue 层（`src/adapters/binance/rate-limit.ts`，用 `Headers.get()` 大小写不敏感、保留未知 interval），Binance bucket/plan/cost 表只放在 `src/adapters/binance/`。
-- **默认阶段 1 reactive 行为**：happy path **不主动 throttle**（行为与无 limiter 等价）；只在收到 `429`/`418` 后按 `Retry-After`（已解析为 `retryAfterMs`）设 block。未注册 topology / unknown plan / 旧 limiter fallback 到当前 endpoint scope；known plan 下 `418` block request-weight bucket，`429` 若单桶可判断则 block 单桶，多桶或不可辨时保守 block plan 涉及的桶。proactive admission、固定窗口预扣、cancel reserve 和 jitter 属后续阶段，不得混入阶段 1。
+- **默认 budget 行为**：注册 topology 且请求带 known `planId` 时，默认 limiter 在 `beforeRequest` 中按 bucket 固定窗口主动 admission：wall-clock 对齐 `windowStart = floor(now / intervalMs) * intervalMs`，多桶 check+reserve 必须 all-or-none，预扣成功返回 opaque reservation。响应 hook 用 venue 解析出的 `RateLimitUsage` 回填 bucket 用量；reservation 的 bucket window 比当前 state 旧时必须忽略，不能复活旧窗口。未注册 topology / unknown plan / 旧 limiter fallback 到 endpoint-scope reactive 行为。known plan 下 `418` block request-weight bucket，`429` 若单桶可判断则 block 单桶，多桶或不可辨时保守 block plan 涉及的桶。cancel reserve 和 jitter 属后续阶段，不得混入当前实现。
+- **退款语义**：transport error 默认不退预扣预算，避免订单已到交易所但本地超时/断网时错误放量；只有 adapter 明确传 `requestNotSent:true` 的 pre-HTTP 本地失败才可按 reservation 精确退款。
 - **签名时序**：Binance 签名请求的 `beforeRequest` 退避必须在生成签名 `timestamp` **之前**，避免退避 sleep 导致签名时间过旧。
 - **不构造 AcexError**：限流失败仍是 typed transport error（`kind:"rate_limited"`）冒泡；coordinator 经 `transportReason()` 映射到 runtime reason `"rate_limited"`（§3.6）。**非幂等请求遇 429/418 不自动重放**，只暴露状态 + retry metadata。
 - **公共面**：`RateLimiter` 接口与 `RateLimit*` 类型为 public 契约；bucket-level snapshot 可以挂在 `RateLimitSnapshot.buckets`，但不挂上 `AcexClient` public API（仅作 seam 类型）。HTTP 客户端本身仍不公共可替换。
@@ -568,7 +569,7 @@ REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默
 
 | 场景 | `kind` | `retryable`（`idempotent:true` 时） | 备注 |
 |---|---|---|---|
-| `429` / `418` | `rate_limited` | **false** | 解析 `retryAfterMs`；默认 reactive limiter 记录退避，HTTP retry 不自动重放 |
+| `429` / `418` | `rate_limited` | **false** | 解析 `retryAfterMs`；默认 budget limiter 记录 bucket block，HTTP retry 不自动重放 |
 | `5xx` | `http` | **true** | 唯一可重试的 http 状态段 |
 | `4xx`（非 429/418） | `http` | false | 业务错误，重试无意义 |
 | JSON 解析失败 | `parse` | false | `rawBody` 脱敏后保留 |

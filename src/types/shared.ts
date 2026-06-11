@@ -97,6 +97,8 @@ export interface RateLimitBucketSnapshot {
   intervalMs: number;
   utilizationTarget?: number;
   used?: number;
+  windowStartMs?: number;
+  windowEndMs?: number;
   blockedUntil?: number;
   retryAfterMs?: number;
   state: "ok" | "rate_limited" | "banned";
@@ -126,6 +128,7 @@ export interface RateLimitTransportErrorContext {
   retryAfterMs?: number;
   usage?: RateLimitUsage;
   reservation?: RateLimitReservation;
+  requestNotSent?: boolean;
 }
 
 export interface RateLimitSnapshot {

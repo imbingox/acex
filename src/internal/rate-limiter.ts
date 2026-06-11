@@ -3,7 +3,9 @@ import type {
   RateLimitBucketSnapshot,
   RateLimiter,
   RateLimitPlan,
+  RateLimitPriority,
   RateLimitRequestContext,
+  RateLimitReservation,
   RateLimitResponseContext,
   RateLimitScope,
   RateLimitSnapshot,
@@ -19,6 +21,8 @@ import {
   nextRateLimitState,
   nextRetryAfterMs,
   scopeKey,
+  windowEndMs,
+  windowStartMs,
 } from "./rate-limiter/state.ts";
 import {
   bucketDescriptorsEqual,
@@ -31,6 +35,7 @@ import {
 } from "./rate-limiter/topology.ts";
 import type {
   BucketRateLimitState,
+  BudgetRateLimitReservation,
   EndpointRateLimitState,
   ReactiveRateLimiterOptions,
 } from "./rate-limiter/types.ts";
@@ -40,6 +45,22 @@ const DEFAULT_RATE_LIMIT_MS = 0;
 const DEFAULT_BAN_MS = 60_000;
 const MIN_RATE_LIMIT_BLOCK_MS = 1;
 const DEFAULT_UTILIZATION_TARGET = 0.9;
+
+interface PlanBucketCost {
+  bucket: RateLimitBucketDescriptor;
+  cost: number;
+  stateKey: string;
+}
+
+type AdmissionResult =
+  | {
+      admitted: true;
+      reservation: BudgetRateLimitReservation;
+    }
+  | {
+      admitted: false;
+      retryAt: number;
+    };
 
 export class BudgetRateLimiter
   implements RateLimiter, RateLimitTopologyRegistry
@@ -112,7 +133,9 @@ export class BudgetRateLimiter
     }
   }
 
-  async beforeRequest(ctx: RateLimitRequestContext): Promise<void> {
+  async beforeRequest(
+    ctx: RateLimitRequestContext,
+  ): Promise<RateLimitReservation | undefined> {
     const plan = this.getKnownPlan(ctx);
     if (!plan) {
       await this.sleepForEndpointBlock(ctx.scope);
@@ -121,12 +144,16 @@ export class BudgetRateLimiter
 
     this.rememberPlan(ctx.scope, plan.id);
     while (true) {
-      const blockedUntil = this.getPlanBlockedUntil(ctx.scope, plan);
-      if (blockedUntil === undefined || blockedUntil <= this.now()) {
-        return;
+      const admission = this.tryAdmit(
+        ctx.scope,
+        plan,
+        this.resolvePriority(ctx, plan),
+      );
+      if (admission.admitted) {
+        return admission.reservation;
       }
 
-      await this.sleep(Math.max(0, blockedUntil - this.now()));
+      await this.sleep(Math.max(0, admission.retryAt - this.now()));
     }
   }
 
@@ -138,7 +165,12 @@ export class BudgetRateLimiter
     if (plan) {
       this.rememberPlan(ctx.scope, plan.id);
       if (response.usage) {
-        this.updateBucketUsage(ctx.scope, plan, response.usage);
+        this.updateBucketUsage(
+          ctx.scope,
+          plan,
+          response.usage,
+          response.reservation,
+        );
       }
     }
 
@@ -159,10 +191,14 @@ export class BudgetRateLimiter
     error: RateLimitTransportErrorContext,
   ): void {
     const plan = this.getKnownPlan(ctx);
+    if (error.requestNotSent) {
+      this.refundReservation(error.reservation);
+    }
+
     if (plan) {
       this.rememberPlan(ctx.scope, plan.id);
       if (error.usage) {
-        this.updateBucketUsage(ctx.scope, plan, error.usage);
+        this.updateBucketUsage(ctx.scope, plan, error.usage, error.reservation);
       }
     }
 
@@ -239,28 +275,152 @@ export class BudgetRateLimiter
     this.lastPlanIdByScope.set(scopeKey(scope), planId);
   }
 
-  private getPlanBlockedUntil(
+  private resolvePriority(
+    ctx: RateLimitRequestContext,
+    plan: RateLimitPlan,
+  ): RateLimitPriority {
+    return ctx.priority ?? plan.priority ?? "normal";
+  }
+
+  private tryAdmit(
     scope: RateLimitScope,
     plan: RateLimitPlan,
-  ): number | undefined {
-    let blockedUntil: number | undefined;
-    for (const bucket of this.getPlanBuckets(plan)) {
-      const state = this.getBucketState(scope, bucket);
-      if (
-        state?.blockedUntil !== undefined &&
-        state.blockedUntil > this.now()
-      ) {
-        blockedUntil = maxOptional(blockedUntil, state.blockedUntil);
+    priority: RateLimitPriority,
+  ): AdmissionResult {
+    const now = this.now();
+    const bucketCosts = this.getPlanBucketCosts(scope, plan);
+    let retryAt: number | undefined;
+
+    for (const bucketCost of bucketCosts) {
+      const state = this.rolloverBucketState(bucketCost, now);
+      if (state.blockedUntil !== undefined && state.blockedUntil > now) {
+        retryAt = maxOptional(retryAt, state.blockedUntil);
+        continue;
+      }
+
+      if (bucketCost.cost <= 0) {
+        continue;
+      }
+
+      const limit = this.effectiveLimit(bucketCost.bucket, priority);
+      const used = state.used ?? 0;
+      if (used + bucketCost.cost > limit) {
+        retryAt = maxOptional(
+          retryAt,
+          windowEndMs(state.windowStartMs ?? 0, bucketCost.bucket.intervalMs),
+        );
       }
     }
 
-    return blockedUntil;
+    if (retryAt !== undefined && retryAt > now) {
+      return {
+        admitted: false,
+        retryAt,
+      };
+    }
+
+    const reservationBuckets = bucketCosts.map((bucketCost) => {
+      const state = this.rolloverBucketState(bucketCost, now);
+      if (bucketCost.cost > 0) {
+        this.updateBucketState(scope, bucketCost.bucket, {
+          used: (state.used ?? 0) + bucketCost.cost,
+          windowStartMs: state.windowStartMs,
+          state: "ok",
+        });
+      }
+
+      return {
+        bucketId: bucketCost.bucket.id,
+        stateKey: bucketCost.stateKey,
+        cost: bucketCost.cost,
+        windowStartMs:
+          state.windowStartMs ??
+          windowStartMs(now, bucketCost.bucket.intervalMs),
+      };
+    });
+
+    return {
+      admitted: true,
+      reservation: {
+        admittedAt: now,
+        planId: plan.id,
+        priority,
+        buckets: reservationBuckets,
+      },
+    };
+  }
+
+  private getPlanBucketCosts(
+    scope: RateLimitScope,
+    plan: RateLimitPlan,
+  ): PlanBucketCost[] {
+    const bucketCosts: PlanBucketCost[] = [];
+    const costByBucketId = new Map<string, number>();
+    for (const cost of plan.costs) {
+      costByBucketId.set(
+        cost.bucketId,
+        (costByBucketId.get(cost.bucketId) ?? 0) + cost.cost,
+      );
+    }
+
+    for (const [bucketId, cost] of costByBucketId) {
+      const bucket = this.bucketDescriptors.get(bucketId);
+      if (!bucket) {
+        continue;
+      }
+
+      bucketCosts.push({
+        bucket,
+        cost,
+        stateKey: bucketStateKey(scope, bucket),
+      });
+    }
+
+    return bucketCosts;
+  }
+
+  private rolloverBucketState(
+    bucketCost: PlanBucketCost,
+    now: number,
+  ): BucketRateLimitState {
+    const currentWindowStart = windowStartMs(now, bucketCost.bucket.intervalMs);
+    const existing = this.bucketStates.get(bucketCost.stateKey);
+    if (
+      existing?.windowStartMs !== undefined &&
+      existing.windowStartMs >= currentWindowStart
+    ) {
+      return existing;
+    }
+
+    const next: BucketRateLimitState = {
+      blockedUntil: existing?.blockedUntil,
+      retryAfterMs: existing?.retryAfterMs,
+      state:
+        existing?.blockedUntil !== undefined && existing.blockedUntil > now
+          ? existing.state
+          : "ok",
+      updatedAt: now,
+      used: existing?.windowStartMs === undefined ? existing?.used : 0,
+      windowStartMs: currentWindowStart,
+    };
+    this.bucketStates.set(bucketCost.stateKey, next);
+    return next;
+  }
+
+  private effectiveLimit(
+    bucket: RateLimitBucketDescriptor,
+    _priority: RateLimitPriority,
+  ): number {
+    return Math.floor(
+      bucket.limit * (bucket.utilizationTarget ?? this.utilizationTarget),
+    );
   }
 
   private updateBucketUsage(
     scope: RateLimitScope,
     plan: RateLimitPlan,
     usage: RateLimitUsage,
+    reservation: RateLimitReservation | undefined,
   ): void {
     for (const bucket of this.getPlanBuckets(plan)) {
       const used = usageForBucket(usage, bucket);
@@ -268,15 +428,97 @@ export class BudgetRateLimiter
         continue;
       }
 
-      const existing = this.getBucketState(scope, bucket);
+      const stateKey = bucketStateKey(scope, bucket);
+      const reservationBucket = this.findReservationBucket(
+        reservation,
+        bucket.id,
+        stateKey,
+      );
+      if (
+        this.isBudgetRateLimitReservation(reservation) &&
+        !reservationBucket
+      ) {
+        continue;
+      }
+
+      const existing = this.bucketStates.get(stateKey);
+      if (
+        reservationBucket &&
+        existing?.windowStartMs !== undefined &&
+        existing.windowStartMs > reservationBucket.windowStartMs
+      ) {
+        continue;
+      }
+
+      const now = this.now();
+      const currentWindowStart = windowStartMs(now, bucket.intervalMs);
+      const windowRolled =
+        existing?.windowStartMs !== undefined &&
+        existing.windowStartMs < currentWindowStart;
+      const nextWindowStart = windowRolled
+        ? currentWindowStart
+        : (existing?.windowStartMs ?? currentWindowStart);
+      const nextUsed = windowRolled
+        ? used
+        : Math.max(existing?.used ?? 0, used);
       const hasActiveBlock =
-        existing?.blockedUntil !== undefined &&
-        existing.blockedUntil > this.now();
+        existing?.blockedUntil !== undefined && existing.blockedUntil > now;
       this.updateBucketState(scope, bucket, {
-        used,
+        used: nextUsed,
+        windowStartMs: nextWindowStart,
         state: hasActiveBlock ? existing.state : "ok",
       });
     }
+  }
+
+  private findReservationBucket(
+    reservation: RateLimitReservation | undefined,
+    bucketId: string,
+    stateKey: string,
+  ): BudgetRateLimitReservation["buckets"][number] | undefined {
+    if (!this.isBudgetRateLimitReservation(reservation)) {
+      return undefined;
+    }
+
+    return reservation.buckets.find(
+      (bucket) => bucket.bucketId === bucketId && bucket.stateKey === stateKey,
+    );
+  }
+
+  private refundReservation(
+    reservation: RateLimitReservation | undefined,
+  ): void {
+    if (!this.isBudgetRateLimitReservation(reservation)) {
+      return;
+    }
+
+    for (const reservedBucket of reservation.buckets) {
+      if (reservedBucket.cost <= 0) {
+        continue;
+      }
+
+      const state = this.bucketStates.get(reservedBucket.stateKey);
+      if (!state || state.windowStartMs !== reservedBucket.windowStartMs) {
+        continue;
+      }
+
+      this.bucketStates.set(reservedBucket.stateKey, {
+        ...state,
+        used: Math.max(0, (state.used ?? 0) - reservedBucket.cost),
+        updatedAt: this.now(),
+      });
+    }
+  }
+
+  private isBudgetRateLimitReservation(
+    reservation: RateLimitReservation | undefined,
+  ): reservation is BudgetRateLimitReservation {
+    return (
+      !!reservation &&
+      typeof (reservation as BudgetRateLimitReservation).admittedAt ===
+        "number" &&
+      Array.isArray((reservation as BudgetRateLimitReservation).buckets)
+    );
   }
 
   private getAffectedBuckets(
@@ -400,13 +642,6 @@ export class BudgetRateLimiter
     });
   }
 
-  private getBucketState(
-    scope: RateLimitScope,
-    bucket: RateLimitBucketDescriptor,
-  ): BucketRateLimitState | undefined {
-    return this.bucketStates.get(bucketStateKey(scope, bucket));
-  }
-
   private updateBucketState(
     scope: RateLimitScope,
     bucket: RateLimitBucketDescriptor,
@@ -431,6 +666,7 @@ export class BudgetRateLimiter
 
     this.bucketStates.set(key, {
       used: patch.used ?? existing?.used,
+      windowStartMs: patch.windowStartMs ?? existing?.windowStartMs,
       blockedUntil: nextBlockedUntil,
       retryAfterMs: nextRetryAfterMs(existing, patch, patchWinsBlock),
       state: nextState ?? "ok",
@@ -468,13 +704,10 @@ export class BudgetRateLimiter
     }
 
     const snapshots: RateLimitBucketSnapshot[] = [];
-    for (const bucket of this.getPlanBuckets(plan)) {
-      const state = this.getBucketState(scope, bucket);
-      if (!state) {
-        continue;
-      }
+    for (const bucketCost of this.getPlanBucketCosts(scope, plan)) {
+      const state = this.rolloverBucketState(bucketCost, this.now());
 
-      snapshots.push(this.createBucketSnapshot(bucket, state));
+      snapshots.push(this.createBucketSnapshot(bucketCost.bucket, state));
     }
 
     return snapshots;
@@ -499,6 +732,11 @@ export class BudgetRateLimiter
       intervalMs: bucket.intervalMs,
       utilizationTarget: bucket.utilizationTarget ?? this.utilizationTarget,
       used: state.used,
+      windowStartMs: state.windowStartMs,
+      windowEndMs:
+        state.windowStartMs !== undefined
+          ? windowEndMs(state.windowStartMs, bucket.intervalMs)
+          : undefined,
       blockedUntil,
       retryAfterMs: blockedUntil ? state.retryAfterMs : undefined,
       state: runtimeState,

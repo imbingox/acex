@@ -21,7 +21,7 @@
 |---|---|---|---|
 | ① 错误体系统一 | A3 + C5 | C5 归一码是 A3 orderState 判定的输入，合并一个任务、一个 minor changeset | 代码完成 → .trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5 |
 | ② 订单生命周期收尾 | A1 + A2 | 都是"订单查不到/claim 悬挂"的终态化处理，共享 fetchOrder 回查模式与测试场景 | 代码完成 → .trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2 |
-| ③ 事件流质量 | B1 + B2 | 同在事件总线/状态发布路径；B2 是小修可捎带 | |
+| ③ 事件流质量 | B1 + B2 | 同在事件总线/状态发布路径；B2 是小修可捎带 | 代码完成 → .trellis/tasks/06-11-conflation-status-p1-b1-p1-b2 |
 | ④ 限流分层 | B3 | 工作量偏大，独立任务 | |
 | ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | |
 | ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | |
@@ -96,19 +96,21 @@
 
 ## P1-B — HFT 基础能力
 
-### - [ ] P1-B1 事件流无背压、无 conflation（无界队列）
+### - [x] P1-B1 事件流无背压、无 conflation（无界队列）
 
 - **位置**：`src/internal/async-event-bus.ts:58`（per-listener 无界 FIFO）
 - **问题**：慢消费者无限积压过期 tick（内存 + 决策延迟双输）；L1 行情天然需要 latest-wins。
 - **修复方案**：`stream()` 增加 `{ mode: "conflate" | "buffer", maxBuffer }` 选项；L1/funding 默认 conflate（按 venue:symbol 合并为最新），订单/账户事件默认 buffer + maxBuffer 告警。
 - **验证方式**：单测：发布 1000 tick、消费 1 次，conflate 模式只得最新一条；soak 测试观察内存平稳。
+- **状态**：代码已完成（→ .trellis/tasks/archive/2026-06/06-11-conflation-status-p1-b1-p1-b2，与 P1-B2 合并实现）：`AsyncEventBus.stream()` 支持 conflate（latest-wins、保插入序、天然有界）/ buffer（默认 maxBuffer=10_000、drop-oldest、每积压 episode 一次 `EVENT_BUFFER_OVERFLOW` 告警、排空重新武装）；公开事件流加 options 第二参，market 流（`EventStreamOptions` 含 mode）l1/funding 默认 conflate，order/account/health/errors 仅 `BufferedEventStreamOptions`；errorBus 自身溢出只丢弃防递归。
 
-### - [ ] P1-B2 每个 L1 tick 无条件发布 `market.status_changed` 到三条总线
+### - [x] P1-B2 每个 L1 tick 无条件发布 `market.status_changed` 到三条总线
 
 - **位置**：`src/managers/market-manager.ts:872`（onUpdate → `recomputeAndPublishStatus`）、`:1183`（`publishStatus` 同时打 statusBus + marketBus + healthBus）
 - **问题**：状态未变化也每 tick 发布，`events.health()`/`events.status()` 订阅者被刷屏；每秒数千次多余分发、克隆与过滤器调用。
 - **修复方案**：`recomputeAndPublishStatus` 对新旧 status 做浅比较（freshness/ready/runtimeStatus/reason/activity），变化才发布；`lastReceivedAt` 类字段不参与比较。
 - **验证方式**：单测：连续 N 个 tick 仅产生 1 次 status 事件 + N 次 l1 事件。
+- **状态**：代码已完成（→ .trellis/tasks/archive/2026-06/06-11-conflation-status-p1-b1-p1-b2，与 P1-B1 合并实现）：`recomputeAndPublishStatus` 以 `activity/ready/freshness/reason` 四字段为去重 key，相同则跳过三路发布、首次必发；`lastReceivedAt`/`lastReadyAt`/`inactiveSince` 时间戳不参与比较但仍每 tick 更新 record，`getMarketStatus()` 读路径不变。
 
 ### - [ ] P1-B3 限流器纯被动，scope 粒度与 Binance 语义不匹配
 

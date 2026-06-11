@@ -94,18 +94,41 @@ const DEFAULT_L1_STALE_AFTER_MS = 15_000;
 const DEFAULT_L1_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_L1_RECONNECT_MAX_DELAY_MS = 10_000;
 
+/**
+ * Create a canonical market key by joining the venue and symbol with a colon.
+ *
+ * @param input - The market identifier containing `venue` and `symbol`.
+ * @returns The canonical market key in the form `venue:symbol`.
+ */
 function marketKey(input: MarketKeyInput): string {
   return `${input.venue}:${input.symbol}`;
 }
 
+/**
+ * Build a conflation key for a market event, grouping events by type and market.
+ *
+ * @param event - The market event to produce a conflate key for
+ * @returns A string in the format `"<event.type>:<venue>:<symbol>"` used to conflate events for the same event type and market
+ */
 function marketEventConflateKey(event: MarketEvent): string {
   return `${event.type}:${marketKey(event)}`;
 }
 
+/**
+ * Creates a shallow copy of a MarketDataStatus.
+ *
+ * @param status - The market status to clone.
+ * @returns A shallow clone of `status`.
+ */
 function cloneMarketStatus(status: MarketDataStatus): MarketDataStatus {
   return { ...status };
 }
 
+/**
+ * Creates a deduplication key by projecting the `activity`, `ready`, `freshness`, and `reason` fields from a market status.
+ *
+ * @returns An object containing the `activity`, `ready`, `freshness`, and `reason` values from `status`
+ */
 function statusPublicationKey(
   status: MarketDataStatus,
 ): MarketStatusPublicationKey {
@@ -117,6 +140,13 @@ function statusPublicationKey(
   };
 }
 
+/**
+ * Determines whether a previous publication key matches the current one.
+ *
+ * @param current - The current market status publication key
+ * @param previous - The previous publication key to compare, or `undefined`
+ * @returns `true` if `previous` is defined and `activity`, `ready`, `freshness`, and `reason` are identical between `current` and `previous`, `false` otherwise.
+ */
 function sameStatusPublicationKey(
   current: MarketStatusPublicationKey,
   previous: MarketStatusPublicationKey | undefined,
@@ -130,6 +160,12 @@ function sameStatusPublicationKey(
   );
 }
 
+/**
+ * Create a shallow copy of a market data stream status.
+ *
+ * @param status - The status object to clone
+ * @returns A shallow copy of `status`
+ */
 function cloneStreamStatus(
   status: MarketDataStreamStatus,
 ): MarketDataStreamStatus {

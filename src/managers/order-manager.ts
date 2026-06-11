@@ -1298,6 +1298,12 @@ export class OrderManagerImpl
   }
 }
 
+/**
+ * Checks whether a given error code corresponds to an order-related error.
+ *
+ * @param code - The error code to test
+ * @returns `true` if `code` is one of `ORDER_INPUT_INVALID`, `ORDER_CREATE_FAILED`, `ORDER_CANCEL_FAILED`, or `ORDER_CANCEL_ALL_FAILED`, `false` otherwise.
+ */
 function isOrderErrorCode(
   code: "VENUE_NOT_SUPPORTED" | OrderErrorCode,
 ): code is OrderErrorCode {

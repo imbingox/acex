@@ -20,6 +20,11 @@ interface BusListener<T> {
 
 const DEFAULT_MAX_BUFFER = 10_000;
 
+/**
+ * Create an iterator result that signals the iterator is finished.
+ *
+ * @returns An `IteratorResult<T>` with `done` set to `true` and `value` equal to `undefined` (cast to `T`).
+ */
 function doneResult<T>(): IteratorResult<T> {
   return { done: true, value: undefined as T };
 }

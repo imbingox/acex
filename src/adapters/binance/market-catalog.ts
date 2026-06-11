@@ -13,7 +13,10 @@ import type {
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
 import { getBinanceCatalogRateLimitPlanId } from "./rate-limit-topology.ts";
 
-type FetchLike = typeof fetch;
+type FetchLike = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
 
 export type BinanceMarketFamily = "spot" | "usdm" | "coinm";
 
@@ -258,7 +261,7 @@ async function requestCatalogJson<T>(
       jsonParseMode: "response",
       retryPolicy: {
         idempotent: true,
-        maxAttempts: 3,
+        maxAttempts: 1,
       },
       messages: BINANCE_CATALOG_HTTP_MESSAGES,
     });

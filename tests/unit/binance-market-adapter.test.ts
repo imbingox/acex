@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { BinanceMarketAdapter } from "../../src/adapters/binance/adapter.ts";
+import { loadBinanceMarkets } from "../../src/adapters/binance/market-catalog.ts";
 import { fetchBinanceServerTime } from "../../src/adapters/binance/server-time.ts";
 import type { L1BookStreamCallbacks } from "../../src/adapters/types.ts";
 import { isTransportError } from "../../src/internal/http-client.ts";
@@ -87,6 +88,26 @@ test("fetchBinanceServerTime does not retry HTTP failures", async () => {
   }).catch((caught: unknown) => caught);
 
   expect(attempts).toBe(1);
+  expect(isTransportError(error)).toBe(true);
+  if (!isTransportError(error)) {
+    throw new Error("Expected TransportError");
+  }
+  expect(error.attempts).toBe(1);
+  expect(error.kind).toBe("http");
+});
+
+test("loadBinanceMarkets does not retry catalog HTTP failures", async () => {
+  let attempts = 0;
+
+  const error = await loadBinanceMarkets(async () => {
+    attempts += 1;
+    return textResponse("binance down", {
+      status: 503,
+      statusText: "Service Unavailable",
+    });
+  }).catch((caught: unknown) => caught);
+
+  expect(attempts).toBe(3);
   expect(isTransportError(error)).toBe(true);
   if (!isTransportError(error)) {
     throw new Error("Expected TransportError");

@@ -441,6 +441,15 @@ export class BudgetRateLimiter
         continue;
       }
 
+      const now = this.now();
+      const currentWindowStart = windowStartMs(now, bucket.intervalMs);
+      if (
+        reservationBucket &&
+        reservationBucket.windowStartMs < currentWindowStart
+      ) {
+        continue;
+      }
+
       const existing = this.bucketStates.get(stateKey);
       if (
         reservationBucket &&
@@ -450,8 +459,6 @@ export class BudgetRateLimiter
         continue;
       }
 
-      const now = this.now();
-      const currentWindowStart = windowStartMs(now, bucket.intervalMs);
       const windowRolled =
         existing?.windowStartMs !== undefined &&
         existing.windowStartMs < currentWindowStart;
@@ -587,7 +594,12 @@ export class BudgetRateLimiter
   ): void {
     const now = this.now();
     const isBan = error.status === 418;
-    const retryAfterMs = this.resolveRetryAfterMs(isBan, error.retryAfterMs);
+    const retryAfterMs = this.resolveBucketRetryAfterMs(
+      bucket,
+      isBan,
+      error.retryAfterMs,
+      now,
+    );
     const blockedUntil = now + retryAfterMs;
 
     this.updateBucketState(scope, bucket, {
@@ -595,6 +607,23 @@ export class BudgetRateLimiter
       retryAfterMs,
       state: isBan ? "banned" : "rate_limited",
     });
+  }
+
+  private resolveBucketRetryAfterMs(
+    bucket: RateLimitBucketDescriptor,
+    isBan: boolean,
+    retryAfterMs: number | undefined,
+    now: number,
+  ): number {
+    if (isBan || retryAfterMs !== undefined) {
+      return this.resolveRetryAfterMs(isBan, retryAfterMs);
+    }
+
+    return Math.max(
+      MIN_RATE_LIMIT_BLOCK_MS,
+      windowEndMs(windowStartMs(now, bucket.intervalMs), bucket.intervalMs) -
+        now,
+    );
   }
 
   private resolveRetryAfterMs(

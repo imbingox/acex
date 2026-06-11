@@ -346,7 +346,7 @@ test("BudgetRateLimiter blocks the single affected bucket for 429", () => {
   ]);
 });
 
-test("BudgetRateLimiter keeps a reactive block for 429 without Retry-After", async () => {
+test("BudgetRateLimiter blocks a 429 without Retry-After until the bucket window ends", async () => {
   let now = 2_000;
   const sleeps: number[] = [];
   const limiter = new BudgetRateLimiter({
@@ -367,21 +367,21 @@ test("BudgetRateLimiter keeps a reactive block for 429 without Retry-After", asy
   });
 
   expect(limiter.getSnapshot(accountScope)).toMatchObject({
-    blockedUntil: 2_001,
-    retryAfterMs: 1,
+    blockedUntil: 60_000,
+    retryAfterMs: 58_000,
     state: "rate_limited",
   });
   expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
     expect.objectContaining({
       bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
-      blockedUntil: 2_001,
-      retryAfterMs: 1,
+      blockedUntil: 60_000,
+      retryAfterMs: 58_000,
       state: "rate_limited",
     }),
   ]);
 
   await limiter.beforeRequest(context);
-  expect(sleeps).toEqual([1]);
+  expect(sleeps).toEqual([58_000]);
 });
 
 test("BudgetRateLimiter does not downgrade an active ban with a shorter 429", () => {
@@ -740,7 +740,62 @@ test("BudgetRateLimiter reconciles header usage and ignores stale reservation wi
   ]);
 });
 
-test("BudgetRateLimiter treats lower header usage after a local boundary as a new window", async () => {
+test("BudgetRateLimiter ignores stale reservation usage after the local window advances", async () => {
+  let now = 900;
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    utilizationTarget: 1,
+  });
+  limiter.registerRateLimitTopology({
+    id: "stale-reservation-rollover-test",
+    buckets: [
+      {
+        id: "bucket:weight",
+        kind: "request_weight",
+        limit: 10,
+        intervalMs: 1_000,
+        scope: ["venue"],
+      },
+    ],
+    plans: [
+      {
+        id: "plan:weight",
+        costs: [{ bucketId: "bucket:weight", cost: 1 }],
+      },
+    ],
+  });
+
+  const context = {
+    scope: accountScope,
+    planId: "plan:weight",
+  };
+  const reservation = await limiter.beforeRequest(context);
+  if (!reservation) {
+    throw new Error("expected rate limit reservation");
+  }
+
+  now = 1_000;
+  limiter.afterResponse(context, {
+    status: 200,
+    usage: {
+      weight: {
+        "1s": 9,
+      },
+    },
+    reservation,
+  });
+
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      used: 0,
+      windowStartMs: 1_000,
+      windowEndMs: 2_000,
+    }),
+  ]);
+});
+
+test("BudgetRateLimiter treats lower header usage without a reservation after a local boundary as a new window", async () => {
   let now = 100;
   const limiter = new BudgetRateLimiter({
     now: () => now,
@@ -798,7 +853,6 @@ test("BudgetRateLimiter treats lower header usage after a local boundary as a ne
         "1s": 1,
       },
     },
-    reservation,
   });
 
   expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([

@@ -1227,3 +1227,37 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 35: 订单生命周期收尾:幽灵 open 订单驱逐与 pending claim TTL (P1-A1+P1-A2)
+
+**Date**: 2026-06-11
+**Task**: 订单生命周期收尾:幽灵 open 订单驱逐与 pending claim TTL (P1-A1+P1-A2)
+**Branch**: `feat/open-order-eviction-claim-ttl`
+
+### Summary
+
+实现 improvement-todo 批次② P1-A1+P1-A2(任务 06-11-open-pending-claim-ttl-p1-a1-p1-a2,PR #67):OrderStatus 新增 unknown 终态(ADR:驱逐时真实终态不可知,不伪装成 expired);reconcile backfill 确认不存在(fetchOrder 返回 undefined)连续 N 次(默认 3,order.missingOrderEvictionThreshold)后置 unknown 移入 closed 并发布一次终态事件+runtime error,transport 错误不计数,计数在任何 snapshot 写入/快照重现时清零(有界);PendingOrderClaim 增加 claimedAt,TTL 默认 90s(order.pendingClaimTtlMs)挂 reconcile 周期回查 fetchOrder(clientOrderId) 三分支(入库/清理+error/保留),无 fetchOrder 的 adapter 保守保留;跨层经 PrivateOrderDataConsumer 三个一等接口方法,无 cast,回查尊重 generation 防竞态。流程:brainstorm 三个 ADR(unknown 终态/计数语义 N=3 TTL=90s/挂 reconcile 无新 timer);codex 实现+检查(补 3 个覆盖缺口),Claude 独立 diff 验收(重点核查计数 Map 有界性);PR review 修一处 nitpick(writeSnapshot 失败时提前删计数会重置驱逐进度,净删一行冗余);lint/type-check/test 全绿 205 pass。同步 order-execution spec 与 docs/api.md,minor changeset;todo 批次表②标记完成,下一批③事件流质量(B1+B2)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bdaf9ea` | (see git log) |
+| `e951436` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

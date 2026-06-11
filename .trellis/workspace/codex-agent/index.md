@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 34
+- **Total Sessions**: 35
 - **Last Active**: 2026-06-11
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1229 | Active |
+| `journal-1.md` | ~1263 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 35 | 2026-06-11 | 订单生命周期收尾:幽灵 open 订单驱逐与 pending claim TTL (P1-A1+P1-A2) | `bdaf9ea`, `e951436` | `feat/open-order-eviction-claim-ttl` |
 | 34 | 2026-06-11 | 错误体系统一:venue 错误码归一与 orderState 语义 (P1-A3+P1-C5) | `3f6dcb8`, `d25d120` | `feat/venue-error-reason-order-state` |
 | 33 | 2026-06-10 | Binance private listenKey recovery | `3581ced`, `f95e07b` | `fix/private-listenkey-recovery` |
 | 32 | 2026-06-10 | Refactor OrderManager structure | `ec1cd11` | `fix/order-command-watermark` |

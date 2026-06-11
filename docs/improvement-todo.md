@@ -20,7 +20,7 @@
 | 批次 | 条目 | 说明 | 状态 |
 |---|---|---|---|
 | ① 错误体系统一 | A3 + C5 | C5 归一码是 A3 orderState 判定的输入，合并一个任务、一个 minor changeset | 代码完成 → .trellis/tasks/06-11-orderstate-venue-p1-a3-p1-c5 |
-| ② 订单生命周期收尾 | A1 + A2 | 都是"订单查不到/claim 悬挂"的终态化处理，共享 fetchOrder 回查模式与测试场景 | |
+| ② 订单生命周期收尾 | A1 + A2 | 都是"订单查不到/claim 悬挂"的终态化处理，共享 fetchOrder 回查模式与测试场景 | 代码完成 → .trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2 |
 | ③ 事件流质量 | B1 + B2 | 同在事件总线/状态发布路径；B2 是小修可捎带 | |
 | ④ 限流分层 | B3 | 工作量偏大，独立任务 | |
 | ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | |
@@ -68,19 +68,21 @@
 
 ## P1-A — 正确性收尾
 
-### - [ ] P1-A1 幽灵 open 订单缺少最终驱逐路径
+### - [x] P1-A1 幽灵 open 订单缺少最终驱逐路径
 
 - **位置**：`src/client/private-subscription-coordinator.ts:1050`（backfill 返回 `undefined` 仅报错）
 - **问题**：reconcile 发现"本地 open 但交易所快照缺失"的订单走 `fetchOrder` backfill；若交易所已查不到（-2011/-2013 → `undefined`），订单永远留在 open 表，每 60s 重复报错。
 - **修复方案**：对连续 N 次（建议 3 次）backfill 失败的订单强制终态化（标记 `expired` 或新增 `unknown` 终态语义）移入 closed，并发布一次明确的 runtime error。
 - **验证方式**：集成测试模拟 fetchOrder 持续 -2013，断言 N 轮后订单离开 `getOpenOrders()`。
+- **状态**：代码已完成（→ .trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2，与 P1-A2 合并实现）：`OrderStatus` 新增 `unknown` 终态；仅"确认不存在"（fetchOrder 返回 undefined）计数，transport 错误不计数；连续 N 次（默认 3，`order.missingOrderEvictionThreshold` 可配）后置 `unknown` 移入 closed，发布终态事件 + 一次 runtime error；计数在 WS 更新/快照重现时清零。
 
-### - [ ] P1-A2 `createOrder` 超时后 pending claim 永不清理
+### - [x] P1-A2 `createOrder` 超时后 pending claim 永不清理
 
 - **位置**：`src/managers/order-manager.ts:1451`（`shouldRetainPendingClaimAfterCreateError`）
 - **问题**：超时保留 claim 是正确的（订单可能已落地等 WS 认领），但订单实际未到达交易所时，claim 在 `pendingClientOrderIdIndex` 永久泄漏。
 - **修复方案**：claim 加 TTL；到期后用 `fetchOrder(origClientOrderId)` 确认一次——查得到则入库，查不到则清理。
 - **验证方式**：单测覆盖"超时 + 订单不存在"与"超时 + 订单实际成交"两条路径。
+- **状态**：代码已完成（→ .trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2，与 P1-A1 合并实现）：claim 记录 `claimedAt`，TTL 默认 90s（`order.pendingClaimTtlMs` 可配），由 reconcile 周期驱动回查——查得到入库、确认不存在清理 + 一次 runtime error、transport 错误保留等下轮；无 fetchOrder 能力的 adapter 保守保留 claim。
 
 ### - [x] P1-A3 错误体系缺一等的"订单状态未知"语义
 

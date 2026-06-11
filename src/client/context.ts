@@ -73,6 +73,13 @@ export interface PrivateSubscriptionState {
   lastReadyAt?: number;
 }
 
+export interface ExpiredPendingOrderClaim {
+  venueClientOrderId: string;
+  localOrderId: string;
+  symbol: string;
+  claimedAt: number;
+}
+
 export interface PrivateAccountDataConsumer {
   onPrivateAccountPending(accountId: string, venue: Venue): void;
   onPrivateAccountBootstrap(
@@ -119,7 +126,22 @@ export interface PrivateOrderDataConsumer {
     update: RawOrderUpdate,
     options?: { requestStartedAt?: number; preserveStatus?: boolean },
   ): void;
+  onPrivateOrderConfirmedMissing(
+    accountId: string,
+    venue: Venue,
+    order: OrderSnapshot,
+  ): void;
   getPrivateOpenOrders(accountId: string): OrderSnapshot[];
+  getExpiredPrivateOrderClaims(
+    accountId: string,
+    now: number,
+    ttlMs: number,
+  ): ExpiredPendingOrderClaim[];
+  onPrivateOrderClaimNotFound(
+    accountId: string,
+    venue: Venue,
+    claim: ExpiredPendingOrderClaim,
+  ): void;
   onPrivateOrderStreamState(
     accountId: string,
     venue: Venue,

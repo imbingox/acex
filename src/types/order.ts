@@ -34,7 +34,8 @@ export type OrderStatus =
   | "filled"
   | "canceled"
   | "rejected"
-  | "expired";
+  | "expired"
+  | "unknown";
 
 export type CreateOrderType = "limit" | "market";
 

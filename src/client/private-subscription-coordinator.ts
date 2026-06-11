@@ -12,12 +12,14 @@ import {
 import { isTransportError } from "../internal/http-client.ts";
 import type {
   AccountRuntimeOptions,
+  OrderRuntimeOptions,
   OrderSnapshot,
   PrivateRuntimeReason,
   Venue,
 } from "../types/index.ts";
 import type {
   ClientContext,
+  ExpiredPendingOrderClaim,
   PrivateAccountDataConsumer,
   PrivateOrderDataConsumer,
   RegisteredAccountRecord,
@@ -50,6 +52,7 @@ const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
 const DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS = 65 * 60_000;
 const DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS = 60_000;
+const DEFAULT_PENDING_CLAIM_TTL_MS = 90_000;
 const MAX_ORDER_TERMINAL_BACKFILLS_PER_RECONCILE = 20;
 const MAX_ORDER_TERMINAL_BACKFILL_CONCURRENCY = 4;
 
@@ -94,6 +97,7 @@ export class PrivateSubscriptionCoordinator {
   private readonly binancePrivateStreamStaleAfterMs: number;
   private readonly binanceRiskPollIntervalMs: number;
   private readonly binancePrivateReconcileIntervalMs: number | undefined;
+  private readonly pendingClaimTtlMs: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
   constructor(
@@ -102,6 +106,7 @@ export class PrivateSubscriptionCoordinator {
     accountConsumer: PrivateAccountDataConsumer,
     orderConsumer: PrivateOrderDataConsumer,
     options: AccountRuntimeOptions = {},
+    orderOptions: OrderRuntimeOptions = {},
   ) {
     this.context = context;
     this.adapters = new Map(
@@ -129,6 +134,10 @@ export class PrivateSubscriptionCoordinator {
     this.binancePrivateReconcileIntervalMs = normalizeReconcileInterval(
       options.binance?.privateReconcileIntervalMs,
       DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS,
+    );
+    this.pendingClaimTtlMs = normalizePositiveInterval(
+      orderOptions.pendingClaimTtlMs,
+      DEFAULT_PENDING_CLAIM_TTL_MS,
     );
   }
 
@@ -940,6 +949,12 @@ export class PrivateSubscriptionCoordinator {
         orderGeneration,
         disappeared,
       );
+      await this.reconcileExpiredPendingOrderClaims(
+        record,
+        account,
+        generation,
+        orderGeneration,
+      );
     } catch (error) {
       if (
         !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
@@ -1054,11 +1069,104 @@ export class PrivateSubscriptionCoordinator {
       }
 
       if (!update) {
-        this.handleOrderReconcileError(
-          record,
-          new Error(
-            `Failed to backfill disappeared ${record.venue} order terminal state`,
-          ),
+        this.orderConsumer.onPrivateOrderConfirmedMissing(
+          record.accountId,
+          record.venue,
+          order,
+        );
+        return;
+      }
+
+      this.orderConsumer.onPrivateOrderUpdate(
+        record.accountId,
+        record.venue,
+        update,
+        {
+          requestStartedAt,
+        },
+      );
+    } catch (error) {
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      this.handleOrderReconcileError(record, error);
+    }
+  }
+
+  private async reconcileExpiredPendingOrderClaims(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    orderGeneration: number,
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (
+      !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+    ) {
+      return;
+    }
+
+    if (!adapter.fetchOrder) {
+      // Pending createOrder claims can only be retired after the venue confirms
+      // the clientOrderId is absent. Adapters without fetchOrder keep claims.
+      return;
+    }
+
+    const expiredClaims = this.orderConsumer.getExpiredPrivateOrderClaims(
+      record.accountId,
+      this.context.now(),
+      this.pendingClaimTtlMs,
+    );
+    for (const claim of expiredClaims) {
+      await this.reconcileExpiredPendingOrderClaim(
+        record,
+        account,
+        generation,
+        orderGeneration,
+        claim,
+      );
+    }
+  }
+
+  private async reconcileExpiredPendingOrderClaim(
+    record: PrivateSubscriptionRecord,
+    account: RegisteredAccountRecord,
+    generation: number,
+    orderGeneration: number,
+    claim: ExpiredPendingOrderClaim,
+  ): Promise<void> {
+    const adapter = this.getAdapter(record.venue);
+    if (
+      !adapter.fetchOrder ||
+      !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+    ) {
+      return;
+    }
+
+    const requestStartedAt = this.context.now();
+    try {
+      const update = await adapter.fetchOrder(
+        account.credentials ?? {},
+        {
+          symbol: claim.symbol,
+          clientOrderId: claim.venueClientOrderId,
+        },
+        { ...account.options, accountId: account.accountId },
+      );
+      if (
+        !this.shouldContinueOrderBootstrap(record, generation, orderGeneration)
+      ) {
+        return;
+      }
+
+      if (!update) {
+        this.orderConsumer.onPrivateOrderClaimNotFound(
+          record.accountId,
+          record.venue,
+          claim,
         );
         return;
       }

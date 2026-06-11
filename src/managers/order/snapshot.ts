@@ -78,6 +78,7 @@ export function orderPriority(status: OrderSnapshot["status"]): number {
     case "expired":
       return 4;
     case "rejected":
+    case "unknown":
       return 3;
     case "partially_filled":
       return 2;

@@ -143,6 +143,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       this.accountManager as PrivateAccountDataConsumer,
       this.orderManager as PrivateOrderDataConsumer,
       options.account,
+      options.order,
     );
 
     this.market = this.marketManager;

@@ -364,6 +364,8 @@ export function installBinancePrivateAccountInfra(options?: {
   queryOrder?: unknown;
   queryOrderResponses?: unknown[];
   failQueryOrder?: boolean;
+  networkErrorQueryOrder?: boolean;
+  networkErrorQueryOrderCount?: number;
   createOrder?: unknown;
   createOrderDelayMs?: number;
   cancelOrder?: unknown;
@@ -581,6 +583,14 @@ export function installBinancePrivateAccountInfra(options?: {
             ),
           );
         case "GET /papi/v1/um/order":
+          if (
+            options?.networkErrorQueryOrder ||
+            (options?.networkErrorQueryOrderCount !== undefined &&
+              queryOrderRequestCount < options.networkErrorQueryOrderCount)
+          ) {
+            queryOrderRequestCount += 1;
+            throw new TypeError("fetch failed");
+          }
           if (options?.failQueryOrder) {
             return textResponse(
               '{"code":-2013,"msg":"Order does not exist."}',

@@ -17,6 +17,7 @@
     "public-decimal-string-contract",
     "redact-transport-error-secrets",
     "venue-capability-dispatch",
+    "venue-error-reason-order-state",
     "venue-rate-limiter",
     "venue-server-time",
     "venue-time-provider"

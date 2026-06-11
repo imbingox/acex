@@ -1294,3 +1294,40 @@ AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 ep
 ### Next Steps
 
 - None - task complete
+
+
+## Session 37: 完成限流分层 P1-B3
+
+**Date**: 2026-06-11
+**Task**: 完成限流分层 P1-B3
+**Branch**: `main`
+
+### Summary
+
+完成 rate limit topology 注册、固定窗口主动预算、错误/退款边界加固、撤单优先 reserve，以及 PR inline comment 修复；质量门禁 lint/type-check/test/diff-check 已通过。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3edefc1` | (see git log) |
+| `65e099f` | (see git log) |
+| `3768874` | (see git log) |
+| `838556f` | (see git log) |
+| `ae4e3ee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

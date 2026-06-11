@@ -1193,3 +1193,37 @@ Brainstorm 敲定 OrderManager 内部 localOrderId 身份地基(D1–D9):三类 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 34: 错误体系统一:venue 错误码归一与 orderState 语义 (P1-A3+P1-C5)
+
+**Date**: 2026-06-11
+**Task**: 错误体系统一:venue 错误码归一与 orderState 语义 (P1-A3+P1-C5)
+**Branch**: `feat/venue-error-reason-order-state`
+
+### Summary
+
+合并实现 improvement-todo P1-A3+P1-C5(任务 06-11-orderstate-venue-p1-a3-p1-c5,PR #65):新增 VenueErrorReason 七成员归一枚举与 details.venueError.reason,Binance PAPI UM 映射表逐码对照官方文档核实(余额/保证金不足为 -2018/-2019 而非 spot -2010,-5022 GTX→would_take,不确定码归 unknown,依据存档于任务 research/);订单命令错误新增 details.orderState(not_placed|unknown,判定矩阵 timeout/network/parse/5xx→unknown)并导出 isOrderStateUnknown();归一经 ClientContext.normalizeVenueErrorCode 一等方法注入(修正了初版穿透私有字段的 cast 妥协);同步 error-handling spec 矩阵与 docs/api.md,minor changeset;lint/type-check/test 全绿(200 pass)。流程:brainstorm 锁定 Q1 API 形态/Q2 枚举成员两个 ADR;research/implement/check 全部经 codeg 委派 codex 完成,Claude 独立 diff 验收;期间发现一次 codeg 委派串台返回假 completed(已记 memory,验收先看 git diff);docs/improvement-todo.md 写入 P1 批次规划①-⑧,下一批为②订单生命周期收尾(A1+A2)。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3f6dcb8` | (see git log) |
+| `d25d120` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

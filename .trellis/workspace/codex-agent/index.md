@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 33
-- **Last Active**: 2026-06-10
+- **Total Sessions**: 34
+- **Last Active**: 2026-06-11
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1195 | Active |
+| `journal-1.md` | ~1229 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 34 | 2026-06-11 | 错误体系统一:venue 错误码归一与 orderState 语义 (P1-A3+P1-C5) | `3f6dcb8`, `d25d120` | `feat/venue-error-reason-order-state` |
 | 33 | 2026-06-10 | Binance private listenKey recovery | `3581ced`, `f95e07b` | `fix/private-listenkey-recovery` |
 | 32 | 2026-06-10 | Refactor OrderManager structure | `ec1cd11` | `fix/order-command-watermark` |
 | 31 | 2026-06-10 | P0-2 order command watermark | `474035c` | `fix/order-command-watermark` |

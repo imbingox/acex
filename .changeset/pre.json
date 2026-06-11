@@ -8,6 +8,7 @@
     "acex-error-details",
     "binance-tradfi-public-market",
     "cancel-all-response-shape",
+    "event-conflation-status-dedup",
     "include-package-release-docs",
     "market-catalog-reload",
     "market-ws-connection-multiplexing",

@@ -42,8 +42,10 @@ import type {
 import { cloneUsage, usageForBucket } from "./rate-limiter/usage.ts";
 
 const DEFAULT_RATE_LIMIT_MS = 0;
-const DEFAULT_BAN_MS = 60_000;
+const DEFAULT_BAN_MS = 120_000;
+const MAX_BAN_MS = 3 * 24 * 60 * 60 * 1_000;
 const MIN_RATE_LIMIT_BLOCK_MS = 1;
+const DEFAULT_RETRY_JITTER_MS = 250;
 const DEFAULT_UTILIZATION_TARGET = 0.9;
 
 interface PlanBucketCost {
@@ -67,8 +69,10 @@ export class BudgetRateLimiter
 {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly random: () => number;
   private readonly defaultRateLimitMs: number;
   private readonly defaultBanMs: number;
+  private readonly retryJitterMs: number;
   private readonly utilizationTarget: number;
   private readonly endpointStates = new Map<string, EndpointRateLimitState>();
   private readonly bucketDescriptors = new Map<
@@ -82,9 +86,11 @@ export class BudgetRateLimiter
   constructor(options: ReactiveRateLimiterOptions = {}) {
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? defaultSleep;
+    this.random = options.random ?? Math.random;
     this.defaultRateLimitMs =
       options.defaultRateLimitMs ?? DEFAULT_RATE_LIMIT_MS;
     this.defaultBanMs = options.defaultBanMs ?? DEFAULT_BAN_MS;
+    this.retryJitterMs = normalizeRetryJitterMs(options.retryJitterMs);
     this.utilizationTarget = normalizeUtilizationTarget(
       options.utilizationTarget,
     );
@@ -409,11 +415,20 @@ export class BudgetRateLimiter
 
   private effectiveLimit(
     bucket: RateLimitBucketDescriptor,
-    _priority: RateLimitPriority,
+    priority: RateLimitPriority,
   ): number {
-    return Math.floor(
+    const targetLimit = Math.floor(
       bucket.limit * (bucket.utilizationTarget ?? this.utilizationTarget),
     );
+    if (!bucket.reserve) {
+      return targetLimit;
+    }
+
+    if (priority === bucket.reserve.priority) {
+      return bucket.limit;
+    }
+
+    return Math.max(0, targetLimit - bucket.reserve.units);
   }
 
   private updateBucketUsage(
@@ -577,10 +592,22 @@ export class BudgetRateLimiter
   ): void {
     const now = this.now();
     const isBan = error.status === 418;
-    const retryAfterMs = this.resolveRetryAfterMs(isBan, error.retryAfterMs);
+    const existing = this.getEndpointState(scope);
+    const banStrikeCount = this.nextBanStrikeCount(
+      isBan,
+      error.retryAfterMs,
+      existing,
+      now,
+    );
+    const retryAfterMs = this.resolveRetryAfterMs(
+      isBan,
+      error.retryAfterMs,
+      banStrikeCount,
+    );
     const blockedUntil = now + retryAfterMs;
 
     this.updateEndpointState(scope, {
+      banStrikeCount,
       blockedUntil,
       retryAfterMs,
       state: isBan ? "banned" : "rate_limited",
@@ -594,15 +621,24 @@ export class BudgetRateLimiter
   ): void {
     const now = this.now();
     const isBan = error.status === 418;
+    const existing = this.bucketStates.get(bucketStateKey(scope, bucket));
+    const banStrikeCount = this.nextBanStrikeCount(
+      isBan,
+      error.retryAfterMs,
+      existing,
+      now,
+    );
     const retryAfterMs = this.resolveBucketRetryAfterMs(
       bucket,
       isBan,
       error.retryAfterMs,
       now,
+      banStrikeCount,
     );
     const blockedUntil = now + retryAfterMs;
 
     this.updateBucketState(scope, bucket, {
+      banStrikeCount,
       blockedUntil,
       retryAfterMs,
       state: isBan ? "banned" : "rate_limited",
@@ -614,26 +650,73 @@ export class BudgetRateLimiter
     isBan: boolean,
     retryAfterMs: number | undefined,
     now: number,
+    banStrikeCount: number | undefined,
   ): number {
     if (isBan || retryAfterMs !== undefined) {
-      return this.resolveRetryAfterMs(isBan, retryAfterMs);
+      return this.resolveRetryAfterMs(isBan, retryAfterMs, banStrikeCount);
     }
 
     return Math.max(
       MIN_RATE_LIMIT_BLOCK_MS,
       windowEndMs(windowStartMs(now, bucket.intervalMs), bucket.intervalMs) -
-        now,
+        now +
+        this.nextRetryJitterMs(),
     );
+  }
+
+  private nextRetryJitterMs(): number {
+    if (this.retryJitterMs <= 0) {
+      return 0;
+    }
+
+    const sample = this.random();
+    if (!Number.isFinite(sample)) {
+      return 0;
+    }
+
+    return Math.floor(Math.min(Math.max(sample, 0), 1) * this.retryJitterMs);
   }
 
   private resolveRetryAfterMs(
     isBan: boolean,
     retryAfterMs: number | undefined,
+    banStrikeCount?: number,
   ): number {
     return Math.max(
       MIN_RATE_LIMIT_BLOCK_MS,
-      retryAfterMs ?? (isBan ? this.defaultBanMs : this.defaultRateLimitMs),
+      retryAfterMs ??
+        (isBan
+          ? this.defaultBanMsForStrike(banStrikeCount)
+          : this.defaultRateLimitMs),
     );
+  }
+
+  private nextBanStrikeCount(
+    isBan: boolean,
+    retryAfterMs: number | undefined,
+    existing:
+      | Pick<
+          EndpointRateLimitState,
+          "banStrikeCount" | "blockedUntil" | "state"
+        >
+      | Pick<BucketRateLimitState, "banStrikeCount" | "blockedUntil" | "state">
+      | undefined,
+    now: number,
+  ): number | undefined {
+    if (!isBan || retryAfterMs !== undefined) {
+      return undefined;
+    }
+
+    const activeBan =
+      existing?.state === "banned" &&
+      existing.blockedUntil !== undefined &&
+      existing.blockedUntil > now;
+    return (activeBan ? (existing.banStrikeCount ?? 1) : 0) + 1;
+  }
+
+  private defaultBanMsForStrike(banStrikeCount: number | undefined): number {
+    const exponent = Math.max(0, (banStrikeCount ?? 1) - 1);
+    return Math.min(MAX_BAN_MS, this.defaultBanMs * 2 ** exponent);
   }
 
   private getEndpointState(
@@ -661,9 +744,14 @@ export class BudgetRateLimiter
       patchWinsBlock,
       nextBlockedUntil,
     );
+    const nextBanStrikeCount =
+      nextState === "banned"
+        ? (patch.banStrikeCount ?? existing?.banStrikeCount)
+        : undefined;
 
     this.endpointStates.set(scopeKey(scope), {
       usage: patch.usage ?? existing?.usage,
+      banStrikeCount: nextBanStrikeCount,
       blockedUntil: nextBlockedUntil,
       retryAfterMs: nextRetryAfterMs(existing, patch, patchWinsBlock),
       state: nextState ?? "ok",
@@ -692,10 +780,15 @@ export class BudgetRateLimiter
       patchWinsBlock,
       nextBlockedUntil,
     );
+    const nextBanStrikeCount =
+      nextState === "banned"
+        ? (patch.banStrikeCount ?? existing?.banStrikeCount)
+        : undefined;
 
     this.bucketStates.set(key, {
       used: patch.used ?? existing?.used,
       windowStartMs: patch.windowStartMs ?? existing?.windowStartMs,
+      banStrikeCount: nextBanStrikeCount,
       blockedUntil: nextBlockedUntil,
       retryAfterMs: nextRetryAfterMs(existing, patch, patchWinsBlock),
       state: nextState ?? "ok",
@@ -760,6 +853,7 @@ export class BudgetRateLimiter
       limit: bucket.limit,
       intervalMs: bucket.intervalMs,
       utilizationTarget: bucket.utilizationTarget ?? this.utilizationTarget,
+      reserve: bucket.reserve ? { ...bucket.reserve } : undefined,
       used: state.used,
       windowStartMs: state.windowStartMs,
       windowEndMs:
@@ -782,6 +876,16 @@ function normalizeUtilizationTarget(value: number | undefined): number {
   }
   if (!Number.isFinite(value) || value <= 0 || value > 1) {
     throw new Error("rateLimit.utilizationTarget must be > 0 and <= 1");
+  }
+  return value;
+}
+
+function normalizeRetryJitterMs(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_RETRY_JITTER_MS;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("rateLimit.retryJitterMs must be >= 0");
   }
   return value;
 }

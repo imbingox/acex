@@ -346,11 +346,13 @@ test("BudgetRateLimiter blocks the single affected bucket for 429", () => {
   ]);
 });
 
-test("BudgetRateLimiter blocks a 429 without Retry-After until the bucket window ends", async () => {
+test("BudgetRateLimiter blocks a 429 without Retry-After until the bucket window ends plus jitter", async () => {
   let now = 2_000;
   const sleeps: number[] = [];
   const limiter = new BudgetRateLimiter({
     now: () => now,
+    random: () => 0.5,
+    retryJitterMs: 100,
     sleep: async (ms) => {
       sleeps.push(ms);
       now += ms;
@@ -367,21 +369,70 @@ test("BudgetRateLimiter blocks a 429 without Retry-After until the bucket window
   });
 
   expect(limiter.getSnapshot(accountScope)).toMatchObject({
-    blockedUntil: 60_000,
-    retryAfterMs: 58_000,
+    blockedUntil: 60_050,
+    retryAfterMs: 58_050,
     state: "rate_limited",
   });
   expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
     expect.objectContaining({
       bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
-      blockedUntil: 60_000,
-      retryAfterMs: 58_000,
+      blockedUntil: 60_050,
+      retryAfterMs: 58_050,
       state: "rate_limited",
     }),
   ]);
 
   await limiter.beforeRequest(context);
-  expect(sleeps).toEqual([58_000]);
+  expect(sleeps).toEqual([58_050]);
+});
+
+test("BudgetRateLimiter uses a conservative 418 fallback ban without Retry-After", () => {
+  let now = 2_000;
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+  });
+  registerBinanceRateLimitTopology(limiter);
+
+  const context = {
+    scope: accountScope,
+    planId: BINANCE_RATE_LIMIT_PLANS.papiAccount,
+  };
+  limiter.onTransportError(context, {
+    status: 418,
+  });
+
+  expect(limiter.getSnapshot(accountScope)).toMatchObject({
+    blockedUntil: 122_000,
+    retryAfterMs: 120_000,
+    state: "banned",
+  });
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      blockedUntil: 122_000,
+      retryAfterMs: 120_000,
+      state: "banned",
+    }),
+  ]);
+
+  now = 3_000;
+  limiter.onTransportError(context, {
+    status: 418,
+  });
+
+  expect(limiter.getSnapshot(accountScope)).toMatchObject({
+    blockedUntil: 243_000,
+    retryAfterMs: 240_000,
+    state: "banned",
+  });
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      blockedUntil: 243_000,
+      retryAfterMs: 240_000,
+      state: "banned",
+    }),
+  ]);
 });
 
 test("BudgetRateLimiter does not downgrade an active ban with a shorter 429", () => {
@@ -658,6 +709,87 @@ test("BudgetRateLimiter proactively waits when fixed-window budget is exhausted"
       used: 5,
       windowStartMs: 1_000,
       windowEndMs: 2_000,
+    }),
+  ]);
+});
+
+test("BudgetRateLimiter preserves reserve headroom for matching priority", async () => {
+  let now = 100;
+  const sleeps: number[] = [];
+  const limiter = new BudgetRateLimiter({
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+    utilizationTarget: 1,
+  });
+  limiter.registerRateLimitTopology({
+    id: "reserve-test",
+    buckets: [
+      {
+        id: "bucket:weight",
+        kind: "request_weight",
+        limit: 10,
+        intervalMs: 1_000,
+        scope: ["venue"],
+        reserve: {
+          priority: "cancel",
+          units: 2,
+        },
+      },
+    ],
+    plans: [
+      {
+        id: "plan:normal",
+        costs: [{ bucketId: "bucket:weight", cost: 8 }],
+      },
+      {
+        id: "plan:normal-small",
+        costs: [{ bucketId: "bucket:weight", cost: 1 }],
+      },
+      {
+        id: "plan:cancel",
+        costs: [{ bucketId: "bucket:weight", cost: 2 }],
+      },
+    ],
+  });
+
+  const normal = {
+    scope: accountScope,
+    planId: "plan:normal",
+  };
+  const normalSmall = {
+    scope: accountScope,
+    planId: "plan:normal-small",
+  };
+  const cancel = {
+    scope: accountScope,
+    planId: "plan:cancel",
+    priority: "cancel" as const,
+  };
+
+  expect(await limiter.beforeRequest(normal)).toBeDefined();
+  expect(await limiter.beforeRequest(cancel)).toBeDefined();
+  expect(sleeps).toEqual([]);
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      reserve: {
+        priority: "cancel",
+        units: 2,
+      },
+      used: 10,
+    }),
+  ]);
+
+  expect(await limiter.beforeRequest(normalSmall)).toBeDefined();
+  expect(sleeps).toEqual([900]);
+  expect(limiter.getSnapshot(accountScope)?.buckets).toEqual([
+    expect.objectContaining({
+      bucketId: "bucket:weight",
+      used: 1,
+      windowStartMs: 1_000,
     }),
   ]);
 });
@@ -976,6 +1108,15 @@ test("BudgetRateLimiter keeps account-scoped order budgets isolated", async () =
 });
 
 test("Binance topology uses semantic plans for host and openOrders variants", () => {
+  expect(BINANCE_RATE_LIMIT_TOPOLOGY.buckets).toContainEqual(
+    expect.objectContaining({
+      id: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      reserve: {
+        priority: "cancel",
+        units: 300,
+      },
+    }),
+  );
   expect(getBinanceCatalogRateLimitPlanId("GET /api/v3/exchangeInfo")).toBe(
     BINANCE_RATE_LIMIT_PLANS.spotExchangeInfo,
   );

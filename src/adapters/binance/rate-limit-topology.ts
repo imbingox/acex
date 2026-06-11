@@ -11,6 +11,7 @@ const SPOT_REQUEST_WEIGHT_LIMIT_1M = 6_000;
 const FAPI_REQUEST_WEIGHT_LIMIT_1M = 2_400;
 const DAPI_REQUEST_WEIGHT_LIMIT_1M = 6_000;
 const PAPI_REQUEST_WEIGHT_LIMIT_1M = 6_000;
+const PAPI_CANCEL_REQUEST_WEIGHT_RESERVE_1M = 300;
 const PAPI_ORDERS_LIMIT_1M = 1_200;
 
 export const BINANCE_RATE_LIMIT_BUCKETS = {
@@ -68,6 +69,10 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       limit: PAPI_REQUEST_WEIGHT_LIMIT_1M,
       intervalMs: ONE_MINUTE_MS,
       scope: ["venue"],
+      reserve: {
+        priority: "cancel",
+        units: PAPI_CANCEL_REQUEST_WEIGHT_RESERVE_1M,
+      },
     },
     {
       id: BINANCE_RATE_LIMIT_BUCKETS.papiOrders1m,

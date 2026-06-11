@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import type { VenueErrorReason } from "../../index.ts";
+import type {
+  RateLimiter,
+  RateLimitRequestContext,
+  VenueErrorReason,
+} from "../../index.ts";
 import {
   AcexError,
   BigNumber,
@@ -2400,6 +2404,54 @@ test("cancelAllOrders parses object response and only updates matching cached or
   );
   expect(request).toBeDefined();
   expect(request?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+});
+
+test("cancelAllOrders marks both prefetch and cancel requests as cancel priority", async () => {
+  installBinancePrivateAccountInfra();
+  const contexts: RateLimitRequestContext[] = [];
+  const captureLimiter: RateLimiter = {
+    beforeRequest(ctx) {
+      contexts.push(ctx);
+    },
+    afterResponse(): void {},
+    onTransportError(): void {},
+    getSnapshot(): undefined {
+      return undefined;
+    },
+  };
+  const client = createClient({
+    rateLimiter: captureLimiter,
+  });
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  await client.order.cancelAllOrders({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+  });
+
+  expect(
+    contexts.find(
+      (ctx) =>
+        ctx.scope.endpointKey === "GET /papi/v1/um/openOrders" &&
+        ctx.priority === "cancel",
+    ),
+  ).toBeDefined();
+  expect(
+    contexts.find(
+      (ctx) =>
+        ctx.scope.endpointKey === "DELETE /papi/v1/um/allOpenOrders" &&
+        ctx.priority === "cancel",
+    ),
+  ).toBeDefined();
 });
 
 test("cancelAllOrders propagates command ack write failures", async () => {

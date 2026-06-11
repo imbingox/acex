@@ -112,12 +112,13 @@
 - **验证方式**：单测：连续 N 个 tick 仅产生 1 次 status 事件 + N 次 l1 事件。
 - **状态**：代码已完成（→ .trellis/tasks/archive/2026-06/06-11-conflation-status-p1-b1-p1-b2，与 P1-B1 合并实现）：`recomputeAndPublishStatus` 以 `activity/ready/freshness/reason` 四字段为去重 key，相同则跳过三路发布、首次必发；`lastReceivedAt`/`lastReadyAt`/`inactiveSince` 时间戳不参与比较但仍每 tick 更新 record，`getMarketStatus()` 读路径不变。
 
-### - [ ] P1-B3 限流器纯被动，scope 粒度与 Binance 语义不匹配
+### - [x] P1-B3 限流器纯被动，scope 粒度与 Binance 语义不匹配
 
 - **位置**：`src/internal/rate-limiter.ts:44`（仅 429/418 后阻塞）、`:153`（scope = venue+account+endpoint）
 - **问题**：从不利用已知 endpoint weight 与 `X-MBX-USED-WEIGHT-*` 头做主动预算；429 后只 block 单 endpoint，但 Binance REQUEST_WEIGHT 是 per-IP 全局、订单数是 per-account——其他 endpoint 继续打会升级成 418 IP ban。无撤单优先通道。
 - **修复方案**：分层 scope（venue 全局 weight 桶 + per-account order 桶 + endpoint 覆盖）；按响应头回填已用额度做主动节流；预留 cancel/风控请求的保留预算或优先队列。
 - **验证方式**：单测模拟 weight 头递增逼近上限时主动延迟；429 后断言全 venue 阻塞而非单 endpoint。
+- **状态**：代码已完成（→ `.trellis/tasks/06-11-p1-b3-scope`）：新增 optional rate-limit topology/plan SPI、bucket-level fixed-window budget admission、Binance host/request-weight 与 per-account order 桶、usage header 回填、request-not-sent refund、bucket-level 429/418 block、cancel-priority reserve headroom 与 fallback jitter；core 限流器保持 venue-agnostic，Binance 权重表和 header 解析留在 adapter 层。
 
 ### - [ ] P1-B4 签名时钟无自动同步回路
 

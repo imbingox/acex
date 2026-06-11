@@ -48,6 +48,11 @@ export type RateLimitBucketKind = "request_weight" | "orders" | (string & {});
 
 export type RateLimitScopeDimension = "venue" | "account" | "endpoint";
 
+export interface RateLimitBucketReserve {
+  priority: RateLimitPriority;
+  units: number;
+}
+
 export interface RateLimitBucketDescriptor {
   id: string;
   kind: RateLimitBucketKind;
@@ -55,6 +60,7 @@ export interface RateLimitBucketDescriptor {
   intervalMs: number;
   scope: readonly RateLimitScopeDimension[];
   utilizationTarget?: number;
+  reserve?: RateLimitBucketReserve;
 }
 
 export interface RateLimitCost {
@@ -96,6 +102,7 @@ export interface RateLimitBucketSnapshot {
   limit: number;
   intervalMs: number;
   utilizationTarget?: number;
+  reserve?: RateLimitBucketReserve;
   used?: number;
   windowStartMs?: number;
   windowEndMs?: number;

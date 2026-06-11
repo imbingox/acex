@@ -15,6 +15,20 @@ export function validateBucketDescriptor(
   if (!Number.isFinite(bucket.intervalMs) || bucket.intervalMs <= 0) {
     throw new Error(`Invalid rate limit bucket interval: ${bucket.id}`);
   }
+  if (bucket.reserve) {
+    if (!bucket.reserve.priority) {
+      throw new Error(
+        `Invalid rate limit bucket reserve priority: ${bucket.id}`,
+      );
+    }
+    if (
+      !Number.isFinite(bucket.reserve.units) ||
+      bucket.reserve.units < 0 ||
+      bucket.reserve.units > bucket.limit
+    ) {
+      throw new Error(`Invalid rate limit bucket reserve units: ${bucket.id}`);
+    }
+  }
 }
 
 export function validatePlan(
@@ -41,6 +55,7 @@ export function cloneBucketDescriptor(
 ): RateLimitBucketDescriptor {
   return {
     ...bucket,
+    reserve: bucket.reserve ? { ...bucket.reserve } : undefined,
     scope: [...bucket.scope],
   };
 }
@@ -62,6 +77,7 @@ export function bucketDescriptorsEqual(
     left.limit === right.limit &&
     left.intervalMs === right.intervalMs &&
     left.utilizationTarget === right.utilizationTarget &&
+    reservesEqual(left.reserve, right.reserve) &&
     arraysEqual(left.scope, right.scope)
   );
 }
@@ -89,6 +105,17 @@ function arraysEqual<T>(left: readonly T[], right: readonly T[]): boolean {
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
+}
+
+function reservesEqual(
+  left: RateLimitBucketDescriptor["reserve"],
+  right: RateLimitBucketDescriptor["reserve"],
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return left.priority === right.priority && left.units === right.units;
 }
 
 export function uniqueStrings(values: readonly string[]): string[] {

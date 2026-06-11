@@ -442,7 +442,7 @@ interface OrderManager {
 
 ### 7.3 本地缓存与查询
 
-- OrderManager 内部按 open / closed 分层缓存订单。**closed（filled / canceled / rejected / expired）订单按 symbol 各保留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`（默认 500，非正或非整数回退默认），超限按 FIFO 裁剪最旧；**open 订单不受此上限限制**。`getOpenOrders()` 查询复杂度与历史终态订单数量无关。
+- OrderManager 内部按 open / closed 分层缓存订单。**closed（filled / canceled / rejected / expired / unknown）订单按 symbol 各保留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`（默认 500，非正或非整数回退默认），超限按 FIFO 裁剪最旧；**open 订单不受此上限限制**。`getOpenOrders()` 查询复杂度与历史终态订单数量无关。
 - `getOrder(input)` 需带 `orderId` 或 `clientOrderId`（否则返回 `undefined`），`symbol` 可选：
   - **精确查单推荐传 `symbol + orderId`**（O(1) 精确索引、唯一命中）。
   - 仅 `clientOrderId` 查询可命中 open 与未被裁剪的 closed；当 `clientOrderId` 唯一（你自定义的或 SDK 生成的 `acex-*`）时可精确命中，但同一 `clientOrderId` 命中多笔时返回**最新一笔**（精确定位历史某一笔请用 `symbol + orderId`）。
@@ -450,7 +450,7 @@ interface OrderManager {
   - 同时给 `orderId` 与 `clientOrderId` 时，两者都匹配才命中。
   - 已超出保留上限被裁剪的 closed 订单将查不到（返回 `undefined`）。
 
-Order 事件用于消费订单状态变化和 open orders 快照校准。Binance private reconcile 会先用 `/papi/v1/um/openOrders` 校验当前 open set；本地 open order 从 open set 消失时，SDK 会优先查询单笔订单终态并发布 `order.filled` / `order.canceled` 等事件。若 Binance retention / not found 导致无法证明终态，SDK 不会合成 filled/canceled，而是保留原 snapshot 并把 order status 标记为 `degraded`，下一轮继续尝试。
+Order 事件用于消费订单状态变化和 open orders 快照校准。Binance private reconcile 会先用 `/papi/v1/um/openOrders` 校验当前 open set；本地 open order 从 open set 消失时，SDK 会优先查询单笔订单终态并发布 `order.filled` / `order.canceled` 等事件。若单笔查询连续确认订单不存在（默认 3 次，`CreateClientOptions.order.missingOrderEvictionThreshold` 可配置），SDK 会把该订单终态化为 `status: "unknown"`、移出 open 缓存并发布一次 runtime error；网络/超时/限流等 transport 错误不会计入该阈值。`createOrder()` 超时保留的 pending claim 会在 reconcile 周期里按 `CreateClientOptions.order.pendingClaimTtlMs`（默认 90s）过期回查：查到订单则正常入库，确认不存在则清理 claim 并发布 runtime error；无 `fetchOrder` 能力的 venue 会保守保留 claim。
 
 ```ts
 for await (const event of client.order.events.updates({
@@ -499,7 +499,8 @@ type OrderStatus =
   | "filled"
   | "canceled"
   | "rejected"
-  | "expired";
+  | "expired"
+  | "unknown";
 
 type PrivateRuntimeReason =
   | "credentials_missing"
@@ -597,6 +598,8 @@ interface CreateClientOptions {
   };
   order?: {
     maxClosedOrdersPerSymbol?: number;
+    missingOrderEvictionThreshold?: number;
+    pendingClaimTtlMs?: number;
   };
 }
 

@@ -5,6 +5,7 @@ import type {
 import type {
   AccountAwareManager,
   ClientContext,
+  ExpiredPendingOrderClaim,
   HealthReporter,
   ManagerLifecycle,
   PrivateOrderDataConsumer,
@@ -43,6 +44,7 @@ import {
   cloneOrderStatus,
   createOrderDataStatus,
   normalizeMaxClosedOrdersPerSymbol,
+  normalizeMissingOrderEvictionThreshold,
   successfulStatus,
 } from "./order/data-status.ts";
 import {
@@ -61,6 +63,7 @@ import { createSnapshot, isOpenOrder } from "./order/snapshot.ts";
 import {
   getAllSnapshots,
   getExistingSnapshot,
+  getExistingSnapshotLocation,
   getLocalOrderIdForVenueOrderId,
   getLocationByLocalOrderId,
   getOpenOrderSnapshots,
@@ -96,6 +99,7 @@ export class OrderManagerImpl
 
   private readonly context: ClientContext;
   private readonly maxClosedOrdersPerSymbol: number;
+  private readonly missingOrderEvictionThreshold: number;
   private readonly orderBus = new AsyncEventBus<OrderEvent>();
   private readonly orderStatusBus =
     new AsyncEventBus<OrderStatusChangedEvent>();
@@ -106,6 +110,9 @@ export class OrderManagerImpl
     this.context = context;
     this.maxClosedOrdersPerSymbol = normalizeMaxClosedOrdersPerSymbol(
       options.maxClosedOrdersPerSymbol,
+    );
+    this.missingOrderEvictionThreshold = normalizeMissingOrderEvictionThreshold(
+      options.missingOrderEvictionThreshold,
     );
 
     this.events = {
@@ -494,6 +501,9 @@ export class OrderManagerImpl
         openSetKeys.add(lookupKey);
       }
       const current = getExistingSnapshot(record, update);
+      if (current) {
+        this.clearMissingOrderConfirmationsForUpdate(record, current);
+      }
       const nextSnapshot = this.applyUpdateToRecord(
         record,
         accountId,
@@ -565,6 +575,36 @@ export class OrderManagerImpl
     return this.getOpenOrders(accountId);
   }
 
+  getExpiredPrivateOrderClaims(
+    accountId: string,
+    now: number,
+    ttlMs: number,
+  ): ExpiredPendingOrderClaim[] {
+    const record = this.records.get(accountId);
+    if (!record || ttlMs <= 0) {
+      return [];
+    }
+
+    const expired: ExpiredPendingOrderClaim[] = [];
+    for (const [
+      venueClientOrderId,
+      claim,
+    ] of record.pendingClientOrderIdIndex) {
+      if (now - claim.claimedAt < ttlMs) {
+        continue;
+      }
+
+      expired.push({
+        venueClientOrderId,
+        localOrderId: claim.localOrderId,
+        symbol: claim.symbol,
+        claimedAt: claim.claimedAt,
+      });
+    }
+
+    return expired;
+  }
+
   onPrivateOrderUpdate(
     accountId: string,
     venue: Venue,
@@ -590,23 +630,7 @@ export class OrderManagerImpl
       return;
     }
 
-    const eventType =
-      snapshot.status === "filled"
-        ? "order.filled"
-        : snapshot.status === "rejected"
-          ? "order.rejected"
-          : snapshot.status === "canceled" || snapshot.status === "expired"
-            ? "order.canceled"
-            : "order.updated";
-
-    this.orderBus.publish({
-      type: eventType,
-      accountId,
-      venue,
-      symbol: snapshot.symbol,
-      snapshot,
-      ts: this.context.now(),
-    });
+    this.publishOrderEvent(accountId, venue, snapshot);
 
     record.status = successfulStatus(record.status, {
       preserveStatus: options.preserveStatus,
@@ -614,6 +638,119 @@ export class OrderManagerImpl
       lastReadyAt: snapshot.updatedAt,
     });
     this.publishStatus(record);
+  }
+
+  onPrivateOrderConfirmedMissing(
+    accountId: string,
+    venue: Venue,
+    order: OrderSnapshot,
+  ): void {
+    const record = this.getOrCreateRecord(accountId, venue);
+    if (!record.subscribed) {
+      return;
+    }
+
+    const location = getExistingSnapshotLocation(record, order);
+    if (!location || location.table !== "open") {
+      return;
+    }
+
+    const current = getSnapshotAtLocation(record, location);
+    if (!current || !isOpenOrder(current)) {
+      return;
+    }
+
+    const confirmations =
+      (record.missingOrderConfirmations.get(location.localOrderId) ?? 0) + 1;
+    if (confirmations < this.missingOrderEvictionThreshold) {
+      record.missingOrderConfirmations.set(
+        location.localOrderId,
+        confirmations,
+      );
+      return;
+    }
+
+    const receivedAt = this.context.now();
+    const snapshot = createSnapshot(
+      accountId,
+      venue,
+      {
+        orderId: current.orderId,
+        clientOrderId: current.clientOrderId,
+        symbol: current.symbol,
+        side: current.side,
+        type: current.type,
+        status: "unknown",
+        price: current.price,
+        triggerPrice: current.triggerPrice,
+        amount: current.amount,
+        filled: current.filled,
+        remaining: current.remaining,
+        reduceOnly: current.reduceOnly,
+        positionSide: current.positionSide,
+        avgFillPrice: current.avgFillPrice,
+        receivedAt,
+      },
+      current,
+    );
+
+    if (
+      !this.writeSnapshot(record, location.localOrderId, snapshot, location)
+    ) {
+      return;
+    }
+
+    this.context.publishRuntimeError(
+      "order",
+      new Error(
+        `Evicted ${venue} open order after ${confirmations} confirmed missing checks`,
+      ),
+      {
+        accountId,
+        venue,
+        symbol: current.symbol,
+      },
+    );
+    this.publishOrderEvent(accountId, venue, snapshot);
+    record.status = successfulStatus(record.status, {
+      lastReceivedAt: snapshot.receivedAt,
+      lastReadyAt: snapshot.updatedAt,
+    });
+    this.publishStatus(record);
+  }
+
+  onPrivateOrderClaimNotFound(
+    accountId: string,
+    venue: Venue,
+    claim: ExpiredPendingOrderClaim,
+  ): void {
+    const record = this.records.get(accountId);
+    if (!record) {
+      return;
+    }
+
+    const pending = record.pendingClientOrderIdIndex.get(
+      claim.venueClientOrderId,
+    );
+    if (
+      pending?.localOrderId !== claim.localOrderId ||
+      pending.symbol !== claim.symbol
+    ) {
+      return;
+    }
+
+    record.pendingClientOrderIdIndex.delete(claim.venueClientOrderId);
+    this.context.publishRuntimeError(
+      "order",
+      new Error(
+        `createOrder timed out and the order was not found on the venue: ${claim.venueClientOrderId}`,
+      ),
+      {
+        accountId,
+        venue,
+        symbol: claim.symbol,
+      },
+    );
   }
 
   onPrivateOrderStreamState(
@@ -670,6 +807,7 @@ export class OrderManagerImpl
       orderIdOnlyIndex: new Map(),
       clientOrderIdIndex: new Map(),
       pendingClientOrderIdIndex: new Map(),
+      missingOrderConfirmations: new Map(),
       status: createOrderDataStatus(accountId, venue, "inactive"),
     };
 
@@ -718,7 +856,49 @@ export class OrderManagerImpl
 
     this.warnSystemClientOrderIdOnlyClaim(record, snapshot);
     this.warnProvisionalTerminalOrder(record, snapshot);
+    this.clearMissingOrderConfirmations(record, localOrderId);
     return true;
+  }
+
+  private clearMissingOrderConfirmations(
+    record: OrderRecord,
+    localOrderId: string,
+  ): void {
+    record.missingOrderConfirmations.delete(localOrderId);
+  }
+
+  private clearMissingOrderConfirmationsForUpdate(
+    record: OrderRecord,
+    update: { symbol: string; orderId?: string; clientOrderId?: string },
+  ): void {
+    const location = getExistingSnapshotLocation(record, update);
+    if (location) {
+      this.clearMissingOrderConfirmations(record, location.localOrderId);
+    }
+  }
+
+  private publishOrderEvent(
+    accountId: string,
+    venue: Venue,
+    snapshot: OrderSnapshot,
+  ): void {
+    const eventType =
+      snapshot.status === "filled"
+        ? "order.filled"
+        : snapshot.status === "rejected"
+          ? "order.rejected"
+          : isOpenOrder(snapshot)
+            ? "order.updated"
+            : "order.canceled";
+
+    this.orderBus.publish({
+      type: eventType,
+      accountId,
+      venue,
+      symbol: snapshot.symbol,
+      snapshot,
+      ts: this.context.now(),
+    });
   }
 
   private warnDroppedUnkeyedTerminalOrder(
@@ -800,6 +980,9 @@ export class OrderManagerImpl
     options: { requestStartedAt?: number; preserveStatus?: boolean } = {},
   ): OrderSnapshot | undefined {
     const resolution = this.resolveLocalOrderIdForUpdate(record, update);
+    if (resolution.localOrderId) {
+      this.clearMissingOrderConfirmations(record, resolution.localOrderId);
+    }
     const localOrderId = resolution.localOrderId ?? this.generateLocalOrderId();
     const previousLocation = getLocationByLocalOrderId(record, localOrderId);
     const previous = previousLocation
@@ -874,6 +1057,7 @@ export class OrderManagerImpl
     record.pendingClientOrderIdIndex.set(venueClientOrderId, {
       localOrderId,
       symbol,
+      claimedAt: this.context.now(),
     });
   }
 
@@ -955,6 +1139,9 @@ export class OrderManagerImpl
       update,
       options.localOrderId,
     );
+    if (resolution.localOrderId) {
+      this.clearMissingOrderConfirmations(record, resolution.localOrderId);
+    }
     const localOrderId = resolution.localOrderId ?? this.generateLocalOrderId();
     const previousLocation = getLocationByLocalOrderId(record, localOrderId);
     const previous = previousLocation

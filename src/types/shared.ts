@@ -107,6 +107,8 @@ export interface AccountRuntimeOptions {
 
 export interface OrderRuntimeOptions {
   maxClosedOrdersPerSymbol?: number;
+  missingOrderEvictionThreshold?: number;
+  pendingClaimTtlMs?: number;
 }
 
 export interface CreateClientOptions {

@@ -10,6 +10,7 @@ import type {
 } from "../../src/adapters/types.ts";
 import type {
   ClientContext,
+  ExpiredPendingOrderClaim,
   PrivateAccountDataConsumer,
   PrivateOrderDataConsumer,
   PrivateSubscriptionState,
@@ -167,8 +168,13 @@ class StubOrderConsumer implements PrivateOrderDataConsumer {
   reconciles = 0;
   updates: RawOrderUpdate[] = [];
   states: PrivateSubscriptionState[] = [];
+  expiredClaimRequests = 0;
+  claimNotFound: ExpiredPendingOrderClaim[] = [];
 
-  constructor(private readonly disappeared: OrderSnapshot[] = []) {}
+  constructor(
+    private readonly disappeared: OrderSnapshot[] = [],
+    private readonly expiredClaims: ExpiredPendingOrderClaim[] = [],
+  ) {}
 
   onPrivateOrderPending(): void {}
 
@@ -192,6 +198,21 @@ class StubOrderConsumer implements PrivateOrderDataConsumer {
 
   getPrivateOpenOrders(): OrderSnapshot[] {
     return [];
+  }
+
+  onPrivateOrderConfirmedMissing(): void {}
+
+  getExpiredPrivateOrderClaims(): ExpiredPendingOrderClaim[] {
+    this.expiredClaimRequests += 1;
+    return this.expiredClaims;
+  }
+
+  onPrivateOrderClaimNotFound(
+    _accountId: string,
+    _venue: Venue,
+    claim: ExpiredPendingOrderClaim,
+  ): void {
+    this.claimNotFound.push(claim);
   }
 
   onPrivateOrderStreamState(
@@ -359,6 +380,16 @@ class StubBootstrapReconcileBinanceAdapter extends StubBinanceAdapter {
   constructor(trace?: string[]) {
     super(trace);
     Object.defineProperty(this, "reconcileAccount", {
+      value: undefined,
+      configurable: true,
+    });
+  }
+}
+
+class StubNoFetchOrderBinanceAdapter extends StubBinanceAdapter {
+  constructor(trace?: string[]) {
+    super(trace);
+    Object.defineProperty(this, "fetchOrder", {
       value: undefined,
       configurable: true,
     });
@@ -684,6 +715,46 @@ test("private reconcile polling stops after unsubscribe cleanup", async () => {
   await Bun.sleep(20);
 
   expect(adapter.reconcileCalls).toBe(reconcileCallsAfterUnsubscribe);
+});
+
+test("expired pending order claims are retained when fetchOrder is absent", async () => {
+  const context = new StubContext();
+  const adapter = new StubNoFetchOrderBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer(
+    [],
+    [
+      {
+        venueClientOrderId: "ttl-no-fetch",
+        localOrderId: "local-ttl-no-fetch",
+        symbol: "BTC/USDT:USDT",
+        claimedAt: Date.now() - 60_000,
+      },
+    ],
+  );
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    {
+      binance: {
+        riskPollIntervalMs: 60_000,
+        privateReconcileIntervalMs: 5,
+      },
+    },
+    {
+      pendingClaimTtlMs: 1,
+    },
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  await Bun.sleep(20);
+  coordinator.unsubscribeOrderFeed("main-binance");
+
+  expect(adapter.fetchOpenOrdersCalls).toBeGreaterThan(1);
+  expect(adapter.fetchOrderCalls).toBe(0);
+  expect(orderConsumer.expiredClaimRequests).toBe(0);
+  expect(orderConsumer.claimNotFound).toHaveLength(0);
 });
 
 test("terminal backfill checks reconcile generation before each REST request", async () => {

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "验收:订单状态机、reconcile 契约与 spec 同步情况"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "lint/type-check/test 质量门槛与测试分层要求"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "检查 OrderStatus 扩成员后的穷举处理与导出约定"}
+{"file": ".trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2/prd.md", "reason": "对照验收标准:驱逐计数语义、TTL 回查两条路径、changeset、spec/docs 同步"}

@@ -15,6 +15,7 @@ export interface OrderRecord {
   orderIdOnlyIndex: Map<string, Set<string>>;
   clientOrderIdIndex: Map<string, Set<string>>;
   pendingClientOrderIdIndex: Map<string, PendingOrderClaim>;
+  missingOrderConfirmations: Map<string, number>;
   status: OrderDataStatus;
 }
 
@@ -29,8 +30,10 @@ export interface OrderLocation {
 export interface PendingOrderClaim {
   localOrderId: string;
   symbol: string;
+  claimedAt: number;
 }
 
 export interface OrderManagerOptions {
   maxClosedOrdersPerSymbol?: number;
+  missingOrderEvictionThreshold?: number;
 }

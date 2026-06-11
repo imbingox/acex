@@ -704,8 +704,8 @@ test("order bootstrap backfills terminal status for cached disappeared open orde
   await iterator.return?.();
 });
 
-test("private order reconcile degrades and keeps snapshot when terminal backfill is missing", async () => {
-  installBinancePrivateAccountInfra({
+test("private order reconcile evicts disappeared open orders after confirmed missing checks", async () => {
+  const requests = installBinancePrivateAccountInfra({
     openOrderResponses: [
       [
         {
@@ -736,7 +736,143 @@ test("private order reconcile degrades and keeps snapshot when terminal backfill
         privateReconcileIntervalMs: 5,
       },
     },
+    order: {
+      missingOrderEvictionThreshold: 3,
+    },
   });
+  const updates = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+  const errors = client.events.errors()[Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  const unknownEvent = await nextMatchingEvent(
+    updates,
+    (event) =>
+      event.type === "order.canceled" &&
+      event.snapshot.orderId === "1001" &&
+      event.snapshot.status === "unknown",
+    500,
+    "order reconcile did not evict confirmed missing order",
+  );
+  expect(unknownEvent).toMatchObject({
+    type: "order.canceled",
+    snapshot: {
+      orderId: "1001",
+      status: "unknown",
+    },
+  });
+
+  expect(client.order.getOpenOrders("main-binance")).toHaveLength(0);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      orderId: "1001",
+    }),
+  ).toMatchObject({
+    status: "unknown",
+  });
+  const queryOrderRequests = requests.filter(
+    (request) =>
+      request.method === "GET" &&
+      request.url.pathname === "/papi/v1/um/order" &&
+      request.url.searchParams.get("orderId") === "1001",
+  );
+  expect(queryOrderRequests.length).toBeGreaterThanOrEqual(3);
+
+  const runtimeError = await nextMatchingEvent(
+    errors,
+    (event) =>
+      event.source === "order" &&
+      event.error.message.includes("confirmed missing checks"),
+    100,
+    "missing order eviction did not publish runtime error",
+  );
+  expect(runtimeError).toMatchObject({
+    source: "order",
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  await expectNoMatchingEvent(
+    updates,
+    (event) =>
+      event.type === "order.canceled" &&
+      event.snapshot.orderId === "1001" &&
+      event.snapshot.status === "unknown",
+    50,
+    "missing order eviction published duplicate terminal event",
+  );
+  await expectNoMatchingEvent(
+    errors,
+    (event) =>
+      event.source === "order" &&
+      event.error.message.includes("confirmed missing checks"),
+    50,
+    "missing order eviction published duplicate runtime error",
+  );
+
+  await updates.return?.();
+  await errors.return?.();
+});
+
+test("private order reconcile keeps disappeared open orders on network backfill errors", async () => {
+  installBinancePrivateAccountInfra({
+    openOrderResponses: [
+      [
+        {
+          symbol: "BTCUSDT",
+          orderId: 1001,
+          clientOrderId: "cid-1001",
+          side: "BUY",
+          type: "LIMIT",
+          status: "NEW",
+          price: "100500.00",
+          stopPrice: "0",
+          origQty: "0.020",
+          executedQty: "0.005",
+          avgPrice: "100400.00",
+          reduceOnly: false,
+          positionSide: "BOTH",
+          updateTime: 1710000000300,
+        },
+      ],
+      [],
+    ],
+    networkErrorQueryOrder: true,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+    order: {
+      missingOrderEvictionThreshold: 2,
+    },
+  });
+  const updates = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
 
   await client.registerAccount({
     accountId: "main-binance",
@@ -756,8 +892,8 @@ test("private order reconcile degrades and keeps snapshot when terminal backfill
       client.order.getOrderStatus("main-binance")?.runtimeStatus === "degraded"
         ? true
         : undefined,
-    200,
-    "order reconcile did not degrade",
+    1_000,
+    "order reconcile did not degrade on network backfill error",
   );
 
   expect(client.order.getOpenOrders("main-binance")).toHaveLength(1);
@@ -773,6 +909,14 @@ test("private order reconcile degrades and keeps snapshot when terminal backfill
     runtimeStatus: "degraded",
     reason: "http_failed",
   });
+  await expectNoMatchingEvent(
+    updates,
+    (event) => event.type !== "order.snapshot_replaced",
+    50,
+    "network backfill error unexpectedly published a terminal order event",
+  );
+
+  await updates.return?.();
 });
 
 test("successful order reconcile clears previous HTTP degraded status", async () => {
@@ -816,25 +960,7 @@ test("successful order reconcile clears previous HTTP degraded status", async ()
         },
       ],
     ],
-    queryOrderResponses: [
-      {},
-      {
-        symbol: "BTCUSDT",
-        orderId: 1001,
-        clientOrderId: "cid-1001",
-        side: "BUY",
-        type: "LIMIT",
-        status: "NEW",
-        price: "100500.00",
-        stopPrice: "0",
-        origQty: "0.020",
-        executedQty: "0.005",
-        avgPrice: "100400.00",
-        reduceOnly: false,
-        positionSide: "BOTH",
-        updateTime: 1710000000300,
-      },
-    ],
+    networkErrorQueryOrderCount: 3,
   });
   const client = createClient({
     account: {
@@ -863,7 +989,7 @@ test("successful order reconcile clears previous HTTP degraded status", async ()
       client.order.getOrderStatus("main-binance")?.runtimeStatus === "degraded"
         ? true
         : undefined,
-    200,
+    1_000,
     "order reconcile did not degrade",
   );
   await waitForCondition(
@@ -871,7 +997,7 @@ test("successful order reconcile clears previous HTTP degraded status", async ()
       client.order.getOrderStatus("main-binance")?.runtimeStatus === "healthy"
         ? true
         : undefined,
-    300,
+    1_000,
     "successful order reconcile did not clear degraded status",
   );
   expect(client.order.getOrderStatus("main-binance")).toMatchObject({
@@ -1328,6 +1454,306 @@ test("createOrder retains pending claim after timeout", async () => {
   ];
   expect(pending).toHaveLength(1);
   expect(pending[0]).toMatch(/^acex-/);
+});
+
+test("expired createOrder pending claim is cleared when the venue confirms it is missing", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [],
+    failQueryOrder: true,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+    order: {
+      pendingClaimTtlMs: 1,
+    },
+  });
+  const debugClient = client as unknown as ClientDebugView;
+  const errors = client.events.errors()[Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  setDebugCreateOrder(client, async () => {
+    throw new TransportError("Binance PAPI fetch timeout after 1ms", {
+      kind: "timeout",
+      attempts: 1,
+      retryable: true,
+      url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+    });
+  });
+
+  await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+      clientOrderId: "ttl-missing",
+    })
+    .catch(() => undefined);
+
+  expect(
+    debugClient.orderManager.records
+      .get("main-binance")
+      ?.pendingClientOrderIdIndex.has("ttl-missing"),
+  ).toBe(true);
+
+  const runtimeError = await nextMatchingEvent(
+    errors,
+    (event) =>
+      event.source === "order" &&
+      event.error.message.includes("not found on the venue"),
+    1_000,
+    "expired missing pending claim did not publish runtime error",
+  );
+  expect(runtimeError).toMatchObject({
+    source: "order",
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  expect(
+    debugClient.orderManager.records
+      .get("main-binance")
+      ?.pendingClientOrderIdIndex.has("ttl-missing"),
+  ).toBe(false);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      clientOrderId: "ttl-missing",
+    }),
+  ).toBeUndefined();
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "GET" &&
+        request.url.pathname === "/papi/v1/um/order" &&
+        request.url.searchParams.get("origClientOrderId") === "ttl-missing",
+    ),
+  ).toBe(true);
+
+  await errors.return?.();
+});
+
+test("expired createOrder pending claim is retained on venue lookup transport errors", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [],
+    networkErrorQueryOrder: true,
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+    order: {
+      pendingClaimTtlMs: 1,
+    },
+  });
+  const debugClient = client as unknown as ClientDebugView;
+  const errors = client.events.errors()[Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  setDebugCreateOrder(client, async () => {
+    throw new TransportError("Binance PAPI fetch timeout after 1ms", {
+      kind: "timeout",
+      attempts: 1,
+      retryable: true,
+      url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+    });
+  });
+
+  await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+      clientOrderId: "ttl-network",
+    })
+    .catch(() => undefined);
+
+  await waitForCondition(
+    () =>
+      client.order.getOrderStatus("main-binance")?.runtimeStatus === "degraded"
+        ? true
+        : undefined,
+    1_000,
+    "expired pending claim lookup transport error did not degrade order status",
+  );
+
+  expect(
+    debugClient.orderManager.records
+      .get("main-binance")
+      ?.pendingClientOrderIdIndex.has("ttl-network"),
+  ).toBe(true);
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "GET" &&
+        request.url.pathname === "/papi/v1/um/order" &&
+        request.url.searchParams.get("origClientOrderId") === "ttl-network",
+    ),
+  ).toBe(true);
+  await expectNoMatchingEvent(
+    errors,
+    (event) =>
+      event.source === "order" &&
+      event.error.message.includes("not found on the venue"),
+    50,
+    "transport error pending claim lookup was treated as confirmed missing",
+  );
+
+  await errors.return?.();
+});
+
+test("expired createOrder pending claim stores the venue order when it later exists", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    openOrders: [],
+    queryOrder: {
+      symbol: "BTCUSDT",
+      orderId: 2301,
+      clientOrderId: "ttl-filled",
+      side: "BUY",
+      type: "LIMIT",
+      status: "FILLED",
+      price: "101000.00",
+      stopPrice: "0",
+      origQty: "0.010",
+      executedQty: "0.010",
+      avgPrice: "100900.00",
+      reduceOnly: false,
+      positionSide: "BOTH",
+      updateTime: 1710000000800,
+    },
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      binance: {
+        privateReconcileIntervalMs: 5,
+      },
+    },
+    order: {
+      pendingClaimTtlMs: 1,
+    },
+  });
+  const debugClient = client as unknown as ClientDebugView;
+  const updates = client.order.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  await client.order.subscribeOrders({
+    accountId: "main-binance",
+  });
+
+  setDebugCreateOrder(client, async () => {
+    throw new TransportError("Binance PAPI fetch timeout after 1ms", {
+      kind: "timeout",
+      attempts: 1,
+      retryable: true,
+      url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+    });
+  });
+
+  await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+      clientOrderId: "ttl-filled",
+    })
+    .catch(() => undefined);
+
+  const filled = await nextMatchingEvent(
+    updates,
+    (event) =>
+      event.type === "order.filled" && event.snapshot.orderId === "2301",
+    300,
+    "expired pending claim was not stored after venue lookup",
+  );
+  expect(filled).toMatchObject({
+    type: "order.filled",
+    snapshot: {
+      orderId: "2301",
+      clientOrderId: "ttl-filled",
+      status: "filled",
+      filled: new BigNumber("0.010").toFixed(),
+    },
+  });
+  expect(
+    debugClient.orderManager.records
+      .get("main-binance")
+      ?.pendingClientOrderIdIndex.has("ttl-filled"),
+  ).toBe(false);
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "2301",
+    }),
+  ).toMatchObject({
+    status: "filled",
+    clientOrderId: "ttl-filled",
+  });
+  expect(
+    requests.some(
+      (request) =>
+        request.method === "GET" &&
+        request.url.pathname === "/papi/v1/um/order" &&
+        request.url.searchParams.get("origClientOrderId") === "ttl-filled",
+    ),
+  ).toBe(true);
+
+  await updates.return?.();
 });
 
 test("createOrder annotates orderState for transport failure outcomes", async () => {

@@ -1,6 +1,7 @@
 import type { OrderDataStatus, Venue } from "../../types/index.ts";
 
 export const DEFAULT_MAX_CLOSED_ORDERS_PER_SYMBOL = 500;
+export const DEFAULT_MISSING_ORDER_EVICTION_THRESHOLD = 3;
 
 export function cloneOrderStatus(status: OrderDataStatus): OrderDataStatus {
   return { ...status };
@@ -26,6 +27,14 @@ export function normalizeMaxClosedOrdersPerSymbol(
   return value !== undefined && Number.isInteger(value) && value > 0
     ? value
     : DEFAULT_MAX_CLOSED_ORDERS_PER_SYMBOL;
+}
+
+export function normalizeMissingOrderEvictionThreshold(
+  value: number | undefined,
+): number {
+  return value !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : DEFAULT_MISSING_ORDER_EVICTION_THRESHOLD;
 }
 
 export function successfulStatus(

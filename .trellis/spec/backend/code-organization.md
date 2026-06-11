@@ -323,3 +323,181 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 - private stream 复用逻辑收敛在 client 层，不再散落到两个 manager
 - 交易所细节封装在 adapter 中
 - 各层职责清晰，可独立演进
+
+## Scenario: 公开事件流的背压、conflation 与 status 发布门控
+
+### 1. Scope / Trigger
+
+- Trigger: 修改 `AsyncEventBus`、公开事件流方法签名、manager/runtime 的事件总线接线，或新增 market/account/order/health/error 事件流。
+- 目标: 每个订阅者都有明确背压语义；高频行情流默认 latest-wins，顺序敏感流默认有界 FIFO；status 事件只在可观察状态变化时发布。
+
+### 2. Signatures
+
+public 类型只暴露调用方可控制的选项：
+
+```ts
+export type EventStreamMode = "buffer" | "conflate";
+
+export interface EventStreamOptions {
+  mode?: EventStreamMode;
+  maxBuffer?: number;
+}
+
+export interface BufferedEventStreamOptions {
+  maxBuffer?: number;
+}
+```
+
+market 事件流使用 `EventStreamOptions`：
+
+```ts
+interface MarketEventStreams {
+  l1BookUpdates(filter?, options?: EventStreamOptions): AsyncIterable<L1BookUpdatedEvent>;
+  fundingRateUpdates(filter?, options?: EventStreamOptions): AsyncIterable<FundingRateUpdatedEvent>;
+  status(filter?, options?: EventStreamOptions): AsyncIterable<MarketStatusChangedEvent>;
+  all(filter?, options?: EventStreamOptions): AsyncIterable<MarketEvent>;
+}
+```
+
+account/order/client 事件流只使用 `BufferedEventStreamOptions`：
+
+```ts
+interface AccountEventStreams {
+  updates(filter?, options?: BufferedEventStreamOptions): AsyncIterable<AccountEvent>;
+  status(filter?, options?: BufferedEventStreamOptions): AsyncIterable<AccountStatusChangedEvent>;
+}
+
+interface OrderEventStreams {
+  updates(filter?, options?: BufferedEventStreamOptions): AsyncIterable<OrderEvent>;
+  status(filter?, options?: BufferedEventStreamOptions): AsyncIterable<OrderStatusChangedEvent>;
+}
+
+interface ClientEventStreams {
+  health(filter?, options?: BufferedEventStreamOptions): AsyncIterable<HealthEvent>;
+  errors(options?: BufferedEventStreamOptions): AsyncIterable<AcexInternalError>;
+}
+```
+
+内部 `AsyncEventBus` 可以接受 `conflateKey` 和 `onOverflow`，但这两个字段不能进入 public event stream options：
+
+```ts
+interface AsyncEventBusStreamOptions<T> {
+  mode?: "buffer" | "conflate";
+  maxBuffer?: number;
+  conflateKey?: (event: T) => string;
+  onOverflow?: (info: { maxBuffer: number }) => void;
+}
+```
+
+### 3. Contracts
+
+- 所有公开事件流方法保留第一参 `filter`，第二参为可选 `options`。
+- `buffer` 模式是有界 FIFO；默认 `maxBuffer = 10_000`，超过上限时 drop oldest 并通过注入的 `onOverflow` 上报。
+- `conflate` 模式按 key latest-wins；同 key 新事件替换旧事件，不同 key 保持首次插入顺序。
+- pending consumer 正在等待 `next()` 时，两种模式都直接 hand-off 当前事件，不先进队列。
+- `conflateKey` 是 SDK 内部实现参数：market manager 为公开 market 流注入 key，用户不能传入自定义 key。
+- market `l1BookUpdates()` 和 `fundingRateUpdates()` 默认 `mode: "conflate"`，key 为 `venue:symbol`。
+- market `all()` 默认 `mode: "buffer"`；调用方显式传 `mode: "conflate"` 时，key 为 `type:venue:symbol`，避免不同 market event type 相互覆盖。
+- market `status()` 默认 `mode: "buffer"`；调用方显式传 `mode: "conflate"` 时，key 为 `venue:symbol`。
+- order/account/health/errors 流只暴露 `BufferedEventStreamOptions`，类型层面不提供 `mode: "conflate"`，避免吞掉订单中间状态、账户增量或错误事件。
+- market status 发布以 `activity` / `ready` / `freshness` / `reason` 四字段作为去重 key；首次发布必须发生。
+- `lastReceivedAt` / `lastReadyAt` / `inactiveSince` / `ts` 不参与 status 发布比较；这些时间字段仍必须更新到 manager record，供 `getMarketStatus()` 读路径返回最新状态。
+
+### 4. Validation & Error Matrix
+
+| 场景 | 默认模式 / key | 允许 options | 不变量 |
+|---|---|---|---|
+| `market.events.l1BookUpdates()` | conflate，`venue:symbol` | `EventStreamOptions` | 慢消费者只保留每个市场最新 L1 |
+| `market.events.fundingRateUpdates()` | conflate，`venue:symbol` | `EventStreamOptions` | 慢消费者只保留每个市场最新 funding |
+| `market.events.all()` | buffer；显式 conflate key 为 `type:venue:symbol` | `EventStreamOptions` | 默认不吞混合事件；显式 conflate 不跨 type 覆盖 |
+| `market.events.status()` | buffer；显式 conflate key 为 `venue:symbol` | `EventStreamOptions` | 发布本身已按状态比较字段门控 |
+| `account.events.updates/status()` | buffer | `BufferedEventStreamOptions` | 不暴露 conflate |
+| `order.events.updates/status()` | buffer | `BufferedEventStreamOptions` | 不暴露 conflate |
+| `client.events.health()` | buffer | `BufferedEventStreamOptions` | overflow source 归 runtime |
+| `client.events.errors()` | buffer | `BufferedEventStreamOptions` | 溢出不再发布 overflow，防递归 |
+| market L1 tick 只更新时间戳字段 | 不适用 | 不适用 | 不重复发布 `market.status_changed` |
+| market `activity` / `ready` / `freshness` / `reason` 任一变化 | 不适用 | 不适用 | 必须发布新的 `market.status_changed` |
+
+### 5. Good / Base / Bad Cases
+
+#### Good
+
+```ts
+this.marketBus.stream(
+  (event): event is L1BookUpdatedEvent =>
+    event.type === "l1_book.updated" && matchesMarketFilter(event, filter),
+  this.createStreamOptions(
+    "market.l1BookUpdates",
+    options,
+    "conflate",
+    marketKey,
+  ),
+);
+```
+
+#### Base
+
+```ts
+this.orderBus.stream(matchesOrderEvent, {
+  maxBuffer: options?.maxBuffer,
+  onOverflow: this.createOverflowHandler("order.updates"),
+});
+```
+
+order 流保持 buffer 语义，因为中间状态和错误恢复信号都可能对调用方有意义。
+
+#### Bad
+
+```ts
+interface OrderEventStreams {
+  updates(filter?, options?: EventStreamOptions): AsyncIterable<OrderEvent>;
+}
+```
+
+问题：public 类型允许订单流 conflate，会静默吞掉部分订单状态转换。
+
+### 6. Tests Required
+
+修改事件流背压或 status 发布门控时至少执行：
+
+```bash
+bun run lint
+bun run type-check
+bun run test
+```
+
+断言重点：
+
+- conflate 流同 key 发布多次只消费最新事件；不同 key 各保留最新且按首次插入顺序消费。
+- buffer 流超过 `maxBuffer` 后 drop oldest，并且每个积压 episode 只触发一次 overflow。
+- pending consumer 在 buffer/conflate 模式下都直接收到当前事件。
+- market L1/funding 默认 conflate；显式 `{ mode: "buffer" }` 时保留每条事件。
+- public 类型导出 `EventStreamOptions` 和 `BufferedEventStreamOptions`，并经 `src/types/index.ts` 汇出。
+- market status 连续相同 `activity` / `ready` / `freshness` / `reason` 不重复发布，但 `getMarketStatus()` 仍能读到持续更新的时间字段。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+statusPublicationKey = {
+  ready: status.ready,
+  freshness: status.freshness,
+  lastReceivedAt: status.lastReceivedAt,
+};
+```
+
+问题：`lastReceivedAt` 高频变化会让每个 L1 tick 都重新发布 status，抵消去重。
+
+#### Correct
+
+```ts
+statusPublicationKey = {
+  activity: status.activity,
+  ready: status.ready,
+  freshness: status.freshness,
+  reason: status.reason,
+};
+```
+
+效果：status 事件只反映订阅活跃度、可用性、fresh/stale 与原因变化；时间戳仍留在 record 给读路径使用。

@@ -18,6 +18,7 @@ import type {
 import type {
   AccountCredentials,
   AcexInternalError,
+  BufferedEventStreamOptions,
   ClientStatus,
   CreateClientOptions,
   RegisterAccountInput,
@@ -54,8 +55,13 @@ export interface HealthEventFilter {
 }
 
 export interface ClientEventStreams {
-  health(filter?: HealthEventFilter): AsyncIterable<HealthEvent>;
-  errors(): AsyncIterable<AcexInternalError>;
+  health(
+    filter?: HealthEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<HealthEvent>;
+  errors(
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<AcexInternalError>;
 }
 
 export type VenueRuntimeStatus = "available" | "type_only" | "reserved";

@@ -14,6 +14,8 @@ import type {
   PrivateAccountDataConsumer,
   PrivateSubscriptionState,
 } from "../client/context.ts";
+import { AcexError } from "../errors.ts";
+import type { AsyncEventBusOverflowInfo } from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesAccountFilter } from "../internal/filters.ts";
@@ -125,23 +127,33 @@ export class AccountManagerImpl
     this.context = context;
 
     this.events = {
-      status: (filter) =>
-        this.accountStatusBus.stream((event) =>
-          matchesAccountFilter(
-            { accountId: event.accountId, venue: event.venue },
-            filter,
-          ),
+      status: (filter, options) =>
+        this.accountStatusBus.stream(
+          (event) =>
+            matchesAccountFilter(
+              { accountId: event.accountId, venue: event.venue },
+              filter,
+            ),
+          {
+            maxBuffer: options?.maxBuffer,
+            onOverflow: this.createOverflowHandler("account.status"),
+          },
         ),
-      updates: (filter) =>
-        this.accountBus.stream((event) =>
-          matchesAccountFilter(
-            {
-              accountId: event.accountId,
-              venue: event.venue,
-              symbol: "symbol" in event ? event.symbol : undefined,
-            },
-            filter,
-          ),
+      updates: (filter, options) =>
+        this.accountBus.stream(
+          (event) =>
+            matchesAccountFilter(
+              {
+                accountId: event.accountId,
+                venue: event.venue,
+                symbol: "symbol" in event ? event.symbol : undefined,
+              },
+              filter,
+            ),
+          {
+            maxBuffer: options?.maxBuffer,
+            onOverflow: this.createOverflowHandler("account.updates"),
+          },
         ),
     };
   }
@@ -871,5 +883,20 @@ export class AccountManagerImpl
 
     this.accountStatusBus.publish(event);
     this.context.publishHealthEvent(event);
+  }
+
+  private createOverflowHandler(
+    stream: string,
+  ): (info: AsyncEventBusOverflowInfo) => void {
+    return ({ maxBuffer }) => {
+      const error = new AcexError(
+        "EVENT_BUFFER_OVERFLOW",
+        `Event stream buffer overflow: ${stream}`,
+      );
+      this.context.publishRuntimeError("account", error, {
+        stream,
+        maxBuffer,
+      });
+    };
   }
 }

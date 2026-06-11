@@ -175,11 +175,24 @@ export interface StopOptions {
   timeoutMs?: number;
 }
 
+export type EventStreamMode = "buffer" | "conflate";
+
+export interface EventStreamOptions {
+  mode?: EventStreamMode;
+  maxBuffer?: number;
+}
+
+export interface BufferedEventStreamOptions {
+  maxBuffer?: number;
+}
+
 export interface AcexInternalError {
   source: "client" | "market" | "account" | "order" | "adapter" | "runtime";
   venue?: Venue;
   accountId?: string;
   symbol?: string;
+  stream?: string;
+  maxBuffer?: number;
   error: Error;
   ts: number;
 }

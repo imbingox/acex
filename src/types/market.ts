@@ -1,6 +1,11 @@
 import type BigNumber from "bignumber.js";
 import type { AcexError } from "../errors.ts";
-import type { MarketFreshness, SubscriptionActivity, Venue } from "./shared.ts";
+import type {
+  EventStreamOptions,
+  MarketFreshness,
+  SubscriptionActivity,
+  Venue,
+} from "./shared.ts";
 
 export type MarketType = "spot" | "swap" | "future";
 
@@ -170,12 +175,22 @@ export type MarketEvent =
   | MarketStatusChangedEvent;
 
 export interface MarketEventStreams {
-  l1BookUpdates(filter?: MarketEventFilter): AsyncIterable<L1BookUpdatedEvent>;
+  l1BookUpdates(
+    filter?: MarketEventFilter,
+    options?: EventStreamOptions,
+  ): AsyncIterable<L1BookUpdatedEvent>;
   fundingRateUpdates(
     filter?: MarketEventFilter,
+    options?: EventStreamOptions,
   ): AsyncIterable<FundingRateUpdatedEvent>;
-  status(filter?: MarketEventFilter): AsyncIterable<MarketStatusChangedEvent>;
-  all(filter?: MarketEventFilter): AsyncIterable<MarketEvent>;
+  status(
+    filter?: MarketEventFilter,
+    options?: EventStreamOptions,
+  ): AsyncIterable<MarketStatusChangedEvent>;
+  all(
+    filter?: MarketEventFilter,
+    options?: EventStreamOptions,
+  ): AsyncIterable<MarketEvent>;
 }
 
 export interface MarketManager {

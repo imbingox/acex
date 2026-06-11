@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "check 阶段的质量门禁与测试要求"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 EVENT_BUFFER_OVERFLOW 错误语义与 spec 一致"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "minor changeset 要求（公开 API 新增 + L1 默认行为变更）"}

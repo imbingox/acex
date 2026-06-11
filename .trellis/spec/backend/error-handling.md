@@ -155,3 +155,135 @@ return new AcexError(
 ```
 
 效果：保留 error event 语义，同时让直接调用命令的 SDK 用户在 `catch` 中读取 `error.details.venueError?.message`。
+
+## Scenario: 事件流 buffer overflow 通过 runtime error 事件上报且防递归
+
+### 1. Scope / Trigger
+
+- Trigger: 修改 `AsyncEventBus.stream()` 的 buffer 上限、事件流订阅 options、manager/runtime 的事件总线接线，或新增公开事件流。
+- 目标: 慢消费者积压时内存保持有界，同时通过稳定 `AcexErrorCode.EVENT_BUFFER_OVERFLOW` 给观测侧一个明确、非递归的丢事件信号。
+
+### 2. Signatures
+
+公开错误码必须包含：
+
+```ts
+export type AcexErrorCode =
+  | "EVENT_BUFFER_OVERFLOW"
+  // ...
+```
+
+overflow 通过 `client.events.errors()` 暴露为 runtime error event；`stream` / `maxBuffer` 是事件 metadata，不是 `AcexErrorDetails` 字段：
+
+```ts
+export interface AcexInternalError {
+  source: "client" | "market" | "account" | "order" | "adapter" | "runtime";
+  stream?: string;
+  maxBuffer?: number;
+  error: Error; // AcexError("EVENT_BUFFER_OVERFLOW", ...)
+  ts: number;
+}
+```
+
+### 3. Contracts
+
+- 只有 `buffer` 模式订阅者积压超过 `maxBuffer`、并丢弃最旧事件腾位时，才发布 `EVENT_BUFFER_OVERFLOW`。
+- 默认 buffer 上限为 `10_000`；调用方显式传 `maxBuffer` 时，overflow metadata 必须回显实际上限。
+- 每个积压 episode 只发布一次 overflow；队列排空后重新武装，下一次重新积压并溢出时可以再次发布。
+- `conflate` 模式天然按 key 有界，不使用 `maxBuffer`，也不触发 overflow。
+- `errors()` 自身的 buffer 溢出只丢弃最旧 error event，不再向 `errorBus` 发布新的 overflow，避免递归。
+- `AsyncEventBus` 是 Layer 0 原语，只调用注入的 `onOverflow`；不得直接 import runtime、manager、`AcexError` 或 `errorBus`。
+
+### 4. Validation & Error Matrix
+
+| 场景 | `AcexError` / error event 行为 | `source` | metadata |
+|---|---|---|---|
+| market 事件流（`all` / `l1BookUpdates` / `fundingRateUpdates` / `status`）buffer 积压超过 `maxBuffer` | 发布一次 `AcexError("EVENT_BUFFER_OVERFLOW", "Event stream buffer overflow: <stream>")` | `"market"` | `stream` + `maxBuffer` |
+| account 事件流（`updates` / `status`）buffer 积压超过 `maxBuffer` | 同上 | `"account"` | `stream` + `maxBuffer` |
+| order 事件流（`updates` / `status`）buffer 积压超过 `maxBuffer` | 同上 | `"order"` | `stream` + `maxBuffer` |
+| health 事件流 buffer 积压超过 `maxBuffer` | 同上 | `"runtime"` | `stream` + `maxBuffer` |
+| errors 事件流 buffer 积压超过 `maxBuffer` | 只 drop oldest，不发布新的 overflow error | 不适用 | 不适用 |
+| 同一订阅者已处于积压 episode 且继续溢出 | 不重复发布 overflow | 保持首次 source | 保持首次 metadata 形态 |
+| 订阅者队列排空后再次溢出 | 再发布一次 overflow | 按所在流决定 | `stream` + `maxBuffer` |
+
+### 5. Good / Base / Bad Cases
+
+#### Good
+
+```ts
+this.context.publishRuntimeError("market", error, {
+  stream: "market.l1BookUpdates",
+  maxBuffer,
+});
+```
+
+#### Base
+
+```ts
+return this.errorBus.stream(() => true, {
+  maxBuffer: options?.maxBuffer,
+});
+```
+
+`errors()` 保持有界 buffer，但不传 `onOverflow`，避免 overflow 事件产生 overflow 事件。
+
+#### Bad
+
+```ts
+this.errorBus.stream(() => true, {
+  maxBuffer,
+  onOverflow: this.createOverflowHandler("client.errors"),
+});
+```
+
+问题：`errors()` 自身溢出会递归发布新的 error event，慢错误消费者会放大故障。
+
+### 6. Tests Required
+
+修改 overflow 行为时至少执行：
+
+```bash
+bun run lint
+bun run type-check
+bun run test
+```
+
+断言重点：
+
+- buffer 超过 `maxBuffer` 后 drop oldest，而不是无限增长或关闭流。
+- 同一积压 episode 只触发一次 `onOverflow`；队列排空后再次溢出会再次触发。
+- pending consumer 等待时直接 hand-off，不进入 buffer，也不触发 overflow。
+- manager/runtime overflow handler 传入正确 `source`、`stream` 和 `maxBuffer`。
+- `errors()` 溢出不发布新的 `EVENT_BUFFER_OVERFLOW`。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+// src/internal/async-event-bus.ts
+errorBus.publish(new AcexError("EVENT_BUFFER_OVERFLOW", message));
+```
+
+问题：
+
+- Layer 0 依赖上层 runtime 事件总线
+- `errors()` 难以防递归
+- source / stream metadata 会被基础设施层猜测
+
+#### Correct
+
+```ts
+// src/internal/async-event-bus.ts
+options.onOverflow?.({ maxBuffer });
+```
+
+```ts
+// src/managers/market-manager.ts
+this.context.publishRuntimeError("market", error, {
+  stream,
+  maxBuffer,
+});
+```
+
+效果：基础设施只报告溢出事实，manager/runtime 按所在事件流补齐错误分类和 metadata。

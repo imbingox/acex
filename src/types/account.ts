@@ -1,4 +1,5 @@
 import type {
+  BufferedEventStreamOptions,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
   SubscriptionActivity,
@@ -158,8 +159,14 @@ export type AccountEvent =
   | AccountSnapshotReplacedEvent;
 
 export interface AccountEventStreams {
-  updates(filter?: AccountEventFilter): AsyncIterable<AccountEvent>;
-  status(filter?: AccountEventFilter): AsyncIterable<AccountStatusChangedEvent>;
+  updates(
+    filter?: AccountEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<AccountEvent>;
+  status(
+    filter?: AccountEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<AccountStatusChangedEvent>;
 }
 
 export interface AccountManager {

@@ -17,6 +17,7 @@ import {
   buildAcexErrorDetails,
   formatAcexErrorMessage,
 } from "../errors.ts";
+import type { AsyncEventBusOverflowInfo } from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
 import { isTransportError } from "../internal/http-client.ts";
@@ -116,23 +117,33 @@ export class OrderManagerImpl
     );
 
     this.events = {
-      status: (filter) =>
-        this.orderStatusBus.stream((event) =>
-          matchesOrderFilter(
-            { accountId: event.accountId, venue: event.venue },
-            filter,
-          ),
+      status: (filter, options) =>
+        this.orderStatusBus.stream(
+          (event) =>
+            matchesOrderFilter(
+              { accountId: event.accountId, venue: event.venue },
+              filter,
+            ),
+          {
+            maxBuffer: options?.maxBuffer,
+            onOverflow: this.createOverflowHandler("order.status"),
+          },
         ),
-      updates: (filter) =>
-        this.orderBus.stream((event) =>
-          matchesOrderFilter(
-            {
-              accountId: event.accountId,
-              venue: event.venue,
-              symbol: "symbol" in event ? event.symbol : undefined,
-            },
-            filter,
-          ),
+      updates: (filter, options) =>
+        this.orderBus.stream(
+          (event) =>
+            matchesOrderFilter(
+              {
+                accountId: event.accountId,
+                venue: event.venue,
+                symbol: "symbol" in event ? event.symbol : undefined,
+              },
+              filter,
+            ),
+          {
+            maxBuffer: options?.maxBuffer,
+            onOverflow: this.createOverflowHandler("order.updates"),
+          },
         ),
     };
   }
@@ -1268,6 +1279,21 @@ export class OrderManagerImpl
         ...details.venueError,
         reason,
       },
+    };
+  }
+
+  private createOverflowHandler(
+    stream: string,
+  ): (info: AsyncEventBusOverflowInfo) => void {
+    return ({ maxBuffer }) => {
+      const error = new AcexError(
+        "EVENT_BUFFER_OVERFLOW",
+        `Event stream buffer overflow: ${stream}`,
+      );
+      this.context.publishRuntimeError("order", error, {
+        stream,
+        maxBuffer,
+      });
     };
   }
 }

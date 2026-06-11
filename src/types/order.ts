@@ -1,5 +1,6 @@
 import type { PositionSide } from "./account.ts";
 import type {
+  BufferedEventStreamOptions,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
   SubscriptionActivity,
@@ -160,8 +161,14 @@ export type OrderEvent =
   | OrderSnapshotReplacedEvent;
 
 export interface OrderEventStreams {
-  updates(filter?: OrderEventFilter): AsyncIterable<OrderEvent>;
-  status(filter?: OrderEventFilter): AsyncIterable<OrderStatusChangedEvent>;
+  updates(
+    filter?: OrderEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<OrderEvent>;
+  status(
+    filter?: OrderEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<OrderStatusChangedEvent>;
 }
 
 export interface OrderManager {

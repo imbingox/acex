@@ -17,6 +17,7 @@ import {
   type BinanceMarketDefinition,
   loadBinanceMarkets,
 } from "./market-catalog.ts";
+import { registerBinanceRateLimitTopology } from "./rate-limit-topology.ts";
 import { fetchBinanceServerTime } from "./server-time.ts";
 import {
   type BinanceStreamDescriptor,
@@ -61,7 +62,9 @@ export class BinanceMarketAdapter implements MarketAdapter {
     private readonly options: {
       readonly rateLimiter?: RateLimiter;
     } = {},
-  ) {}
+  ) {
+    registerBinanceRateLimitTopology(this.options.rateLimiter);
+  }
 
   async loadMarkets(): Promise<MarketDefinition[]> {
     const markets = await loadBinanceMarkets(fetch, {

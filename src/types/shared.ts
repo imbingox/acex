@@ -42,14 +42,82 @@ export interface RateLimitUsage {
   orderCount?: Record<string, number>;
 }
 
+export type RateLimitPriority = "normal" | "cancel" | "risk" | (string & {});
+
+export type RateLimitBucketKind = "request_weight" | "orders" | (string & {});
+
+export type RateLimitScopeDimension = "venue" | "account" | "endpoint";
+
+export interface RateLimitBucketDescriptor {
+  id: string;
+  kind: RateLimitBucketKind;
+  limit: number;
+  intervalMs: number;
+  scope: readonly RateLimitScopeDimension[];
+  utilizationTarget?: number;
+}
+
+export interface RateLimitCost {
+  bucketId: string;
+  cost: number;
+}
+
+export interface RateLimitPlan {
+  id: string;
+  costs: readonly RateLimitCost[];
+  priority?: RateLimitPriority;
+}
+
+export interface RateLimitTopology {
+  id: string;
+  buckets: readonly RateLimitBucketDescriptor[];
+  plans: readonly RateLimitPlan[];
+}
+
+export interface RateLimitReservation {
+  readonly __opaqueRateLimitReservation?: never;
+}
+
+export interface RateLimitTopologyRegistry {
+  registerRateLimitTopology(topology: RateLimitTopology): void;
+}
+
+// biome-ignore lint/suspicious/noConfusingVoidType: Existing custom limiters return void; the SPI must keep that source-compatible.
+export type RateLimitNoReservation = void;
+
+export type RateLimitBeforeRequestResult =
+  | Promise<RateLimitReservation | RateLimitNoReservation>
+  | RateLimitReservation
+  | RateLimitNoReservation;
+
+export interface RateLimitBucketSnapshot {
+  bucketId: string;
+  kind: RateLimitBucketKind;
+  limit: number;
+  intervalMs: number;
+  utilizationTarget?: number;
+  used?: number;
+  blockedUntil?: number;
+  retryAfterMs?: number;
+  state: "ok" | "rate_limited" | "banned";
+  updatedAt?: number;
+}
+
+export interface RateLimitOptions {
+  utilizationTarget?: number;
+}
+
 export interface RateLimitRequestContext {
   scope: RateLimitScope;
+  planId?: string;
+  priority?: RateLimitPriority;
 }
 
 export interface RateLimitResponseContext {
   status: number;
   headers?: Headers;
   usage?: RateLimitUsage;
+  reservation?: RateLimitReservation;
 }
 
 export interface RateLimitTransportErrorContext {
@@ -57,6 +125,7 @@ export interface RateLimitTransportErrorContext {
   headers?: Headers;
   retryAfterMs?: number;
   usage?: RateLimitUsage;
+  reservation?: RateLimitReservation;
 }
 
 export interface RateLimitSnapshot {
@@ -66,10 +135,11 @@ export interface RateLimitSnapshot {
   retryAfterMs?: number;
   state: "ok" | "rate_limited" | "banned";
   updatedAt?: number;
+  buckets?: RateLimitBucketSnapshot[];
 }
 
 export interface RateLimiter {
-  beforeRequest(ctx: RateLimitRequestContext): Promise<void> | void;
+  beforeRequest(ctx: RateLimitRequestContext): RateLimitBeforeRequestResult;
   afterResponse(
     ctx: RateLimitRequestContext,
     response: RateLimitResponseContext,
@@ -116,6 +186,7 @@ export interface CreateClientOptions {
   /** Request/signing clock; local receivedAt/freshness clocks stay independent. */
   clock?: TimeProvider;
   rateLimiter?: RateLimiter;
+  rateLimit?: RateLimitOptions;
   logger?: Logger;
   logLevel?: LogLevel;
   market?: MarketRuntimeOptions;

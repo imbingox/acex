@@ -127,7 +127,11 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
 
-    const rateLimiter = options.rateLimiter ?? new ReactiveRateLimiter();
+    const rateLimiter =
+      options.rateLimiter ??
+      new ReactiveRateLimiter({
+        utilizationTarget: options.rateLimit?.utilizationTarget,
+      });
     const marketAdapter = new BinanceMarketAdapter({ rateLimiter });
     this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
     const privateAdapters = [

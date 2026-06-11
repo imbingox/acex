@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "可插拔限流器 seam（RateLimiter，reactive 默认）+ 共享 HTTP 传输客户端契约——本任务扩展 RateLimiter SPI 与 adapter↔limiter 边界的权威约定"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "5 层架构：rate-limiter 属 Layer 0 internal/「只放领域无关原语」、Binance 权重表属 Layer 1 adapters/——R4 解耦不变量的依据"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "SPI 类型扩展放 src/types/shared.ts、显式返回类型与导出约定（RateLimitBucketDescriptor/RateLimitCost/priority 等新公开类型）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "429/418 → TransportError、details.transport.kind=rate_limited 归一、runtime error 发布规则——onTransportError 落对桶层级时遵循"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "cancelOrder/cancelAllOrders 命令 contract——识别撤单调用路径用于 priority:\"cancel\" 标注与 reserve 通道"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "公开 SPI 变更需 changeset（minor）；定级与发布门禁约定"}
+{"file": ".trellis/tasks/06-11-p1-b3-scope/research/binance-papi-rate-limits.md", "reason": "官方核实的 PAPI 桶拓扑/上限/各 endpoint 权重（IP weight 6000、order 1200、下单 IP weight=0、fapi/dapi 分主机桶、10s/1d 未核实）——adapter 权重表的事实源"}
+{"file": ".trellis/tasks/06-11-p1-b3-scope/research/proactive-throttle-patterns.md", "reason": "选定方案依据：固定窗口+header 回填、Approach B plan 注册、cancel reserve，及 SPI 扩展形状草案"}

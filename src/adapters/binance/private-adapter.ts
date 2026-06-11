@@ -11,6 +11,7 @@ import type {
   AccountCredentials,
   PositionSide,
   RateLimiter,
+  RateLimitPriority,
   RateLimitScope,
   TimeProvider,
   VenueAccountCapabilities,
@@ -35,6 +36,10 @@ import type {
 } from "../types.ts";
 import { normalizeBinanceErrorCode } from "./error-codes.ts";
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
+import {
+  getBinancePapiRateLimitPlanId,
+  registerBinanceRateLimitTopology,
+} from "./rate-limit-topology.ts";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type SignedRequestMethod = "GET" | "POST" | "DELETE";
@@ -674,7 +679,9 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       readonly signingClock?: TimeProvider;
       readonly rateLimiter?: RateLimiter;
     } = {},
-  ) {}
+  ) {
+    registerBinanceRateLimitTopology(this.options.rateLimiter);
+  }
 
   normalizeVenueErrorCode(code: string) {
     return normalizeBinanceErrorCode(code);
@@ -870,6 +877,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         origClientOrderId: request.clientOrderId,
       },
       NO_RETRY_POLICY,
+      "cancel",
     );
 
     const mapped = mapOpenOrder(response, receivedAt);
@@ -897,6 +905,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         symbol,
       },
       SAFE_READ_RETRY_POLICY,
+      "cancel",
     );
 
     // Venue responds {code,msg}; returned updates are synthesized from the
@@ -911,6 +920,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         symbol,
       },
       NO_RETRY_POLICY,
+      "cancel",
     );
 
     if (response.code !== undefined && `${response.code}` !== "200") {
@@ -1216,10 +1226,18 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     accountOptions?: Record<string, unknown>,
     queryParams?: Record<string, string | undefined>,
     retryPolicy?: HttpRetryPolicy,
+    priority?: RateLimitPriority,
   ): Promise<T> {
     const { apiKey, secret } = requirePrivateCredentials(credentials);
     const scope = this.rateLimitScope(method, path, accountOptions);
-    await this.options.rateLimiter?.beforeRequest({ scope });
+    const requestContext = {
+      scope,
+      planId: getBinancePapiRateLimitPlanId(method, path, queryParams),
+      priority,
+    };
+    const reservation =
+      (await this.options.rateLimiter?.beforeRequest(requestContext)) ??
+      undefined;
 
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(queryParams ?? {})) {
@@ -1258,27 +1276,23 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         messages: getBinancePapiHttpMessages(timeoutMs),
       });
 
-      await this.options.rateLimiter?.afterResponse(
-        { scope },
-        {
-          status: response.status,
-          headers: response.headers,
-          usage: parseBinanceRateLimitUsage(response.headers),
-        },
-      );
+      await this.options.rateLimiter?.afterResponse(requestContext, {
+        status: response.status,
+        headers: response.headers,
+        usage: parseBinanceRateLimitUsage(response.headers),
+        reservation,
+      });
 
       return response.body;
     } catch (error) {
       if (isTransportError(error)) {
-        await this.options.rateLimiter?.onTransportError(
-          { scope },
-          {
-            status: error.status,
-            headers: error.headers,
-            retryAfterMs: error.retryAfterMs,
-            usage: parseBinanceRateLimitUsage(error.headers),
-          },
-        );
+        await this.options.rateLimiter?.onTransportError(requestContext, {
+          status: error.status,
+          headers: error.headers,
+          retryAfterMs: error.retryAfterMs,
+          usage: parseBinanceRateLimitUsage(error.headers),
+          reservation,
+        });
       }
 
       throw error;
@@ -1344,7 +1358,13 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       "/papi/v1/listenKey",
       accountOptions,
     );
-    await this.options.rateLimiter?.beforeRequest({ scope });
+    const requestContext = {
+      scope,
+      planId: getBinancePapiRateLimitPlanId(method, "/papi/v1/listenKey"),
+    };
+    const reservation =
+      (await this.options.rateLimiter?.beforeRequest(requestContext)) ??
+      undefined;
 
     const params = new URLSearchParams();
     if (listenKey) {
@@ -1371,27 +1391,23 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         messages: getBinancePapiHttpMessages(timeoutMs),
       });
 
-      await this.options.rateLimiter?.afterResponse(
-        { scope },
-        {
-          status: response.status,
-          headers: response.headers,
-          usage: parseBinanceRateLimitUsage(response.headers),
-        },
-      );
+      await this.options.rateLimiter?.afterResponse(requestContext, {
+        status: response.status,
+        headers: response.headers,
+        usage: parseBinanceRateLimitUsage(response.headers),
+        reservation,
+      });
 
       return response.body;
     } catch (error) {
       if (isTransportError(error)) {
-        await this.options.rateLimiter?.onTransportError(
-          { scope },
-          {
-            status: error.status,
-            headers: error.headers,
-            retryAfterMs: error.retryAfterMs,
-            usage: parseBinanceRateLimitUsage(error.headers),
-          },
-        );
+        await this.options.rateLimiter?.onTransportError(requestContext, {
+          status: error.status,
+          headers: error.headers,
+          retryAfterMs: error.retryAfterMs,
+          usage: parseBinanceRateLimitUsage(error.headers),
+          reservation,
+        });
       }
 
       throw error;

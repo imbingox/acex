@@ -9,6 +9,7 @@ import type {
   VenueServerTime,
 } from "../../types/index.ts";
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
+import { getBinanceServerTimeRateLimitPlanId } from "./rate-limit-topology.ts";
 
 type FetchLike = (
   input: string | URL | Request,
@@ -43,8 +44,13 @@ export async function fetchBinanceServerTime(
     venue: "binance",
     endpointKey: "GET /fapi/v1/time",
   };
+  const requestContext = {
+    scope,
+    planId: getBinanceServerTimeRateLimitPlanId(),
+  };
 
-  await options.rateLimiter?.beforeRequest({ scope });
+  const reservation =
+    (await options.rateLimiter?.beforeRequest(requestContext)) ?? undefined;
 
   const requestSentAt = now();
   const startMono = monotonicNow();
@@ -65,14 +71,12 @@ export async function fetchBinanceServerTime(
     const responseReceivedAt = now();
     const endMono = monotonicNow();
 
-    await options.rateLimiter?.afterResponse(
-      { scope },
-      {
-        status: response.status,
-        headers: response.headers,
-        usage: parseBinanceRateLimitUsage(response.headers),
-      },
-    );
+    await options.rateLimiter?.afterResponse(requestContext, {
+      status: response.status,
+      headers: response.headers,
+      usage: parseBinanceRateLimitUsage(response.headers),
+      reservation,
+    });
 
     const { serverTime } = response.body;
     if (typeof serverTime !== "number" || !Number.isFinite(serverTime)) {
@@ -90,15 +94,13 @@ export async function fetchBinanceServerTime(
     };
   } catch (error) {
     if (isTransportError(error)) {
-      await options.rateLimiter?.onTransportError(
-        { scope },
-        {
-          status: error.status,
-          headers: error.headers,
-          retryAfterMs: error.retryAfterMs,
-          usage: parseBinanceRateLimitUsage(error.headers),
-        },
-      );
+      await options.rateLimiter?.onTransportError(requestContext, {
+        status: error.status,
+        headers: error.headers,
+        retryAfterMs: error.retryAfterMs,
+        usage: parseBinanceRateLimitUsage(error.headers),
+        reservation,
+      });
     }
 
     throw error;

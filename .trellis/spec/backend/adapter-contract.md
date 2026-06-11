@@ -553,15 +553,16 @@ LISTEN_KEY_KEEPALIVE_RETRY_POLICY idempotent:true,  maxAttempts:3   listenKey PU
 
 #### 3.17 限流器 seam（RateLimiter）
 
-REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默认实现 `ReactiveRateLimiter`（`src/internal/rate-limiter.ts`，Layer 0、venue-agnostic）。经 public `CreateClientOptions.rateLimiter?` 注入（默认 reactive），与 `clock?` 同范式。
+REST 限流由可插拔的 `RateLimiter`（`src/types/*`，public）收口，默认实现 `ReactiveRateLimiter`（`src/internal/rate-limiter.ts`，Layer 0、venue-agnostic；当前继承 `BudgetRateLimiter` 兼容旧名字）。经 public `CreateClientOptions.rateLimiter?` 注入（默认 reactive），与 `clock?` 同范式。
 
-- **hook 形**：`beforeRequest(ctx)` / `afterResponse(ctx, response)` / `onTransportError(ctx, error)` / `getSnapshot(scope)`（可同步或返回 `Promise`）。adapter 在每次 REST 调用前后调用这些 hook。
+- **hook 形**：`beforeRequest(ctx)` / `afterResponse(ctx, response)` / `onTransportError(ctx, error)` / `getSnapshot(scope)`（可同步或返回 `Promise`）。adapter 在每次 REST 调用前后调用这些 hook。`beforeRequest()` 可返回 opaque `RateLimitReservation`，adapter 必须原样传给 `afterResponse()` / `onTransportError()`；返回 `void` 或 `Promise<void>` 的旧 custom limiter 仍是合法实现，**不得把 public 返回类型收窄成只允许 `undefined`**。
 - **scope 粒度**：`{ venue, accountId?, endpointKey }`，`endpointKey` 取 `"<METHOD> <path>"`。weight 是 IP 维度、order-count 另算 —— `RateLimitUsage` 分 `weight` / `orderCount` 两轨，按 interval key（如 `"1m"`）存。
-- **venue-agnostic 核 + venue 层解析**：通用核**不得**出现任何交易所 header 常量；Binance 的 `X-MBX-USED-WEIGHT-*` / `X-MBX-ORDER-COUNT-*` 解析只在 venue 层（`src/adapters/binance/rate-limit.ts`，用 `Headers.get()` 大小写不敏感、保留未知 interval），解析出的 `RateLimitUsage` 再喂给核。
-- **默认 reactive 行为**：happy path **不主动 throttle**（行为与无 limiter 等价）；只在收到 `429`/`418` 后按 `Retry-After`（已解析为 `retryAfterMs`）设 `blockedUntil`，下一次同 scope 请求在 `beforeRequest` 等待至 `blockedUntil`。`429`⇒`rate_limited`、`418`⇒`banned`（无 `Retry-After` 时 ban 默认更长）。proactive 权重桶留作同 seam 下 opt-in，不在默认实现内。
+- **plan/topology 扩展**：adapter 可以在构造期 feature-detect optional `RateLimitTopologyRegistry.registerRateLimitTopology(topology)` 并注册 venue-owned bucket/plan 表；注册缺失时必须无事发生。相同 descriptor 重复注册必须幂等，冲突 descriptor 必须拒绝覆盖。请求上下文可带 `planId` 和 `priority`，但 `planId` 必须是 adapter 选择的语义 id，不要把它固定等同于 `endpointKey`（同 endpoint 可能有成本变体）。
+- **venue-agnostic 核 + venue 层解析/拓扑**：通用核**不得**出现任何交易所 header 常量、endpoint 路径、权重数字或 bucket id。Binance 的 `X-MBX-USED-WEIGHT-*` / `X-MBX-ORDER-COUNT-*` 解析只在 venue 层（`src/adapters/binance/rate-limit.ts`，用 `Headers.get()` 大小写不敏感、保留未知 interval），Binance bucket/plan/cost 表只放在 `src/adapters/binance/`。
+- **默认阶段 1 reactive 行为**：happy path **不主动 throttle**（行为与无 limiter 等价）；只在收到 `429`/`418` 后按 `Retry-After`（已解析为 `retryAfterMs`）设 block。未注册 topology / unknown plan / 旧 limiter fallback 到当前 endpoint scope；known plan 下 `418` block request-weight bucket，`429` 若单桶可判断则 block 单桶，多桶或不可辨时保守 block plan 涉及的桶。proactive admission、固定窗口预扣、cancel reserve 和 jitter 属后续阶段，不得混入阶段 1。
 - **签名时序**：Binance 签名请求的 `beforeRequest` 退避必须在生成签名 `timestamp` **之前**，避免退避 sleep 导致签名时间过旧。
 - **不构造 AcexError**：限流失败仍是 typed transport error（`kind:"rate_limited"`）冒泡；coordinator 经 `transportReason()` 映射到 runtime reason `"rate_limited"`（§3.6）。**非幂等请求遇 429/418 不自动重放**，只暴露状态 + retry metadata。
-- **公共面**：`RateLimiter` 接口与 `RateLimit*` 类型为 public 契约；usage snapshot 不挂上 `AcexClient` public API（仅作 seam 类型）。HTTP 客户端本身仍不公共可替换。
+- **公共面**：`RateLimiter` 接口与 `RateLimit*` 类型为 public 契约；bucket-level snapshot 可以挂在 `RateLimitSnapshot.buckets`，但不挂上 `AcexClient` public API（仅作 seam 类型）。HTTP 客户端本身仍不公共可替换。
 
 ### 4. Validation & Error Matrix
 

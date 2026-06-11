@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "验收 R4：core 限流器零 venue 常量，Binance 权重表/拓扑只在 adapters/，层级依赖方向不破"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "验收 RateLimiter seam 契约与共享 HTTP 传输复用未被破坏，注册入口对自定义 limiter 向后兼容"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "验收新公开类型定义位置/导出正确、无宽化与循环引用"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验收 429/418 处理与 rate_limited 归一、runtime error 发布符合 public AcexError contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "验收测试分层与命名：unit 覆盖固定窗口/分桶/reserve、集成覆盖 429 全 IP 桶阻塞与 per-account 隔离"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "验收 changeset 存在且定级正确（公开 SPI 变更=minor）"}
+{"file": ".trellis/tasks/06-11-p1-b3-scope/research/binance-papi-rate-limits.md", "reason": "比对实现常量是否与官方核实值一致，未把 UNVERIFIED 的 10s/1d order 桶当事实硬编码"}
+{"file": ".trellis/tasks/06-11-p1-b3-scope/research/proactive-throttle-patterns.md", "reason": "比对实现是否落在选定方案（固定窗口+header 回填 / Approach B / reserve），而非退回单标量或纯被动"}

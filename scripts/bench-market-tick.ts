@@ -150,7 +150,10 @@ function createContext(nowRef: { value: number }): ClientContext {
 }
 
 function maybeGc(): void {
-  if (typeof Bun.gc === "function") {
+  // Guard the `Bun` global itself: `typeof Bun.gc` would evaluate `Bun` first
+  // and throw ReferenceError under non-Bun runtimes (Node, etc.). This bench is
+  // Bun-only, but the guard keeps it a safe no-op anywhere.
+  if (typeof Bun !== "undefined" && typeof Bun.gc === "function") {
     Bun.gc(true);
   }
 }

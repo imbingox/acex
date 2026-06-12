@@ -1,6 +1,6 @@
 type TimerHandle = ReturnType<typeof setTimeout>;
 
-const DEFAULT_RECONNECT_JITTER_RATIO = 0.2;
+export const DEFAULT_RECONNECT_JITTER_RATIO = 0.2;
 
 export type WebSocketFactory = (url: string) => WebSocket;
 
@@ -13,7 +13,21 @@ export interface ManagedWebSocketReconnectOptions {
   initialDelayMs: number;
   maxDelayMs: number;
   backoffMultiplier?: number;
+  /**
+   * Fraction of the backoff delay applied as symmetric randomized jitter,
+   * expected in the range `[0, 1]`. Each reconnect waits
+   * `base ± base * jitterRatio` (uniformly distributed), so independent sockets
+   * desynchronize instead of reconnecting in lockstep. Defaults to
+   * {@link DEFAULT_RECONNECT_JITTER_RATIO} (`0.2` → ±20%). Values outside
+   * `[0, 1]` are not validated here; the resulting delay is still clamped to
+   * `[0, maxDelayMs]`.
+   */
   jitterRatio?: number;
+  /**
+   * Injectable RNG used to compute jitter. Must return a value in `[0, 1)`
+   * (same contract as `Math.random`, the default). Inject a deterministic
+   * source in tests to make reconnect delays reproducible.
+   */
   random?: () => number;
   reconnectWithoutMessages?: boolean;
 }

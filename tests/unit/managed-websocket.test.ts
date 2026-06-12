@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import { createManagedWebSocket } from "../../src/internal/managed-websocket.ts";
+import {
+  createManagedWebSocket,
+  DEFAULT_RECONNECT_JITTER_RATIO,
+} from "../../src/internal/managed-websocket.ts";
 
 class FakeWebSocket extends EventTarget {
   static readonly CONNECTING = 0;
@@ -208,4 +211,50 @@ test("managed websocket reconnect backoff applies deterministic jitter and clamp
     maxDelayMs: 110,
     expectedDelayMs: 110,
   });
+});
+
+test("managed websocket reconnect falls back to Math.random jitter when no RNG is injected", async () => {
+  const clock = new FakeClock();
+  const sockets: FakeWebSocket[] = [];
+  const session = createManagedWebSocket<{ value: string }>({
+    url: "wss://example.test/ws",
+    initialMessageTimeoutMs: 1_000,
+    parseMessage(data) {
+      return JSON.parse(data) as { value: string };
+    },
+    onMessage() {},
+    onUnexpectedClose() {},
+    createWebSocket(url) {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+    // Neither random nor jitterRatio injected: exercises the
+    // `reconnect?.random ?? Math.random` fallback and DEFAULT_RECONNECT_JITTER_RATIO.
+    reconnect: {
+      initialDelayMs: 100,
+      maxDelayMs: 1_000,
+    },
+    now: clock.now,
+    setTimer: clock.setTimer as unknown as typeof setTimeout,
+    clearTimer: clock.clearTimer as unknown as typeof clearTimeout,
+  });
+
+  sockets[0]?.emitJson({ value: "ready" });
+  await session.ready;
+  sockets[0]?.disconnect();
+
+  // base = 100, jitter = ±DEFAULT_RECONNECT_JITTER_RATIO of base, so the delay
+  // is in [80, 120] for ANY Math.random() value — the bracket below holds
+  // deterministically (no flakiness despite the real RNG).
+  const lowerBound = Math.round(100 * (1 - DEFAULT_RECONNECT_JITTER_RATIO));
+  const upperBound = Math.round(100 * (1 + DEFAULT_RECONNECT_JITTER_RATIO));
+
+  expect(sockets).toHaveLength(1);
+  clock.advance(lowerBound - 1);
+  expect(sockets).toHaveLength(1);
+  clock.advance(upperBound - (lowerBound - 1));
+  expect(sockets).toHaveLength(2);
+
+  session.close();
 });

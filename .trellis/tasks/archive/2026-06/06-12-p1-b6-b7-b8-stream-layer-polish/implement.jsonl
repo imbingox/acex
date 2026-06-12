@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "B7 freshness/stale 回调契约：§3.3(L158) reason 仅 heartbeat_timeout、fresh↔stale 必须成对、§3.10 ready 是 per-subscription；L157 manager 出口统一 toCanonical()。方案 B 改的是 stale 触发时机（移除 per-sub、仅连接级 watchdog），须与此契约一致并回写。"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "B6 toCanonical fast-path 的正确性边界：§3.3 public 数值必须是 canonical decimal string（无科学计数法、不补尾零）。快速路径原样返回的输入必须逐字节等于 BigNumber.toFixed() 输出。"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "B6/B8 改动的 decimal.ts / subscription-multiplexer.ts / managed-websocket.ts 均属 §3.3 `src/internal/*` 领域无关原语，改动须守该分层约定。"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "B8 重连 jitter 必须复用仓内既有注入范式（http-client.ts:570-573 / rate-limiter.ts:89 的 random ?? Math.random + jitterRatio），不要另造轮子。"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "本批需 patch changeset（B6/B7/B8 均无公开类型变更）；内部 src 重构同样需要 changeset 才能发布。"}

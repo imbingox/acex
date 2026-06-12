@@ -21,6 +21,7 @@
     "public-decimal-string-contract",
     "redact-transport-error-secrets",
     "signing-clock-resync",
+    "stream-layer-polish",
     "venue-capability-dispatch",
     "venue-error-reason-order-state",
     "venue-rate-limiter",

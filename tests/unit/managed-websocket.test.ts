@@ -10,6 +10,7 @@ class FakeWebSocket extends EventTarget {
   static readonly CLOSING = 2;
   static readonly CLOSED = 3;
 
+  readonly sentFrames: string[] = [];
   readyState = FakeWebSocket.CONNECTING;
 
   constructor(readonly url: string) {
@@ -24,7 +25,9 @@ class FakeWebSocket extends EventTarget {
     });
   }
 
-  send(): void {}
+  send(data?: string): void {
+    this.sentFrames.push(data ?? "");
+  }
 
   emitJson(payload: unknown): void {
     this.dispatchEvent(
@@ -32,6 +35,10 @@ class FakeWebSocket extends EventTarget {
         data: JSON.stringify(payload),
       }),
     );
+  }
+
+  emitRaw(data: string): void {
+    this.dispatchEvent(new MessageEvent("message", { data }));
   }
 
   close(code = 1000, reason = "manual close"): void {
@@ -91,6 +98,10 @@ class FakeClock {
   readonly clearTimer = (handle: Parameters<typeof clearTimeout>[0]): void => {
     this.timers.delete(handle as unknown as number);
   };
+
+  get timerCount(): number {
+    return this.timers.size;
+  }
 
   advance(ms: number): void {
     const target = this.current + ms;
@@ -257,4 +268,58 @@ test("managed websocket reconnect falls back to Math.random jitter when no RNG i
   expect(sockets).toHaveLength(2);
 
   session.close();
+});
+
+test("managed websocket pong does not satisfy readyWhen message initial timeout", async () => {
+  const clock = new FakeClock();
+  const socket = new FakeWebSocket("wss://example.test/ws");
+  const errors: Event[] = [];
+  const messages: { value: string }[] = [];
+
+  const session = createManagedWebSocket<{ value: string }>({
+    url: socket.url,
+    initialMessageTimeoutMs: 50,
+    readyWhen: "message",
+    parseMessage(data) {
+      return JSON.parse(data) as { value: string };
+    },
+    onMessage(message) {
+      messages.push(message);
+    },
+    onUnexpectedClose() {},
+    onError(event) {
+      errors.push(event);
+    },
+    heartbeat: {
+      intervalMs: 10,
+      mode: "fixed-interval",
+      pongTimeoutMs: 30,
+      frame: () => "ping",
+      isPong: (raw) => raw === "pong",
+    },
+    createWebSocket() {
+      return socket as unknown as WebSocket;
+    },
+    now: clock.now,
+    setTimer: clock.setTimer as unknown as typeof setTimeout,
+    clearTimer: clock.clearTimer as unknown as typeof clearTimeout,
+  });
+
+  await Promise.resolve();
+  clock.advance(10);
+  expect(socket.sentFrames).toEqual(["ping"]);
+
+  socket.emitRaw("pong");
+  clock.advance(39);
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+
+  clock.advance(1);
+  await expect(session.ready).rejects.toThrow(
+    "Timed out waiting for the first websocket message",
+  );
+
+  expect(messages).toHaveLength(0);
+  expect(errors).toHaveLength(0);
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(clock.timerCount).toBe(0);
 });

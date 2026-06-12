@@ -1,6 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
 import {
   type MultiplexedStreamCallbacks,
+  type MultiplexerSubscriptionHandle,
   SubscriptionMultiplexer,
   type VenueStreamProtocol,
 } from "../../src/internal/subscription-multiplexer.ts";
@@ -505,6 +506,51 @@ test("re-subscribing the only key shares callbacks without rebuilding the socket
   expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
     "shared",
     "after-timeout",
+  ]);
+});
+
+test("subscribing the same key during payload delivery does not receive the in-flight message", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const first = createCallbacks();
+  const second = createCallbacks();
+  let secondHandle: MultiplexerSubscriptionHandle | undefined;
+
+  const firstHandle = multiplexer.subscribe(descriptor("a"), {
+    ...first.callbacks,
+    onPayload(payload, receivedAt): void {
+      first.log.payloads.push({ payload, receivedAt });
+      if (!secondHandle) {
+        secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
+      }
+    },
+  });
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  socket.emitJson({ key: "a", value: "M1" });
+
+  await firstHandle.ready;
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "M1",
+  ]);
+  const createdSecondHandle = secondHandle;
+  if (!createdSecondHandle) {
+    throw new Error("Expected the second subscription to be created");
+  }
+  expect(second.log.payloads).toHaveLength(0);
+  await expectPending(createdSecondHandle.ready);
+
+  socket.emitJson({ key: "a", value: "M2" });
+
+  await createdSecondHandle.ready;
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "M1",
+    "M2",
+  ]);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "M2",
   ]);
 });
 

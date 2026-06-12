@@ -419,25 +419,39 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       return;
     }
 
-    const subscribers: Iterable<LocalSubscriber<TPayload>> =
-      sub.subscribers.size === 1 ? sub.subscribers : [...sub.subscribers];
-
-    for (const localSubscriber of subscribers) {
-      if (!sub.subscribers.has(localSubscriber)) {
-        continue;
+    if (sub.subscribers.size === 1) {
+      const localSubscriber = sub.subscribers.values().next().value;
+      if (localSubscriber) {
+        this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
       }
+      return;
+    }
 
-      this.clearInitialTimer(localSubscriber);
-      this.resolveSubReady(localSubscriber);
+    for (const localSubscriber of [...sub.subscribers]) {
+      this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+    }
+  }
 
-      if (localSubscriber.freshness !== "fresh") {
-        localSubscriber.freshness = "fresh";
-        localSubscriber.callbacks.onFreshnessChange("fresh");
-      }
+  private deliverPayload(
+    sub: SubState<TDescriptor, TPayload>,
+    localSubscriber: LocalSubscriber<TPayload>,
+    payload: TPayload,
+    receivedAt: number,
+  ): void {
+    if (!sub.subscribers.has(localSubscriber)) {
+      return;
+    }
 
-      if (sub.subscribers.has(localSubscriber)) {
-        localSubscriber.callbacks.onPayload(routed.payload, receivedAt);
-      }
+    this.clearInitialTimer(localSubscriber);
+    this.resolveSubReady(localSubscriber);
+
+    if (localSubscriber.freshness !== "fresh") {
+      localSubscriber.freshness = "fresh";
+      localSubscriber.callbacks.onFreshnessChange("fresh");
+    }
+
+    if (sub.subscribers.has(localSubscriber)) {
+      localSubscriber.callbacks.onPayload(payload, receivedAt);
     }
   }
 

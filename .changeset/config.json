@@ -6,6 +6,13 @@
   "linked": [],
   "access": "public",
   "baseBranch": "main",
+  "changedFilePatterns": [
+    "src/**",
+    "index.ts",
+    "package.json",
+    "README.md",
+    "docs/api.md"
+  ],
   "updateInternalDependencies": "patch",
   "ignore": []
 }

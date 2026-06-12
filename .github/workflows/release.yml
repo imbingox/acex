@@ -6,6 +6,7 @@ on:
       - main
     paths-ignore:
       - ".trellis/**"
+      - ".github/**"
       - "docs/**"
       - "*.md"
       - "CLAUDE.md"

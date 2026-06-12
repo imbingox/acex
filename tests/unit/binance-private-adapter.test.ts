@@ -77,3 +77,41 @@ test("BinancePrivateAdapter requests signing clock resync on timestamp errors", 
   expect(isTransportError(error)).toBe(true);
   expect(resyncs).toBe(1);
 });
+
+test("BinancePrivateAdapter requests signing clock resync on resolved timestamp error body", async () => {
+  let resyncs = 0;
+  const adapter = new BinancePrivateAdapter({
+    signingClock: {
+      now: () => 1_000,
+      requestResync: () => {
+        resyncs += 1;
+      },
+    },
+    fetchFn: async () =>
+      textResponse(
+        '{"code":-1021,"msg":"Timestamp for this request was outside of the recvWindow."}',
+        {
+          status: 200,
+          statusText: "OK",
+        },
+      ),
+  });
+
+  const error = await adapter
+    .createOrder(
+      {
+        apiKey: "key",
+        secret: "secret",
+      },
+      {
+        symbol: "BTC/USDT:USDT",
+        side: "buy",
+        type: "market",
+        amount: "0.01",
+      },
+    )
+    .catch((caught: unknown) => caught);
+
+  expect(error).toBeInstanceOf(Error);
+  expect(resyncs).toBe(1);
+});

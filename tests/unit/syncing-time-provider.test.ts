@@ -386,5 +386,9 @@ test("signing clock offset does not change market freshness receivedAt", async (
     expect(book.receivedAt).toBeLessThanOrEqual(afterSubscribe);
   } finally {
     await client.stop();
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      value: installedFetch,
+    });
   }
 });

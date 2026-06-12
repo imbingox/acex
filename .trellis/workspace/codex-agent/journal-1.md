@@ -1398,3 +1398,37 @@ AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 ep
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: P1-B6/B7/B8 流层打磨（hot-path 分配 / stale 语义 / 重连 jitter）
+
+**Date**: 2026-06-12
+**Task**: P1-B6/B7/B8 流层打磨（hot-path 分配 / stale 语义 / 重连 jitter）
+**Branch**: `codex/p1-b6-b7-b8-stream-layer-polish`
+
+### Summary
+
+三合一流层打磨，整批 patch、无公开类型变更。B6: toCanonical 字符串 canonical 快路径 + 单订阅 fan-out 免拷贝 + 行情快照冻结复用替代每 tick 克隆（bench 2.26 bytes/tick）。B7: 移除 per-subscription 独立 stale，freshness 仅由连接级 watchdog 驱动，修正健康连接下冷门 symbol 被误判 stale。B8: managed-websocket 重连退避加 ±20% jitter（可注入 RNG）。codex 实现 → 主 review → 独立 codex 二审，二审抓到主 review 漏掉的 blocker：单订阅 fast path 迭代 live Set，回调内同步订阅同 key 第二者会收到在途旧消息并被错误 resolve ready；改为 values().next().value 捕获 + deliverPayload helper，配 stash 验证过的回归测试（74507eb 实现 + a9cd0ef 修复）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `74507eb` | (see git log) |
+| `a9cd0ef` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

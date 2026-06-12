@@ -1,6 +1,9 @@
 import BigNumber from "bignumber.js";
 import type { DecimalInput } from "../types/index.ts";
 
+export const CANONICAL_DECIMAL_STRING_PATTERN =
+  /^(?:0|-?[1-9]\d*|-?(?:0|[1-9]\d*)\.\d*[1-9])$/;
+
 /**
  * Convert a decimal value to its canonical string form: full precision, no
  * scientific notation, no trailing zeros.
@@ -11,6 +14,13 @@ import type { DecimalInput } from "../types/index.ts";
  * calling this.
  */
 export function toCanonical(value: DecimalInput): string {
+  if (
+    typeof value === "string" &&
+    CANONICAL_DECIMAL_STRING_PATTERN.test(value)
+  ) {
+    return value;
+  }
+
   const bn = new BigNumber(value);
   if (!bn.isFinite()) {
     throw new RangeError(`invalid non-finite DecimalInput: ${bn.toString()}`);

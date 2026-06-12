@@ -25,7 +25,7 @@
 | ④ 限流分层 | B3 | 工作量偏大，独立任务 | |
 | ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | 代码完成 → .trellis/tasks/06-12-p1-b4-clock-resync |
 | ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | 代码完成 → .trellis/tasks/06-12-p1-b5-fee-realized-pnl |
-| ⑦ 流层打磨 | B6 + B7 + B8 | 三个小项打包成一个任务 | |
+| ⑦ 流层打磨 | B6 + B7 + B8 | 三个小项打包成一个任务（B8 仅做 jitter，冗余热备拆后续） | 代码完成 → .trellis/tasks/archive/2026-06/06-12-p1-b6-b7-b8-stream-layer-polish（PR #79；B8 双连接冗余热备待后续任务） |
 | ⑧ 多交易所开放点 | C1 + C2 + C3 + C4 | SPI/配置抽象；C3 有正确性成分（交割合约映射已错），如有需要可提前单独做 | |
 
 ---
@@ -136,26 +136,29 @@
 - **验证方式**：单测覆盖 ORDER_TRADE_UPDATE 带佣金字段的映射；live order smoke 打印 fee。
 - **状态**：代码已完成（→ .trellis/tasks/06-12-p1-b5-fee-realized-pnl）：经核实 Binance per-order 查询接口不返回 fee（仅逐笔 WS/userTrades 有），故采方案 B——新增独立 `events.order.trades()` buffer 流承载 `OrderTrade { tradeId, price, qty, fee{cost,asset}, realizedPnl, maker, positionSide, ... }`，**`OrderSnapshot` 公开字段不变**（下游按 orderId 关联累加）。trade 发布独立于快照 watermark（乱序被拒仍发）；去重键 `(symbol, tradeId)` 有界 1024 FIFO（期货 tradeId 仅按 symbol 唯一）；`seq` 供 gap 检测。codex 实现 + Claude diff review + codex 对抗式二审（抓到去重漏 symbol 的 blocker 已修 + 补跨 symbol 回归）；`bun run lint`/`type-check`/`test`(256 pass) 独立复核通过；minor changeset + adapter-contract/order-execution spec + docs/api.md 已回写；live smoke 加逐笔 fee 打印，long-run live 复核待安排。既有 P2-12（AsyncEventBus 并发 next 覆盖）被高频 trades 流放大触发面，本 PR 未修。
 
-### - [ ] P1-B6 行情热路径分配偏重
+### - [x] P1-B6 行情热路径分配偏重
 
 - **位置**：`src/internal/decimal.ts:13`（每字段 new BigNumber + toFixed）、`src/managers/market-manager.ts:969`（每 tick 4× toCanonical + 2 次克隆）、`src/internal/subscription-multiplexer.ts:430`（每消息 `[...sub.subscribers]` 拷贝）
 - **问题**：Binance 推送本就是 decimal string 且绝大多数已是 canonical 形态；逐 tick 的 BigNumber 往返与对象克隆构成稳定 GC 压力。
 - **修复方案**：`toCanonical` 加字符串快速路径（正则判定已 canonical 则原样返回）；单订阅者时跳过数组拷贝；事件 snapshot 改为冻结对象复用而非每次克隆。
 - **验证方式**：bench 脚本对比每 tick 分配数（Bun `--smol`/heap 统计）；行为单测不回归。
+- **状态**：代码已完成（→ .trellis/tasks/archive/2026-06/06-12-p1-b6-b7-b8-stream-layer-polish，PR #79）：`toCanonical` 加 string canonical 快速路径（保守正则，property/fuzz 测试证明匹配串逐字节等于 `toFixed()`、无 false positive）；`subscription-multiplexer` 单订阅 fan-out 免数组拷贝（捕获唯一 subscriber、不迭代 live Set）；market L1/funding/status 改为变更时构建 `Object.freeze` 快照、发布与 getter 共享冻结引用替代每 tick 克隆。bench `scripts/bench-market-tick.ts` 实测稳态 ≈2.26 bytes/tick。codex 实现 + Claude diff review + codex 对抗式二审（抓到单订阅迭代 live Set 的 fan-out blocker，已修 + 补 stash 验证过的回归测试）；`bun run lint`/`type-check`/`test`（262 pass）独立复核通过；patch changeset。
 
-### - [ ] P1-B7 低流动性 symbol 被误判 stale（把"无变动"当"断流"）
+### - [x] P1-B7 低流动性 symbol 被误判 stale（把"无变动"当"断流"）
 
 - **位置**：`src/internal/subscription-multiplexer.ts:480`（per-sub staleTimer 基于该 symbol 自身消息间隔）
 - **问题**：bookTicker 仅在盘口变化时推送；冷门币 15s 不动即被标 `stale`（reason 还是 `heartbeat_timeout`），策略侧"可交易性"信号失真。连接级 watchdog 已存在，语义重复且更准。
 - **修复方案**：per-sub stale 仅在连接级也静默时触发，或区分 reason（`no_update` vs `heartbeat_timeout`）；文档明确 freshness 语义。
 - **验证方式**：单测：连接持续有其他 symbol 消息时，静默 symbol 不标 stale（或 reason 为 no_update）。
+- **状态**：代码已完成（→ 批 ⑦ 同一任务，PR #79）：采方案 B——移除 per-subscription 独立 stale 定时器，freshness 仅由连接级 watchdog/断连驱动；连接健康时静默 symbol 保持 `fresh`（bookTicker 无推送=盘口未变=缓存盘口仍有效），真正断流仍标 `heartbeat_timeout`。`StaleReason` 公开类型不变（仍仅 `heartbeat_timeout`），无公开类型变更；per-symbol 活跃度迁移给下游按 `lastReceivedAt` 自算。freshness 语义已回写 adapter-contract spec + docs/api.md。
 
-### - [ ] P1-B8 重连无 jitter、单连接无冗余
+### - [x] P1-B8 重连无 jitter、单连接无冗余
 
 - **位置**：`src/internal/managed-websocket.ts:148`（指数退避无抖动）、`src/adapters/binance/stream-protocol.ts:63`（connectionKey = base URL，一个 family 一条连接）
 - **问题**：网络抖动后多连接同步重连（thundering herd）；单连接断开即该 family 全部行情中断，HFT 常用的双连接热备无入口。
 - **修复方案**：退避加 ±20% jitter（一行）；多路复用器增加可选 `redundancy: 2`（同流双订阅、按 receivedAt 去重取先到）作为后续增强。
 - **验证方式**：jitter 单测；冗余模式 soak 验证断一条连接行情不中断。
+- **状态**：jitter 已完成（→ 批 ⑦ 同一任务，PR #79）：`managed-websocket` 指数退避加默认 ±20% jitter（可注入 `random`，复用 http-client/rate-limiter 范式），消除 thundering herd；单测注入确定性 RNG 断言抖动边界 + clamp，并补默认 `Math.random` fallback 路径测试。**双连接冗余热备（`redundancy: 2`）按原计划属后续增强，已从本批拆出、本 PR 未实现**，留作后续独立任务/roadmap 跟踪。
 
 ---
 

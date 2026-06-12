@@ -1,6 +1,7 @@
 import { beforeEach, expect, test } from "bun:test";
 import {
   type MultiplexedStreamCallbacks,
+  type MultiplexerSubscriptionHandle,
   SubscriptionMultiplexer,
   type VenueStreamProtocol,
 } from "../../src/internal/subscription-multiplexer.ts";
@@ -508,6 +509,51 @@ test("re-subscribing the only key shares callbacks without rebuilding the socket
   ]);
 });
 
+test("subscribing the same key during payload delivery does not receive the in-flight message", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const first = createCallbacks();
+  const second = createCallbacks();
+  let secondHandle: MultiplexerSubscriptionHandle | undefined;
+
+  const firstHandle = multiplexer.subscribe(descriptor("a"), {
+    ...first.callbacks,
+    onPayload(payload, receivedAt): void {
+      first.log.payloads.push({ payload, receivedAt });
+      if (!secondHandle) {
+        secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
+      }
+    },
+  });
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  socket.emitJson({ key: "a", value: "M1" });
+
+  await firstHandle.ready;
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "M1",
+  ]);
+  const createdSecondHandle = secondHandle;
+  if (!createdSecondHandle) {
+    throw new Error("Expected the second subscription to be created");
+  }
+  expect(second.log.payloads).toHaveLength(0);
+  await expectPending(createdSecondHandle.ready);
+
+  socket.emitJson({ key: "a", value: "M2" });
+
+  await createdSecondHandle.ready;
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "M1",
+    "M2",
+  ]);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "M2",
+  ]);
+});
+
 test("closing one shared handle leaves the remote subscription active", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
@@ -689,7 +735,7 @@ test("reconnect creates a new socket and replays active subscriptions", async ()
   ]);
 });
 
-test("per-subscription stale is independent and recovers on new data", async () => {
+test("quiet subscription stays fresh while the shared connection receives other data", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
   const a = createCallbacks();
@@ -703,21 +749,24 @@ test("per-subscription stale is independent and recovers on new data", async () 
   socket.emitJson({ key: "a", value: "A1" });
   socket.emitJson({ key: "b", value: "B1" });
   clock.advance(90);
-  socket.emitJson({ key: "b", value: "B2" });
+  socket.emitJson({ key: "a", value: "A2" });
   clock.advance(10);
 
+  expect(a.log.freshness).toEqual([{ freshness: "fresh" }]);
+  expect(b.log.freshness).toEqual([{ freshness: "fresh" }]);
+
+  clock.advance(89);
+  expect(a.log.freshness).toEqual([{ freshness: "fresh" }]);
+  expect(b.log.freshness).toEqual([{ freshness: "fresh" }]);
+
+  clock.advance(1);
   expect(a.log.freshness).toEqual([
     { freshness: "fresh" },
     { freshness: "stale", reason: "heartbeat_timeout" },
   ]);
-  expect(b.log.freshness).toEqual([{ freshness: "fresh" }]);
-
-  socket.emitJson({ key: "a", value: "A2" });
-
-  expect(a.log.freshness).toEqual([
+  expect(b.log.freshness).toEqual([
     { freshness: "fresh" },
     { freshness: "stale", reason: "heartbeat_timeout" },
-    { freshness: "fresh" },
   ]);
 });
 

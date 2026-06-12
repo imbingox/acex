@@ -66,8 +66,6 @@ interface LocalSubscriber<TPayload> {
 interface SubState<TDescriptor, TPayload> {
   readonly descriptor: TDescriptor;
   readonly subscribers: Set<LocalSubscriber<TPayload>>;
-  lastMessageAt: number | undefined;
-  staleTimer: TimerHandle | undefined;
 }
 
 interface ControlFrame<TDescriptor> {
@@ -189,8 +187,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     const sub: SubState<TDescriptor, TPayload> = {
       descriptor,
       subscribers: new Set([localSubscriber]),
-      lastMessageAt: undefined,
-      staleTimer: undefined,
     };
 
     connection.subs.set(subscriptionKey, sub);
@@ -200,7 +196,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       sub,
       localSubscriber,
     );
-    this.scheduleSubStaleTimeout(connection, sub);
 
     if (connection.isOpen) {
       this.enqueueControlFrame(connection, "subscribe", [
@@ -424,25 +419,39 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       return;
     }
 
-    sub.lastMessageAt = receivedAt;
-    this.scheduleSubStaleTimeout(connection, sub);
+    if (sub.subscribers.size === 1) {
+      const localSubscriber = sub.subscribers.values().next().value;
+      if (localSubscriber) {
+        this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+      }
+      return;
+    }
 
     for (const localSubscriber of [...sub.subscribers]) {
-      if (!sub.subscribers.has(localSubscriber)) {
-        continue;
-      }
+      this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+    }
+  }
 
-      this.clearInitialTimer(localSubscriber);
-      this.resolveSubReady(localSubscriber);
+  private deliverPayload(
+    sub: SubState<TDescriptor, TPayload>,
+    localSubscriber: LocalSubscriber<TPayload>,
+    payload: TPayload,
+    receivedAt: number,
+  ): void {
+    if (!sub.subscribers.has(localSubscriber)) {
+      return;
+    }
 
-      if (localSubscriber.freshness !== "fresh") {
-        localSubscriber.freshness = "fresh";
-        localSubscriber.callbacks.onFreshnessChange("fresh");
-      }
+    this.clearInitialTimer(localSubscriber);
+    this.resolveSubReady(localSubscriber);
 
-      if (sub.subscribers.has(localSubscriber)) {
-        localSubscriber.callbacks.onPayload(routed.payload, receivedAt);
-      }
+    if (localSubscriber.freshness !== "fresh") {
+      localSubscriber.freshness = "fresh";
+      localSubscriber.callbacks.onFreshnessChange("fresh");
+    }
+
+    if (sub.subscribers.has(localSubscriber)) {
+      localSubscriber.callbacks.onPayload(payload, receivedAt);
     }
   }
 
@@ -477,24 +486,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }, this.options.initialMessageTimeoutMs);
   }
 
-  private scheduleSubStaleTimeout(
-    connection: ConnectionState<TDescriptor, TPayload>,
-    sub: SubState<TDescriptor, TPayload>,
-  ): void {
-    if (sub.staleTimer) {
-      this.clearTimer(sub.staleTimer);
-    }
-
-    sub.staleTimer = this.setTimer(() => {
-      const subscriptionKey = this.protocol.subscriptionKey(sub.descriptor);
-      if (connection.subs.get(subscriptionKey) !== sub) {
-        return;
-      }
-
-      this.markSubStale(sub, "heartbeat_timeout");
-    }, this.options.staleAfterMs);
-  }
-
   private clearInitialTimer(localSubscriber: LocalSubscriber<TPayload>): void {
     if (!localSubscriber.initialTimer) {
       return;
@@ -507,10 +498,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   private clearSubTimers(sub: SubState<TDescriptor, TPayload>): void {
     for (const localSubscriber of sub.subscribers) {
       this.clearInitialTimer(localSubscriber);
-    }
-    if (sub.staleTimer) {
-      this.clearTimer(sub.staleTimer);
-      sub.staleTimer = undefined;
     }
   }
 
@@ -592,7 +579,14 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     reason: StaleReason,
   ): void {
     for (const sub of connection.subs.values()) {
-      this.markSubStale(sub, reason);
+      for (const localSubscriber of sub.subscribers) {
+        if (localSubscriber.freshness === "stale") {
+          continue;
+        }
+
+        localSubscriber.freshness = "stale";
+        localSubscriber.callbacks.onFreshnessChange("stale", reason);
+      }
     }
   }
 
@@ -603,20 +597,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       for (const localSubscriber of sub.subscribers) {
         localSubscriber.freshness = "stale";
       }
-    }
-  }
-
-  private markSubStale(
-    sub: SubState<TDescriptor, TPayload>,
-    reason: StaleReason,
-  ): void {
-    for (const localSubscriber of sub.subscribers) {
-      if (localSubscriber.freshness === "stale") {
-        continue;
-      }
-
-      localSubscriber.freshness = "stale";
-      localSubscriber.callbacks.onFreshnessChange("stale", reason);
     }
   }
 

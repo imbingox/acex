@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "校验 B7 未破坏 freshness 契约：reason 枚举仍仅 heartbeat_timeout、fresh↔stale 成对、per-subscription ready 语义不变；方案 B 仅改 stale 触发时机且已回写 spec。"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "校验 B6 toCanonical fast-path 输出仍是 canonical decimal string（无科学计数法、不补尾零），public 数值未被宽化。"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量基线：B6 fuzz 等价测试、B7 选定语义单测、B8 jitter 边界单测的覆盖与 lint/type-check/test 全绿要求。"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "校验 changeset 存在且定级正确（patch），内部 src 改动亦需 changeset。"}

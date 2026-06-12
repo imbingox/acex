@@ -1432,3 +1432,40 @@ AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 ep
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: P1-C2/C3/C4 多交易所内置扩展基建
+
+**Date**: 2026-06-12
+**Task**: P1-C2/C3/C4 多交易所内置扩展基建
+**Branch**: `codex/p1-c2-c3-c4-venue-extensibility`
+
+### Summary
+
+打 venue 扩展基建：内部 venue→工厂 registry + 共享 family-scoped BinanceMarketCatalog，私有 UM symbol 归一化改走 catalog 并修交割合约错配 + miss 安全(命令 SymbolMappingError→not_placed / 入站 quarantine→refresh→replay 不丢成交)(C3+C1内部)；账户配置统一进 account.venues.<venue>，Juplend 不继承 CEX reconcile/riskPoll(C2)；流协议层加可选应用层 heartbeat 钩子，落在 managed-websocket(raw pong 先于 parse 消费/idle+fixed 调度/pong 超时复用 socket.close 重连/timer 生命周期)(C4)；reconcile 双 in-flight 门统一为单 coalescer 并修 finalizer 微任务竞态。codex 实现 + 多轮独立对抗审(commit-1 抓4 blocker、集成审抓 reconcile 双门、再审抓 finalizer race)，294 pass，1 个 minor changeset。C1 公开第三方 SPI 按 YAGNI 仅做内部 registry、待真实需求。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bd014d5` | (see git log) |
+| `ae76e37` | (see git log) |
+| `6dc95fa` | (see git log) |
+| `93cbd6d` | (see git log) |
+| `3e43e73` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

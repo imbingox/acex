@@ -6,6 +6,7 @@
   },
   "changesets": [
     "acex-error-details",
+    "binance-order-trades",
     "binance-rate-limit-topology",
     "binance-tradfi-public-market",
     "cancel-all-response-shape",

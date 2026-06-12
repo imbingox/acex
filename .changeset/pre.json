@@ -19,6 +19,7 @@
     "private-stream-listenkey-recovery",
     "public-decimal-string-contract",
     "redact-transport-error-secrets",
+    "signing-clock-resync",
     "venue-capability-dispatch",
     "venue-error-reason-order-state",
     "venue-rate-limiter",

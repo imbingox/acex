@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 0.4.0-beta.19
+
+### Patch Changes
+
+- 8cf0a72: Binance private signing timestamps now use a default server-time synchronized clock with startup sampling, periodic resync, and timestamp-error-triggered resync. Passing `CreateClientOptions.clock` continues to fully override signing time and disables the default sampler.
+
 ## 0.4.0-beta.18
 
 ### Minor Changes

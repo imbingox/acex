@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核心契约：§签名时钟⟂freshness硬约束(210-211)规定校准只能作用签名timestamp不污染receivedAt；server-time请求maxAttempts:1/RTT用单调钟/限流sleep不计RTT(150,255-257,527)；RateLimiter注入范式(556)是SyncingTimeProvider注入的样板。完成后须回写211行措辞"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "venueError归一、timestamp_out_of_sync语义、错误/health总线上报约定——重测失败与漂移告警的可观测事件须符合此契约"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "新增src/internal/syncing-time-provider.ts的分层归属：core必须venue-agnostic，server-time采样源由venue注入"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "默认运行时行为变化但无public API变化→确认patch changeset规则(见internal-src-refactor-needs-patch-changeset教训)"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "TimeProvider接口扩展requestResync?()与新内部类的类型规范"}

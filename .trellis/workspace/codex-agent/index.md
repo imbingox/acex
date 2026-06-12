@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 37
-- **Last Active**: 2026-06-11
+- **Total Sessions**: 38
+- **Last Active**: 2026-06-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1333 | Active |
+| `journal-1.md` | ~1367 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 38 | 2026-06-12 | P1-B4 签名时钟自动同步回路 | `8cf0a72`, `7beac9d` | `codex/p1-b4-clock-resync` |
 | 37 | 2026-06-11 | 完成限流分层 P1-B3 | `3edefc1`, `65e099f`, `3768874`, `838556f`, `ae4e3ee` | `main` |
 | 36 | 2026-06-11 | 批次③ 事件流质量：conflation/背压 + status 发布去重（P1-B1 + P1-B2） | `35b8163` | `feat/event-conflation-status-dedup` |
 | 35 | 2026-06-11 | 订单生命周期收尾:幽灵 open 订单驱逐与 pending claim TTL (P1-A1+P1-A2) | `bdaf9ea`, `e951436` | `feat/open-order-eviction-claim-ttl` |

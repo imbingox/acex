@@ -1331,3 +1331,37 @@ AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 ep
 ### Next Steps
 
 - None - task complete
+
+
+## Session 38: P1-B4 签名时钟自动同步回路
+
+**Date**: 2026-06-12
+**Task**: P1-B4 签名时钟自动同步回路
+**Branch**: `codex/p1-b4-clock-resync`
+
+### Summary
+
+实现 venue 级 SyncingTimeProvider（core venue-agnostic，sampler 注入 fetchBinanceServerTime）：启动中位采样 + 5min EMA 周期重测 + -1021 去抖立即重校；offset 仅作用签名 timestamp 不污染 freshness；options.clock 注入关闭自动同步。codex 实现 → claude review → 独立 codex 二审抓到 blocker（小数签名 timestamp 需 Math.round）+ major（requested/periodic 未合并）+ minor（测试 fetch 未恢复）整改。PR review 再修两处测试（fetch 泄漏 + response.body 分支覆盖）。门禁 248 pass。PR #74。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8cf0a72` | (see git log) |
+| `7beac9d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

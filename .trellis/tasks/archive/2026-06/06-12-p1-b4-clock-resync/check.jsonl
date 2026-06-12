@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "review必查：校准是否严格只作用签名timestamp、未污染freshness/receivedAt；server-time重测是否沿用fetchBinanceServerTime契约(maxAttempts:1/单调钟RTT)；211行spec措辞是否已回写"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与质量门槛——核查6条AC对应单测是否到位(offset收敛/-1021触发/失败保留/clock关闭采样/freshness隔离)"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核查重测失败/漂移告警的错误与health总线上报形态是否符合契约"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核查TimeProvider接口扩展与新类型未引入any/不安全断言"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "核查changeset是否按patch正确添加"}

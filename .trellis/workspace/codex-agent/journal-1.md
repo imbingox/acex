@@ -1365,3 +1365,36 @@ AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 ep
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: P1-B5 成交明细字段：独立 order.trade 逐笔事件
+
+**Date**: 2026-06-12
+**Task**: P1-B5 成交明细字段：独立 order.trade 逐笔事件
+**Branch**: `codex/p1-b5-fee-realized-pnl`
+
+### Summary
+
+新增 events.order.trades() 独立逐笔成交流，承载 Binance fee/价量/realizedPnl/maker/positionSide；OrderSnapshot 公开字段不变。核实 per-order 查询接口不返回 fee → 采无损逐笔路线。trade 发布独立于快照 watermark（乱序仍发）；去重键 (symbol,tradeId) 1024 FIFO；seq 供 gap 检测。流程：codex 实现 → Claude diff review → codex 对抗式二审抓到去重漏 symbol 的 blocker 已修+补跨 symbol 回归。lint/type-check/test(256 pass) 全绿，minor changeset，spec+docs 回写。PR #77。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d3bcffa` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

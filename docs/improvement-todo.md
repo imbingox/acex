@@ -24,7 +24,7 @@
 | ③ 事件流质量 | B1 + B2 | 同在事件总线/状态发布路径；B2 是小修可捎带 | 代码完成 → .trellis/tasks/06-11-conflation-status-p1-b1-p1-b2 |
 | ④ 限流分层 | B3 | 工作量偏大，独立任务 | |
 | ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | 代码完成 → .trellis/tasks/06-12-p1-b4-clock-resync |
-| ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | |
+| ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | 代码完成 → .trellis/tasks/06-12-p1-b5-fee-realized-pnl |
 | ⑦ 流层打磨 | B6 + B7 + B8 | 三个小项打包成一个任务 | |
 | ⑧ 多交易所开放点 | C1 + C2 + C3 + C4 | SPI/配置抽象；C3 有正确性成分（交割合约映射已错），如有需要可提前单独做 | |
 
@@ -128,12 +128,13 @@
 - **验证方式**：单测注入漂移时钟，断言 offset 收敛与 -1021 触发重校；live account smoke 观察长跑无 -1021。
 - **状态**：代码已完成（→ .trellis/tasks/06-12-p1-b4-clock-resync）：新增 core 通用 `SyncingTimeProvider`（`src/internal/`，venue-agnostic，sampler 由 Binance 注入 `fetchBinanceServerTime`），`now()=本地墙钟+平滑 offset`；启动串行采样 5 次取中位、每 5min EMA(α=0.3) 周期重测、`TimeProvider.requestResync?()` 2s 去抖立即重校（直接采纳不走 EMA）；private adapter 归一到 `timestamp_out_of_sync` 时发信号、不持有任何 offset/timer 逻辑；offset 仅作用签名 timestamp，**不污染** freshness/`receivedAt`（隔离单测断言）；`options.clock` 注入时不创建 sampler/timer。失败/漂移经 runtime error stream 上报。`bun run lint`/`type-check`/`test`（245 pass）独立复核通过；patch changeset + adapter-contract spec §签名时钟 + docs/api.md 已回写。live account smoke 长跑复核待安排。
 
-### - [ ] P1-B5 成交明细字段全部丢弃（手续费 / 逐笔成交 / 已实现盈亏）
+### - [x] P1-B5 成交明细字段全部丢弃（手续费 / 逐笔成交 / 已实现盈亏）
 
 - **位置**：`src/adapters/binance/private-adapter.ts:562`（`mapOrderUpdate` 丢弃 `n/N/l/L/rp`）、`src/adapters/types.ts:160`（`RawOrderUpdate` 无 fee 字段）、`src/types/order.ts:96`
 - **问题**：策略无法核算手续费成本、逐笔成交价量与 realized PnL——量化 SDK 的基本盘。
 - **修复方案**：`RawOrderUpdate`/`OrderSnapshot` 增加 `fee { cost, asset }`、`lastFillPrice/lastFillQty`、`realizedPnl`（均 optional decimal string）；考虑独立 `order.trade` 事件承载逐笔成交。需要 minor changeset。
 - **验证方式**：单测覆盖 ORDER_TRADE_UPDATE 带佣金字段的映射；live order smoke 打印 fee。
+- **状态**：代码已完成（→ .trellis/tasks/06-12-p1-b5-fee-realized-pnl）：经核实 Binance per-order 查询接口不返回 fee（仅逐笔 WS/userTrades 有），故采方案 B——新增独立 `events.order.trades()` buffer 流承载 `OrderTrade { tradeId, price, qty, fee{cost,asset}, realizedPnl, maker, positionSide, ... }`，**`OrderSnapshot` 公开字段不变**（下游按 orderId 关联累加）。trade 发布独立于快照 watermark（乱序被拒仍发）；去重键 `(symbol, tradeId)` 有界 1024 FIFO（期货 tradeId 仅按 symbol 唯一）；`seq` 供 gap 检测。codex 实现 + Claude diff review + codex 对抗式二审（抓到去重漏 symbol 的 blocker 已修 + 补跨 symbol 回归）；`bun run lint`/`type-check`/`test`(256 pass) 独立复核通过；minor changeset + adapter-contract/order-execution spec + docs/api.md 已回写；live smoke 加逐笔 fee 打印，long-run live 复核待安排。既有 P2-12（AsyncEventBus 并发 next 覆盖）被高频 trades 流放大触发面，本 PR 未修。
 
 ### - [ ] P1-B6 行情热路径分配偏重
 

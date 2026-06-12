@@ -146,12 +146,20 @@ interface BinanceOrderTradeUpdatePayload {
   c?: string;
   S?: string;
   o?: string;
+  x?: string;
   X?: string;
   p?: string;
   sp?: string;
   q?: string;
   z?: string;
   ap?: string;
+  t?: number | string;
+  l?: string;
+  L?: string;
+  n?: string;
+  N?: string;
+  rp?: string;
+  m?: boolean;
   R?: boolean;
   ps?: string;
   T?: number;
@@ -613,6 +621,33 @@ function mapOrderUpdate(
     positionSide: normalizePositionSide(payload.ps),
     exchangeTs: payload.T ?? message.T ?? message.E,
     receivedAt,
+    trade: mapOrderTrade(payload),
+  };
+}
+
+function mapOrderTrade(
+  payload: BinanceOrderTradeUpdatePayload,
+): RawOrderUpdate["trade"] {
+  if (payload.x !== "TRADE" || !(Number(payload.l) > 0)) {
+    return undefined;
+  }
+
+  const fee =
+    payload.n !== undefined && payload.N !== undefined
+      ? {
+          cost: payload.n,
+          asset: payload.N,
+        }
+      : undefined;
+
+  return {
+    tradeId: payload.t === undefined ? undefined : `${payload.t}`,
+    price: payload.L ?? "0",
+    qty: payload.l ?? "0",
+    fee,
+    realizedPnl: payload.rp,
+    maker: payload.m,
+    positionSide: normalizePositionSide(payload.ps),
   };
 }
 

@@ -158,6 +158,19 @@ export interface RawAccountUpdate {
   receivedAt: number;
 }
 
+export interface RawOrderTrade {
+  tradeId?: string;
+  price: string;
+  qty: string;
+  fee?: {
+    cost: string;
+    asset: string;
+  };
+  realizedPnl?: string;
+  maker?: boolean;
+  positionSide?: PositionSide;
+}
+
 export interface RawOrderUpdate {
   orderId?: string;
   clientOrderId?: string;
@@ -175,6 +188,7 @@ export interface RawOrderUpdate {
   avgFillPrice?: string;
   exchangeTs?: number;
   receivedAt: number;
+  trade?: RawOrderTrade;
 }
 
 export interface RawOpenOrdersSnapshot {

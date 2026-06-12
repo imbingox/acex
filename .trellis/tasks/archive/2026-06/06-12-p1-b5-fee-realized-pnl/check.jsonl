@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "核对 trade 发布独立于 watermark、去重、事件契约与现有订单事件一致、OrderSnapshot 公开字段不变"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "核对 RawOrderUpdate.trade? 映射、x=TRADE&&l>0 gating、adapter 不持状态、fee 0/负不丢的契约符合度"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "测试分层与命名：unit 覆盖映射/去重/乱序仍发/seq 单调，端到端覆盖 trades 流过滤"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "核对新增公开类型导出、decimal string canonical、optional 字段无 any/隐式 undefined 泄漏"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对 buffer 溢出 EVENT_BUFFER_OVERFLOW 告警语义正确、不递归"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "核对 minor changeset 存在且描述符合 API 变更规则"}

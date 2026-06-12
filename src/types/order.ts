@@ -118,11 +118,36 @@ export interface OrderSnapshot {
   seq: number;
 }
 
+export interface OrderTrade {
+  tradeId?: string;
+  price: string;
+  qty: string;
+  fee?: {
+    cost: string;
+    asset: string;
+  };
+  realizedPnl?: string;
+  maker?: boolean;
+  positionSide?: PositionSide;
+  exchangeTs?: number;
+  receivedAt: number;
+}
+
 export interface OrderEventBase {
   accountId: string;
   venue: Venue;
   symbol: string;
   ts: number;
+}
+
+export interface OrderTradeEvent extends OrderEventBase {
+  type: "order.trade";
+  side: OrderSide;
+  orderId?: string;
+  clientOrderId?: string;
+  trade: OrderTrade;
+  seq: number;
+  orderSeq?: number;
 }
 
 export interface OrderUpdatedEvent extends OrderEventBase {
@@ -165,6 +190,10 @@ export interface OrderEventStreams {
     filter?: OrderEventFilter,
     options?: BufferedEventStreamOptions,
   ): AsyncIterable<OrderEvent>;
+  trades(
+    filter?: OrderEventFilter,
+    options?: BufferedEventStreamOptions,
+  ): AsyncIterable<OrderTradeEvent>;
   status(
     filter?: OrderEventFilter,
     options?: BufferedEventStreamOptions,

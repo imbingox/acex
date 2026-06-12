@@ -447,6 +447,12 @@ interface OrderManager {
   getOpenOrders(accountId: string, symbol?: string): OrderSnapshot[];
   getOrderStatus(accountId: string): OrderDataStatus | undefined;
 }
+
+interface OrderEventStreams {
+  updates(filter?: OrderEventFilter, options?: { maxBuffer?: number }): AsyncIterable<OrderEvent>;
+  trades(filter?: OrderEventFilter, options?: { maxBuffer?: number }): AsyncIterable<OrderTradeEvent>;
+  status(filter?: OrderEventFilter, options?: { maxBuffer?: number }): AsyncIterable<OrderStatusChangedEvent>;
+}
 ```
 
 ### 7.1 支持范围
@@ -486,7 +492,21 @@ for await (const event of client.order.events.updates({
 }
 ```
 
-Order 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；订单中间状态和错误恢复信号默认按 buffer 语义保留顺序。
+Binance 私有 WS 的逐笔成交、手续费与 realized PnL 通过独立 `order.trade` 事件消费，不挂在 `OrderSnapshot` 上：
+
+```ts
+for await (const event of client.order.events.trades({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+}, { maxBuffer: 50_000 })) {
+  console.log(event.orderId, event.trade.price, event.trade.qty, event.trade.fee);
+  break;
+}
+```
+
+`OrderTradeEvent.seq` 是该账户订单成交流的单调序号，可用于检测慢消费者 buffer 溢出造成的缺口；`orderSeq` 在同一交易所 update 成功推进订单快照时关联 `OrderSnapshot.seq`。REST 订单查询/命令回包不含逐笔手续费，不会发布 `order.trade`。
+
+Order 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；订单中间状态、逐笔成交和错误恢复信号默认按 buffer 语义保留顺序。慢消费者超过 buffer 上限时会丢弃最旧事件，并通过 `EVENT_BUFFER_OVERFLOW` runtime error 上报对应 stream（例如 `order.trades`）。
 
 ## 8. 健康与错误事件
 
@@ -997,6 +1017,21 @@ interface OrderDataStatus {
   runtimeStatus?: PrivateRuntimeStatus;
   reason?: PrivateRuntimeReason;
 }
+
+interface OrderTrade {
+  tradeId?: string;
+  price: string;
+  qty: string;
+  fee?: {
+    cost: string;
+    asset: string;
+  };
+  realizedPnl?: string;
+  maker?: boolean;
+  positionSide?: PositionSide;
+  exchangeTs?: number;
+  receivedAt: number;
+}
 ```
 
 ```ts
@@ -1017,6 +1052,20 @@ type OrderEvent =
   | { type: "order.canceled"; accountId: string; venue: Venue; symbol: string; snapshot: OrderSnapshot; ts: number }
   | { type: "order.rejected"; accountId: string; venue: Venue; symbol: string; snapshot: OrderSnapshot; ts: number }
   | { type: "order.snapshot_replaced"; accountId: string; venue: Venue; snapshot: OrderSnapshot[]; ts: number };
+
+type OrderTradeEvent = {
+  type: "order.trade";
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  side: OrderSide;
+  orderId?: string;
+  clientOrderId?: string;
+  trade: OrderTrade;
+  seq: number;
+  orderSeq?: number;
+  ts: number;
+};
 ```
 
 ## 10. 错误处理

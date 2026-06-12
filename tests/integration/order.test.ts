@@ -115,10 +115,19 @@ interface BinanceOrderUpdateInput {
   orderId?: number;
   clientOrderId?: string;
   side?: "BUY" | "SELL";
+  positionSide?: "BOTH" | "LONG" | "SHORT";
+  executionType?: string;
+  tradeId?: number | string;
   status?: BinanceOrderStatus;
   price?: string;
   amount?: string;
   filled?: string;
+  lastQty?: string;
+  lastPrice?: string;
+  feeCost?: string;
+  feeAsset?: string;
+  realizedPnl?: string;
+  maker?: boolean;
   updateTime?: number;
 }
 
@@ -225,7 +234,7 @@ function emitBinanceOrderUpdate(
     z: filled,
     ap: filled === "0" ? "0" : (input.price ?? "100500.00"),
     R: false,
-    ps: "BOTH",
+    ps: input.positionSide ?? "BOTH",
   };
 
   if (input.orderId !== undefined) {
@@ -233,6 +242,30 @@ function emitBinanceOrderUpdate(
   }
   if (input.clientOrderId !== undefined) {
     order.c = input.clientOrderId;
+  }
+  if (input.executionType !== undefined) {
+    order.x = input.executionType;
+  }
+  if (input.tradeId !== undefined) {
+    order.t = input.tradeId;
+  }
+  if (input.lastQty !== undefined) {
+    order.l = input.lastQty;
+  }
+  if (input.lastPrice !== undefined) {
+    order.L = input.lastPrice;
+  }
+  if (input.feeCost !== undefined) {
+    order.n = input.feeCost;
+  }
+  if (input.feeAsset !== undefined) {
+    order.N = input.feeAsset;
+  }
+  if (input.realizedPnl !== undefined) {
+    order.rp = input.realizedPnl;
+  }
+  if (input.maker !== undefined) {
+    order.m = input.maker;
   }
 
   socket.emitJson({
@@ -439,6 +472,444 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
   });
 
   await iterator.return?.();
+});
+
+test("order trades stream publishes Binance per-trade fee, maker flag, realized pnl, and seq", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const iterator = client.order.events
+    .trades({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3001,
+    clientOrderId: "cid-3001",
+    side: "SELL",
+    positionSide: "SHORT",
+    executionType: "TRADE",
+    tradeId: 9001,
+    status: "PARTIALLY_FILLED",
+    price: "100500.00",
+    amount: "0.0100",
+    filled: "0.0050",
+    lastQty: "0.0050",
+    lastPrice: "100450.000",
+    feeCost: "0",
+    feeAsset: "USDT",
+    realizedPnl: "0.0000",
+    maker: true,
+    updateTime: 1710000000500,
+  });
+
+  const first = await nextEvent(iterator);
+  expect(first).toMatchObject({
+    type: "order.trade",
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    side: "sell",
+    orderId: "3001",
+    clientOrderId: "cid-3001",
+    seq: 1,
+    orderSeq: 1,
+    trade: {
+      tradeId: "9001",
+      price: new BigNumber("100450.000").toFixed(),
+      qty: new BigNumber("0.0050").toFixed(),
+      fee: {
+        cost: "0",
+        asset: "USDT",
+      },
+      realizedPnl: "0",
+      maker: true,
+      positionSide: "short",
+      exchangeTs: 1710000000500,
+    },
+  });
+  expect(typeof first.trade.receivedAt).toBe("number");
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3001,
+    clientOrderId: "cid-3001",
+    side: "SELL",
+    positionSide: "SHORT",
+    executionType: "TRADE",
+    tradeId: 9002,
+    status: "FILLED",
+    price: "100500.00",
+    amount: "0.0100",
+    filled: "0.0100",
+    lastQty: "0.0050",
+    lastPrice: "100500.00",
+    feeCost: "-0.0000100",
+    feeAsset: "BNB",
+    realizedPnl: "1.2300",
+    maker: false,
+    updateTime: 1710000000600,
+  });
+
+  const second = await nextEvent(iterator);
+  expect(second).toMatchObject({
+    type: "order.trade",
+    seq: 2,
+    orderSeq: 2,
+    trade: {
+      tradeId: "9002",
+      price: new BigNumber("100500.00").toFixed(),
+      qty: new BigNumber("0.0050").toFixed(),
+      fee: {
+        cost: new BigNumber("-0.0000100").toFixed(),
+        asset: "BNB",
+      },
+      realizedPnl: new BigNumber("1.2300").toFixed(),
+      maker: false,
+      positionSide: "short",
+    },
+  });
+
+  await iterator.return?.();
+});
+
+test("order trades stream filters by account, venue, and symbol", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const iterator = client.order.events
+    .trades({
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "ETH/USDT:USDT",
+    })
+    [Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3101,
+    clientOrderId: "cid-3101",
+    executionType: "TRADE",
+    tradeId: 9101,
+    status: "FILLED",
+    amount: "0.010",
+    filled: "0.010",
+    lastQty: "0.010",
+    lastPrice: "100500.00",
+    updateTime: 1710000000500,
+  });
+  emitBinanceOrderUpdate(socket, {
+    symbol: "ETHUSDT",
+    orderId: 3102,
+    clientOrderId: "cid-3102",
+    executionType: "TRADE",
+    tradeId: 9102,
+    status: "FILLED",
+    amount: "0.100",
+    filled: "0.100",
+    lastQty: "0.100",
+    lastPrice: "3000.00",
+    updateTime: 1710000000600,
+  });
+
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "order.trade",
+    symbol: "ETH/USDT:USDT",
+    trade: {
+      tradeId: "9102",
+      price: new BigNumber("3000.00").toFixed(),
+      qty: new BigNumber("0.100").toFixed(),
+    },
+  });
+
+  await iterator.return?.();
+});
+
+test("order trades stream ignores non-trade executions and zero-quantity trades", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const iterator = client.order.events.trades()[Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3201,
+    clientOrderId: "cid-3201",
+    executionType: "NEW",
+    tradeId: 9201,
+    status: "NEW",
+    amount: "0.010",
+    filled: "0",
+    lastQty: "0.010",
+    lastPrice: "100500.00",
+    updateTime: 1710000000500,
+  });
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3201,
+    clientOrderId: "cid-3201",
+    executionType: "TRADE",
+    tradeId: 9202,
+    status: "PARTIALLY_FILLED",
+    amount: "0.010",
+    filled: "0",
+    lastQty: "0",
+    lastPrice: "100500.00",
+    updateTime: 1710000000600,
+  });
+
+  await expectNoMatchingEvent(
+    iterator,
+    () => true,
+    50,
+    "non-trade or zero-quantity update published a trade event",
+  );
+
+  await iterator.return?.();
+});
+
+test("order trades stream deduplicates repeated tradeId but publishes trades without tradeId", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const iterator = client.order.events.trades()[Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3301,
+    clientOrderId: "cid-3301",
+    executionType: "TRADE",
+    tradeId: 9301,
+    status: "PARTIALLY_FILLED",
+    amount: "0.010",
+    filled: "0.005",
+    lastQty: "0.005",
+    lastPrice: "100500.00",
+    updateTime: 1710000000500,
+  });
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "order.trade",
+    seq: 1,
+    trade: {
+      tradeId: "9301",
+    },
+  });
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3301,
+    clientOrderId: "cid-3301",
+    executionType: "TRADE",
+    tradeId: 9301,
+    status: "FILLED",
+    amount: "0.010",
+    filled: "0.010",
+    lastQty: "0.005",
+    lastPrice: "100600.00",
+    updateTime: 1710000000600,
+  });
+
+  for (const updateTime of [1710000000700, 1710000000800]) {
+    emitBinanceOrderUpdate(socket, {
+      orderId: 3302,
+      clientOrderId: "cid-3302",
+      executionType: "TRADE",
+      status: "PARTIALLY_FILLED",
+      amount: "0.020",
+      filled: "0.010",
+      lastQty: "0.010",
+      lastPrice: "100700.00",
+      updateTime,
+    });
+  }
+
+  const firstMissingId = await nextEvent(iterator);
+  const secondMissingId = await nextEvent(iterator);
+  expect(firstMissingId.trade.tradeId).toBeUndefined();
+  expect(secondMissingId.trade.tradeId).toBeUndefined();
+  expect([firstMissingId.seq, secondMissingId.seq]).toEqual([2, 3]);
+
+  await iterator.return?.();
+});
+
+test("order trades stream does not deduplicate the same tradeId across symbols", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const iterator = client.order.events.trades()[Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3311,
+    clientOrderId: "cid-3311",
+    executionType: "TRADE",
+    tradeId: 9302,
+    status: "PARTIALLY_FILLED",
+    amount: "0.010",
+    filled: "0.005",
+    lastQty: "0.005",
+    lastPrice: "100500.00",
+    updateTime: 1710000000500,
+  });
+  emitBinanceOrderUpdate(socket, {
+    symbol: "ETHUSDT",
+    orderId: 3312,
+    clientOrderId: "cid-3312",
+    executionType: "TRADE",
+    tradeId: 9302,
+    status: "PARTIALLY_FILLED",
+    amount: "0.100",
+    filled: "0.050",
+    lastQty: "0.050",
+    lastPrice: "3000.00",
+    updateTime: 1710000000600,
+  });
+
+  const btcTrade = await nextEvent(iterator);
+  const ethTrade = await nextEvent(iterator);
+
+  expect(btcTrade).toMatchObject({
+    type: "order.trade",
+    symbol: "BTC/USDT:USDT",
+    seq: 1,
+    trade: {
+      tradeId: "9302",
+      price: new BigNumber("100500.00").toFixed(),
+      qty: new BigNumber("0.005").toFixed(),
+    },
+  });
+  expect(ethTrade).toMatchObject({
+    type: "order.trade",
+    symbol: "ETH/USDT:USDT",
+    seq: 2,
+    trade: {
+      tradeId: "9302",
+      price: new BigNumber("3000.00").toFixed(),
+      qty: new BigNumber("0.050").toFixed(),
+    },
+  });
+
+  await iterator.return?.();
+});
+
+test("order trade publishes even when an out-of-order update is rejected by snapshot watermark", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const updates = client.order.events.updates()[Symbol.asyncIterator]();
+  const trades = client.order.events.trades()[Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3401,
+    clientOrderId: "cid-3401",
+    status: "FILLED",
+    amount: "0.010",
+    filled: "0.010",
+    updateTime: 1710000000600,
+  });
+  await nextMatchingEvent(
+    updates,
+    (event) =>
+      event.type === "order.filled" && event.snapshot.orderId === "3401",
+    200,
+    "newer order fill was not applied before stale trade test",
+  );
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 3401,
+    clientOrderId: "cid-3401",
+    executionType: "TRADE",
+    tradeId: 9401,
+    status: "PARTIALLY_FILLED",
+    amount: "0.010",
+    filled: "0.005",
+    lastQty: "0.005",
+    lastPrice: "100450.00",
+    updateTime: 1710000000500,
+  });
+
+  const trade = await nextEvent(trades);
+  expect(trade).toMatchObject({
+    type: "order.trade",
+    orderId: "3401",
+    trade: {
+      tradeId: "9401",
+      qty: new BigNumber("0.005").toFixed(),
+    },
+  });
+  expect(trade.orderSeq).toBeUndefined();
+  expect(
+    client.order.getOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      orderId: "3401",
+    }),
+  ).toMatchObject({
+    status: "filled",
+    filled: new BigNumber("0.010").toFixed(),
+  });
+  await expectNoMatchingEvent(
+    updates,
+    (event) =>
+      event.type !== "order.snapshot_replaced" &&
+      event.snapshot.orderId === "3401" &&
+      event.snapshot.filled === new BigNumber("0.005").toFixed(),
+    50,
+    "stale trade update also published a snapshot update",
+  );
+
+  await updates.return?.();
+  await trades.return?.();
+});
+
+test("REST-only order updates do not publish trade events", async () => {
+  const { client } = await createSubscribedOrderClient({});
+  const trades = client.order.events.trades()[Symbol.asyncIterator]();
+
+  await client.order.createOrder({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    price: "101000.00",
+    amount: "0.010",
+    clientOrderId: "cid-rest-only",
+  });
+
+  await expectNoMatchingEvent(
+    trades,
+    () => true,
+    50,
+    "REST order command unexpectedly published a trade event",
+  );
+
+  await trades.return?.();
+});
+
+test("order trades stream uses buffered overflow reporting", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const errors = client.events.errors()[Symbol.asyncIterator]();
+  const trades = client.order.events
+    .trades(undefined, { maxBuffer: 1 })
+    [Symbol.asyncIterator]();
+
+  for (const index of [1, 2, 3]) {
+    emitBinanceOrderUpdate(socket, {
+      orderId: 3500 + index,
+      clientOrderId: `cid-350${index}`,
+      executionType: "TRADE",
+      tradeId: 9500 + index,
+      status: "FILLED",
+      amount: "0.010",
+      filled: "0.010",
+      lastQty: "0.010",
+      lastPrice: "100500.00",
+      updateTime: 1710000000500 + index,
+    });
+  }
+
+  const overflow = await nextEvent(errors);
+  expect(overflow).toMatchObject({
+    source: "order",
+    stream: "order.trades",
+    maxBuffer: 1,
+  });
+  expect(overflow.error).toBeInstanceOf(AcexError);
+  expect((overflow.error as AcexError).code).toBe("EVENT_BUFFER_OVERFLOW");
+
+  expect(await nextEvent(trades)).toMatchObject({
+    type: "order.trade",
+    seq: 3,
+    trade: {
+      tradeId: "9503",
+    },
+  });
+
+  await errors.return?.();
+  await trades.return?.();
 });
 
 test("order status enters reconnecting on disconnect and recovers after websocket reconnect", async () => {

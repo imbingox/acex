@@ -1,5 +1,6 @@
 import type {
   RawOpenOrdersSnapshot,
+  RawOrderTrade,
   RawOrderUpdate,
 } from "../adapters/types.ts";
 import type {
@@ -19,6 +20,7 @@ import {
 } from "../errors.ts";
 import type { AsyncEventBusOverflowInfo } from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
+import { toCanonical } from "../internal/decimal.ts";
 import { matchesOrderFilter } from "../internal/filters.ts";
 import { isTransportError } from "../internal/http-client.ts";
 import {
@@ -37,6 +39,8 @@ import type {
   OrderSnapshot,
   OrderSnapshotReplacedEvent,
   OrderStatusChangedEvent,
+  OrderTrade,
+  OrderTradeEvent,
   SubscribeOrdersInput,
   UnsubscribeOrdersInput,
   Venue,
@@ -88,6 +92,8 @@ type OrderErrorCode = OrderCommandErrorCode | "ORDER_INPUT_INVALID";
 
 type OrderCommandOrderState = NonNullable<AcexErrorDetails["orderState"]>;
 
+const MAX_SEEN_TRADE_IDS_PER_RECORD = 1024;
+
 export class OrderManagerImpl
   implements
     OrderManager,
@@ -104,6 +110,7 @@ export class OrderManagerImpl
   private readonly orderBus = new AsyncEventBus<OrderEvent>();
   private readonly orderStatusBus =
     new AsyncEventBus<OrderStatusChangedEvent>();
+  private readonly tradesBus = new AsyncEventBus<OrderTradeEvent>();
   private readonly records = new Map<string, OrderRecord>();
   private localOrderSequence = 0;
 
@@ -145,6 +152,11 @@ export class OrderManagerImpl
             onOverflow: this.createOverflowHandler("order.updates"),
           },
         ),
+      trades: (filter, options) =>
+        this.tradesBus.stream((event) => matchesOrderFilter(event, filter), {
+          maxBuffer: options?.maxBuffer,
+          onOverflow: this.createOverflowHandler("order.trades"),
+        }),
     };
   }
 
@@ -637,6 +649,8 @@ export class OrderManagerImpl
         preserveStatus: options.preserveStatus,
       },
     );
+    this.publishOrderTradeEvent(record, update, snapshot);
+
     if (!snapshot) {
       return;
     }
@@ -819,6 +833,9 @@ export class OrderManagerImpl
       clientOrderIdIndex: new Map(),
       pendingClientOrderIdIndex: new Map(),
       missingOrderConfirmations: new Map(),
+      seenTradeIds: new Set(),
+      seenTradeIdQueue: [],
+      nextTradeSeq: 0,
       status: createOrderDataStatus(accountId, venue, "inactive"),
     };
 
@@ -910,6 +927,85 @@ export class OrderManagerImpl
       snapshot,
       ts: this.context.now(),
     });
+  }
+
+  private publishOrderTradeEvent(
+    record: OrderRecord,
+    update: RawOrderUpdate,
+    snapshot?: OrderSnapshot,
+  ): void {
+    if (
+      !update.trade ||
+      !this.markTradeIdSeen(record, update.symbol, update.trade.tradeId)
+    ) {
+      return;
+    }
+
+    this.tradesBus.publish({
+      type: "order.trade",
+      accountId: record.accountId,
+      venue: record.venue,
+      symbol: update.symbol,
+      side: update.side,
+      orderId: update.orderId ?? snapshot?.orderId,
+      clientOrderId: update.clientOrderId ?? snapshot?.clientOrderId,
+      trade: this.createOrderTrade(update.trade, update),
+      seq: ++record.nextTradeSeq,
+      orderSeq: snapshot?.seq,
+      ts: this.context.now(),
+    });
+  }
+
+  private createOrderTrade(
+    trade: RawOrderTrade,
+    update: RawOrderUpdate,
+  ): OrderTrade {
+    return {
+      tradeId: trade.tradeId,
+      price: toCanonical(trade.price),
+      qty: toCanonical(trade.qty),
+      fee: trade.fee
+        ? {
+            cost: toCanonical(trade.fee.cost),
+            asset: trade.fee.asset,
+          }
+        : undefined,
+      realizedPnl:
+        trade.realizedPnl === undefined
+          ? undefined
+          : toCanonical(trade.realizedPnl),
+      maker: trade.maker,
+      positionSide: trade.positionSide,
+      exchangeTs: update.exchangeTs,
+      receivedAt: update.receivedAt,
+    };
+  }
+
+  private markTradeIdSeen(
+    record: OrderRecord,
+    symbol: string,
+    tradeId: string | undefined,
+  ): boolean {
+    if (tradeId === undefined) {
+      return true;
+    }
+
+    const tradeKey = `${symbol}:${tradeId}`;
+    if (record.seenTradeIds.has(tradeKey)) {
+      return false;
+    }
+
+    record.seenTradeIds.add(tradeKey);
+    record.seenTradeIdQueue.push(tradeKey);
+
+    while (record.seenTradeIdQueue.length > MAX_SEEN_TRADE_IDS_PER_RECORD) {
+      const removed = record.seenTradeIdQueue.shift();
+      if (removed !== undefined) {
+        record.seenTradeIds.delete(removed);
+      }
+    }
+
+    return true;
   }
 
   private warnDroppedUnkeyedTerminalOrder(

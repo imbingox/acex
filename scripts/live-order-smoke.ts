@@ -4,6 +4,7 @@ import {
   createClient,
   type OrderEvent,
   type OrderSnapshot,
+  type OrderTradeEvent,
 } from "../index.ts";
 import {
   cloneStatus,
@@ -400,6 +401,24 @@ function summarizeEvent(event: OrderEvent): OrderEventSummary {
   };
 }
 
+function formatTradeFee(trade: OrderTradeEvent["trade"]): string {
+  return trade.fee ? `${trade.fee.cost} ${trade.fee.asset}` : "undefined";
+}
+
+function printTradeEvent(event: OrderTradeEvent): void {
+  writeStderr(
+    [
+      "order.trade",
+      `tradeId=${event.trade.tradeId ?? "undefined"}`,
+      `price=${event.trade.price}`,
+      `qty=${event.trade.qty}`,
+      `fee=${formatTradeFee(event.trade)}`,
+      `realizedPnl=${event.trade.realizedPnl ?? "undefined"}`,
+      `maker=${event.trade.maker ?? "undefined"}`,
+    ].join(" "),
+  );
+}
+
 function maxBigNumber(values: BigNumber[]): BigNumber {
   return values.reduce((max, value) =>
     value.isGreaterThan(max) ? value : max,
@@ -591,6 +610,22 @@ async function smokeOrders(options: {
       venue: "binance",
     })
     [Symbol.asyncIterator]();
+  const tradeIterator = options.client.order.events
+    .trades({
+      accountId: options.accountId,
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+  const tradeTask = (async () => {
+    while (true) {
+      const result = await tradeIterator.next();
+      if (result.done) {
+        return;
+      }
+
+      printTradeEvent(result.value);
+    }
+  })();
   const socketIndex = TrackedWebSocket.instances.length;
 
   try {
@@ -788,6 +823,8 @@ async function smokeOrders(options: {
     };
   } finally {
     await iterator.return?.();
+    await tradeIterator.return?.();
+    await tradeTask;
   }
 }
 

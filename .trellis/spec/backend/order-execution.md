@@ -363,6 +363,151 @@ return openOrders.flatMap((order) => {
 
 ---
 
+## Scenario: `order.trade` 逐笔成交事件承载手续费与 realized PnL
+
+### 1. Scope / Trigger
+
+- Trigger: 修改 `RawOrderUpdate`、`OrderEventStreams`、Binance `ORDER_TRADE_UPDATE` 映射、OrderManager 私有订单更新路径，或新增成交明细/手续费/realized PnL 字段时。
+- 目标: 让策略层按逐笔成交核算 fee、成交价量与 realized PnL，同时保持 `OrderSnapshot` 只表达订单生命周期状态。
+
+### 2. Signatures
+
+```ts
+// src/adapters/types.ts
+export interface RawOrderTrade {
+  tradeId?: string;
+  price: string;
+  qty: string;
+  fee?: { cost: string; asset: string };
+  realizedPnl?: string;
+  maker?: boolean;
+  positionSide?: PositionSide;
+}
+
+export interface RawOrderUpdate {
+  // existing order lifecycle fields...
+  trade?: RawOrderTrade;
+}
+```
+
+```ts
+// src/types/order.ts
+export interface OrderTrade {
+  tradeId?: string;
+  price: string;
+  qty: string;
+  fee?: { cost: string; asset: string };
+  realizedPnl?: string;
+  maker?: boolean;
+  positionSide?: PositionSide;
+  exchangeTs?: number;
+  receivedAt: number;
+}
+
+export interface OrderTradeEvent extends OrderEventBase {
+  type: "order.trade";
+  side: OrderSide;
+  orderId?: string;
+  clientOrderId?: string;
+  trade: OrderTrade;
+  seq: number;
+  orderSeq?: number;
+}
+
+export interface OrderEventStreams {
+  updates(filter?, options?: BufferedEventStreamOptions): AsyncIterable<OrderEvent>;
+  trades(filter?, options?: BufferedEventStreamOptions): AsyncIterable<OrderTradeEvent>;
+  status(filter?, options?: BufferedEventStreamOptions): AsyncIterable<OrderStatusChangedEvent>;
+}
+```
+
+### 3. Contracts
+
+- `OrderSnapshot` 公开字段不挂 fee、realizedPnl、lastFill 或 trades 数组；REST per-order 查询天然不返回这些字段，下游按 `order.trade` 事件用 `orderId` / `clientOrderId` 自行 fold。
+- Binance `ORDER_TRADE_UPDATE` 只有在 `x === "TRADE"` 且 `Number(l) > 0` 时生成 `RawOrderUpdate.trade`；非 TRADE 执行类型与 `l=0` 只更新订单状态，不产生成交事件。
+- `fee.cost` 允许 `"0"` 和负值；只有 `n` 与 `N` 都存在时填写 `fee`，`N` 缺失时省略整个 `fee`，不能用 truthy 判断丢掉零手续费。
+- adapter 不做成交去重、不维护累计 fee / realizedPnl；OrderManager 按每个 `OrderRecord` 的 `(symbol, tradeId)` 组合键有界 seen-set 去重，上限固定 1024，FIFO 淘汰。去重键**必须含 symbol**：Binance 期货 `tradeId` 仅在单个 symbol 内递增、非 account 全局唯一，裸 `tradeId` 会把不同 symbol 的同号成交误判重复而漏发。`tradeId` 缺失时不去重，直接发布。
+- `onPrivateOrderUpdate()` 中 trade 发布必须独立于快照 watermark：即使 `applyUpdateToRecord()` 因乱序/旧 update 返回 `undefined`，只要 raw `update.trade` 存在且未被 `tradeId` 去重，仍发布 `order.trade`。
+- `OrderTradeEvent.seq` 是该 account+venue record 的单调 trade 序号，用于下游检测 buffer overflow 或消费 gap；`orderSeq` 在同一 raw update 成功写入订单快照时等于 `OrderSnapshot.seq`，快照被 watermark 拒绝时保持 `undefined`。
+- `events.order.trades()` 与 order/account/status 一样只暴露 `{ maxBuffer?: number }`，使用 `AsyncEventBus` buffer 语义；慢消费者溢出时 drop oldest，并通过 `EVENT_BUFFER_OVERFLOW` runtime error 上报 `stream: "order.trades"`。
+
+### 4. Validation & Error Matrix
+
+| 场景 | 约定 |
+|---|---|
+| Binance WS `x=TRADE,l>0,n/N/l/L/rp/m/ps` | 发布一条 `order.trade`，字段 canonical 化，含 `positionSide` / `receivedAt` / `seq` / `orderSeq` |
+| Binance WS 非 TRADE（NEW/CANCELED/EXPIRED 等） | 不发布 `order.trade`，`updates()` 行为不变 |
+| Binance WS `x=TRADE,l=0` | 不发布 `order.trade` |
+| 重复 `tradeId`（同 symbol） | 只发布第一条，后续重复丢弃且不推进 trade `seq` |
+| 不同 symbol 的相同 `tradeId` | 各自发布，互不去重（去重键含 symbol） |
+| `tradeId` 缺失 | 不去重，每条都发布 |
+| 乱序成交 update 被 snapshot watermark 拒绝 | `order.trade` 仍发布，`orderSeq` 为 `undefined`，本地 `OrderSnapshot` 不回退 |
+| `fee.cost` 为 `"0"` 或负值 | 保留 fee，不丢字段 |
+| REST create/fetch/openOrders 来源 | 不含 `trade`，不发布 `order.trade`，不报错 |
+| `events.order.trades({ symbol }, { maxBuffer })` 慢消费溢出 | 丢最旧 trade，发布一次 `EVENT_BUFFER_OVERFLOW`，`seq` 可用于检测缺口 |
+
+### 5. Good / Base / Bad Cases
+
+#### Good
+
+```ts
+for await (const event of client.order.events.trades({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+})) {
+  console.log(event.orderId, event.trade.qty, event.trade.fee?.cost);
+}
+```
+
+#### Base
+
+`order.updated` / `order.filled` 继续只表达订单生命周期和累计 `filled` / `remaining`；策略需要手续费成本时订阅 `order.trade` 并按 `orderId` 聚合。
+
+#### Bad
+
+把 `n/N/rp` 塞进 `OrderSnapshot` 的末笔字段或累计字段。这样会在 REST-only 快照缺字段、终态事件不带 fee、手续费资产跨笔变化时产生歧义，并让慢消费者无法恢复丢失的逐笔流水。
+
+### 6. Tests Required
+
+```bash
+bun run lint
+bun run type-check
+bun run test
+```
+
+断言重点：
+
+- Binance 映射覆盖 `x/t/l/L/n/N/rp/m/ps`，且 decimal string canonical 化。
+- `events.order.trades()` 端到端发布，支持 accountId / venue / symbol 过滤。
+- 非 TRADE、`l=0`、REST-only 路径不发布 trade。
+- 重复 `tradeId` 去重，缺失 `tradeId` 不去重。
+- 乱序 update 被 watermark 拒绝时仍发布 trade，且 snapshot 不回退。
+- `fee.cost` 为 `"0"` 或负值时保留。
+- trades 流 buffer overflow 走 `EVENT_BUFFER_OVERFLOW`，`seq` 单调。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const snapshot = this.applyUpdateToRecord(record, accountId, venue, update);
+if (!snapshot) return;
+if (update.trade) this.tradesBus.publish(toTradeEvent(update, snapshot.seq));
+```
+
+问题：旧成交 update 会被快照 watermark 一起拦掉，策略层丢失真实成交。
+
+#### Correct
+
+```ts
+const snapshot = this.applyUpdateToRecord(record, accountId, venue, update);
+this.publishOrderTradeEvent(record, update, snapshot);
+if (!snapshot) return;
+this.publishOrderEvent(accountId, venue, snapshot);
+```
+
+效果：快照仍保持单调不回退，逐笔成交作为事实流水独立发布；能写入快照时用 `orderSeq` 关联，不能写入时仍保留 trade。
+
 ## Scenario: OrderManager 本地订单存储分层、内部 localOrderId 身份与 closed 裁剪
 
 ### 1. Scope / Trigger

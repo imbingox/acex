@@ -16,6 +16,9 @@ export interface OrderRecord {
   clientOrderIdIndex: Map<string, Set<string>>;
   pendingClientOrderIdIndex: Map<string, PendingOrderClaim>;
   missingOrderConfirmations: Map<string, number>;
+  seenTradeIds: Set<string>;
+  seenTradeIdQueue: string[];
+  nextTradeSeq: number;
   status: OrderDataStatus;
 }
 

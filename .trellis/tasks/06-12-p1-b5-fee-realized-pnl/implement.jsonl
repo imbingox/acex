@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "订单命令/缓存同步 contract、watermark 乱序门控、终态主键与事件发布语义；trade 发布须独立于快照 watermark（D4），新增 order.trade 事件与 trades() 流要与现有 order 事件契约一致"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "RawOrderUpdate 标准化类型契约、ORDER_TRADE_UPDATE 映射约定、adapter 不持有状态的边界；本任务新增 RawOrderUpdate.trade? 与 mapOrderUpdate 字段映射须遵此"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "公开类型（OrderTrade/OrderTradeEvent）定义与导出、decimal string、optional 字段约定"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "internal/ 与 managers/ 分层、AsyncEventBus 与 manager events 工厂归属；tradesBus 接入与去重 seen-set 的归属位置"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "buffer 溢出 EVENT_BUFFER_OVERFLOW runtime error 的构造与 errorBus 发布约定，trades 流溢出沿用此机制"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "公开类型扩展（新增 OrderTrade/OrderTradeEvent/trades()）属 API 变更，需 minor changeset 的规则"}

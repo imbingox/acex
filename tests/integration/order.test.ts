@@ -188,8 +188,10 @@ async function createSubscribedOrderClient(options: {
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
     order: orderOptions,
@@ -1006,8 +1008,10 @@ test("private order reconcile backfills terminal status for disappeared open ord
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
   });
@@ -1109,8 +1113,10 @@ test("order bootstrap backfills terminal status for cached disappeared open orde
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -1207,8 +1213,10 @@ test("private order reconcile evicts disappeared open orders after confirmed mis
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
     order: {
@@ -1334,8 +1342,10 @@ test("private order reconcile keeps disappeared open orders on network backfill 
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
     order: {
@@ -1440,8 +1450,10 @@ test("successful order reconcile clears previous HTTP degraded status", async ()
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
   });
@@ -2057,8 +2069,10 @@ test("expired createOrder pending claim is cleared when the venue confirms it is
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
     order: {
@@ -2153,8 +2167,10 @@ test("expired createOrder pending claim is retained on venue lookup transport er
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
     order: {
@@ -2255,8 +2271,10 @@ test("expired createOrder pending claim stores the venue order when it later exi
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
     order: {
@@ -2518,8 +2536,10 @@ test("createOrder pending claim reuses the generated cid for early websocket upd
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -2597,8 +2617,10 @@ test("createOrder command ack cannot roll back an earlier websocket fill", async
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -2718,8 +2740,10 @@ test("createOrder command ack recomputes remaining when filled is clamped", asyn
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -3108,8 +3132,10 @@ test("cancelAllOrders synthesized ack cannot roll back a websocket fill during t
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -3296,8 +3322,10 @@ test("order cache scopes exchange order ids by symbol", async () => {
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -3362,8 +3390,10 @@ test("order cache keeps same-symbol orders with different order ids when clientO
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -3905,8 +3935,10 @@ test("order reconcile backfill trims closed orders without restoring open orders
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
     order: {

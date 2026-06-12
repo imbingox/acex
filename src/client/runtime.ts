@@ -28,6 +28,7 @@ import { OrderManagerImpl } from "../managers/order-manager.ts";
 import type {
   AccountCredentials,
   AccountManager,
+  AccountRuntimeOptions,
   AcexClient,
   AcexInternalError,
   BufferedEventStreamOptions,
@@ -73,6 +74,10 @@ interface VenueAdapterLifecycle {
   stop(): void;
 }
 
+type AccountVenueRuntimeOptions = NonNullable<
+  AccountRuntimeOptions["venues"]
+>[keyof NonNullable<AccountRuntimeOptions["venues"]>];
+
 interface VenueAdapterFactoryDeps {
   readonly rateLimiter: RateLimiter;
   readonly signingClock?: TimeProvider;
@@ -81,7 +86,7 @@ interface VenueAdapterFactoryDeps {
     error: Error,
     metadata?: Omit<AcexInternalError, "error" | "source" | "ts">,
   ) => void;
-  readonly venueOptions?: Record<string, unknown>;
+  readonly venueOptions?: AccountVenueRuntimeOptions;
 }
 
 interface VenueAdapterFactoryResult {
@@ -109,21 +114,35 @@ function toError(value: unknown, fallback: string): Error {
 }
 
 function getStringOption(
-  options: Record<string, unknown> | undefined,
+  options: AccountVenueRuntimeOptions | undefined,
   key: string,
 ): string | undefined {
-  const value = options?.[key];
+  const value = options ? (options as Record<string, unknown>)[key] : undefined;
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function getNumberOption(
-  options: Record<string, unknown> | undefined,
+  options: AccountVenueRuntimeOptions | undefined,
   key: string,
 ): number | undefined {
-  const value = options?.[key];
+  const value = options ? (options as Record<string, unknown>)[key] : undefined;
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function getAccountVenueOptions(
+  options: AccountRuntimeOptions | undefined,
+  venue: Venue,
+): AccountVenueRuntimeOptions | undefined {
+  switch (venue) {
+    case "binance":
+      return options?.venues?.binance;
+    case "juplend":
+      return options?.venues?.juplend;
+    default:
+      return undefined;
+  }
 }
 
 function createBinanceAdapterGroup(
@@ -268,12 +287,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
           rateLimiter,
           signingClock: options.clock,
           publishRuntimeError: this.publishRuntimeError.bind(this),
-          venueOptions:
-            venue === "binance"
-              ? options.account?.binance
-              : venue === "juplend"
-                ? options.account?.juplend
-                : undefined,
+          venueOptions: getAccountVenueOptions(options.account, venue),
         }),
     );
     this.adapterLifecycles = adapterGroups.flatMap((group) =>

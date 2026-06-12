@@ -213,9 +213,11 @@ async function smokeJuplend(options: {
 }): Promise<SmokeResult> {
   const client = createClient({
     account: {
-      juplend: {
-        pollIntervalMs: options.pollIntervalMs,
-        rpcUrl: options.rpcUrl,
+      venues: {
+        juplend: {
+          pollIntervalMs: options.pollIntervalMs,
+          rpcUrl: options.rpcUrl,
+        },
       },
     },
   });

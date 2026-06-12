@@ -12,6 +12,7 @@ import {
 import { isTransportError } from "../internal/http-client.ts";
 import type {
   AccountRuntimeOptions,
+  BinanceAccountRuntimeOptions,
   OrderRuntimeOptions,
   OrderSnapshot,
   PrivateRuntimeReason,
@@ -46,6 +47,13 @@ interface PrivateSubscriptionRecord {
   reconcileDirty: boolean;
 }
 
+interface BinanceCoordinatorOptionsSnapshot {
+  riskPollIntervalMs: number;
+  privateReconcileIntervalMs: number | undefined;
+  privateStreamStaleAfterMs: number;
+  listenKeyKeepAliveMs: number;
+}
+
 const DEFAULT_STREAM_OPEN_TIMEOUT_MS = 15_000;
 const DEFAULT_STREAM_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS = 10_000;
@@ -77,6 +85,29 @@ function normalizeReconcileInterval(
   return normalizePositiveInterval(value, fallback);
 }
 
+function normalizeBinanceCoordinatorOptions(
+  options: BinanceAccountRuntimeOptions | undefined,
+): BinanceCoordinatorOptionsSnapshot {
+  return {
+    riskPollIntervalMs: normalizePositiveInterval(
+      options?.riskPollIntervalMs,
+      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
+    ),
+    privateReconcileIntervalMs: normalizeReconcileInterval(
+      options?.privateReconcileIntervalMs,
+      DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS,
+    ),
+    privateStreamStaleAfterMs: normalizePositiveInterval(
+      options?.privateStreamStaleAfterMs,
+      DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS,
+    ),
+    listenKeyKeepAliveMs: normalizePositiveInterval(
+      options?.listenKeyKeepAliveMs,
+      DEFAULT_LISTEN_KEY_KEEPALIVE_MS,
+    ),
+  };
+}
+
 function transportReason(
   error: unknown,
   fallback: PrivateRuntimeReason,
@@ -94,10 +125,7 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamOpenTimeoutMs: number;
   private readonly streamReconnectDelayMs: number;
   private readonly streamReconnectMaxDelayMs: number;
-  private readonly listenKeyKeepAliveMs: number;
-  private readonly binancePrivateStreamStaleAfterMs: number;
-  private readonly binanceRiskPollIntervalMs: number;
-  private readonly binancePrivateReconcileIntervalMs: number | undefined;
+  private readonly binanceOptions: BinanceCoordinatorOptionsSnapshot;
   private readonly pendingClaimTtlMs: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
@@ -110,6 +138,9 @@ export class PrivateSubscriptionCoordinator {
     orderOptions: OrderRuntimeOptions = {},
   ) {
     this.context = context;
+    this.binanceOptions = normalizeBinanceCoordinatorOptions(
+      options.venues?.binance,
+    );
     this.adapters = new Map(
       adapters.map((adapter) => [adapter.venue, adapter]),
     );
@@ -122,20 +153,6 @@ export class PrivateSubscriptionCoordinator {
     this.streamReconnectMaxDelayMs =
       options.streamReconnectMaxDelayMs ??
       DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS;
-    this.listenKeyKeepAliveMs =
-      options.listenKeyKeepAliveMs ?? DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
-    this.binancePrivateStreamStaleAfterMs = normalizePositiveInterval(
-      options.binance?.privateStreamStaleAfterMs,
-      DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS,
-    );
-    this.binanceRiskPollIntervalMs = normalizePositiveInterval(
-      options.binance?.riskPollIntervalMs,
-      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
-    );
-    this.binancePrivateReconcileIntervalMs = normalizeReconcileInterval(
-      options.binance?.privateReconcileIntervalMs,
-      DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS,
-    );
     this.pendingClaimTtlMs = normalizePositiveInterval(
       orderOptions.pendingClaimTtlMs,
       DEFAULT_PENDING_CLAIM_TTL_MS,
@@ -446,6 +463,44 @@ export class PrivateSubscriptionCoordinator {
     return adapter;
   }
 
+  private getAccountRefreshIntervalMs(
+    record: PrivateSubscriptionRecord,
+  ): number | undefined {
+    if (record.venue !== "binance") {
+      return undefined;
+    }
+
+    return this.binanceOptions.riskPollIntervalMs;
+  }
+
+  private getPrivateReconcileIntervalMs(
+    record: PrivateSubscriptionRecord,
+  ): number | undefined {
+    if (record.venue !== "binance") {
+      return undefined;
+    }
+
+    return this.binanceOptions.privateReconcileIntervalMs;
+  }
+
+  private getPrivateStreamStaleAfterMs(
+    record: PrivateSubscriptionRecord,
+  ): number {
+    if (record.venue !== "binance") {
+      return DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS;
+    }
+
+    return this.binanceOptions.privateStreamStaleAfterMs;
+  }
+
+  private getListenKeyKeepAliveMs(record: PrivateSubscriptionRecord): number {
+    if (record.venue !== "binance") {
+      return DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
+    }
+
+    return this.binanceOptions.listenKeyKeepAliveMs;
+  }
+
   private getOrCreateRecord(
     account: RegisteredAccountRecord,
   ): PrivateSubscriptionRecord {
@@ -517,7 +572,9 @@ export class PrivateSubscriptionCoordinator {
   }
 
   private ensureAccountRefreshPolling(record: PrivateSubscriptionRecord): void {
+    const intervalMs = this.getAccountRefreshIntervalMs(record);
     if (
+      intervalMs === undefined ||
       typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
       !record.accountSubscribed ||
       record.accountRefreshTimer ||
@@ -539,7 +596,9 @@ export class PrivateSubscriptionCoordinator {
   }
 
   private scheduleAccountRefreshPoll(record: PrivateSubscriptionRecord): void {
+    const intervalMs = this.getAccountRefreshIntervalMs(record);
     if (
+      intervalMs === undefined ||
       typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
       !record.accountSubscribed
     ) {
@@ -584,7 +643,7 @@ export class PrivateSubscriptionCoordinator {
             this.scheduleAccountRefreshPoll(record);
           }
         });
-    }, this.binanceRiskPollIntervalMs);
+    }, intervalMs);
   }
 
   private hasPrivateReconcileCapability(
@@ -602,8 +661,9 @@ export class PrivateSubscriptionCoordinator {
   private ensurePrivateReconcilePolling(
     record: PrivateSubscriptionRecord,
   ): void {
+    const intervalMs = this.getPrivateReconcileIntervalMs(record);
     if (
-      this.binancePrivateReconcileIntervalMs === undefined ||
+      intervalMs === undefined ||
       !this.isActive(record) ||
       !this.hasPrivateReconcileCapability(record) ||
       record.privateReconcileTimer ||
@@ -637,8 +697,9 @@ export class PrivateSubscriptionCoordinator {
   private schedulePrivateReconcilePoll(
     record: PrivateSubscriptionRecord,
   ): void {
+    const intervalMs = this.getPrivateReconcileIntervalMs(record);
     if (
-      this.binancePrivateReconcileIntervalMs === undefined ||
+      intervalMs === undefined ||
       !this.isActive(record) ||
       !this.hasPrivateReconcileCapability(record)
     ) {
@@ -650,7 +711,7 @@ export class PrivateSubscriptionCoordinator {
       record.privateReconcileTimer = undefined;
       if (
         generation !== record.privateReconcileGeneration ||
-        this.binancePrivateReconcileIntervalMs === undefined ||
+        this.getPrivateReconcileIntervalMs(record) === undefined ||
         !this.isActive(record) ||
         !this.hasPrivateReconcileCapability(record)
       ) {
@@ -679,14 +740,14 @@ export class PrivateSubscriptionCoordinator {
 
           record.privateReconcileInFlight = undefined;
           if (
-            this.binancePrivateReconcileIntervalMs !== undefined &&
+            this.getPrivateReconcileIntervalMs(record) !== undefined &&
             this.isActive(record) &&
             this.hasPrivateReconcileCapability(record)
           ) {
             this.schedulePrivateReconcilePoll(record);
           }
         });
-    }, this.binancePrivateReconcileIntervalMs);
+    }, intervalMs);
   }
 
   private handlePrivateReconcileLookupError(
@@ -1372,8 +1433,8 @@ export class PrivateSubscriptionCoordinator {
         openTimeoutMs: this.streamOpenTimeoutMs,
         reconnectDelayMs: this.streamReconnectDelayMs,
         reconnectMaxDelayMs: this.streamReconnectMaxDelayMs,
-        listenKeyKeepAliveMs: this.listenKeyKeepAliveMs,
-        staleAfterMs: this.binancePrivateStreamStaleAfterMs,
+        listenKeyKeepAliveMs: this.getListenKeyKeepAliveMs(record),
+        staleAfterMs: this.getPrivateStreamStaleAfterMs(record),
         now: () => this.context.now(),
       },
       { ...account.options, accountId: account.accountId },

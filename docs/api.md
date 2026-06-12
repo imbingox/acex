@@ -107,10 +107,12 @@ Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事
 ```ts
 const client = createClient({
   account: {
-    juplend: {
-      pollIntervalMs: 30_000,
-      rpcUrl: process.env.SOL_HELIUS_RPC,
-      jupApiKey: process.env.JUP_API,
+    venues: {
+      juplend: {
+        pollIntervalMs: 30_000,
+        rpcUrl: process.env.SOL_HELIUS_RPC,
+        jupApiKey: process.env.JUP_API,
+      },
     },
   },
 });
@@ -238,22 +240,24 @@ const client = createClient({
     streamOpenTimeoutMs: 15_000,
     streamReconnectDelayMs: 1_000,
     streamReconnectMaxDelayMs: 10_000,
-    listenKeyKeepAliveMs: 30 * 60_000,
-    binance: {
-      riskPollIntervalMs: 5_000,
-      privateReconcileIntervalMs: 60_000,
-      privateStreamStaleAfterMs: 65 * 60_000,
-    },
-    juplend: {
-      pollIntervalMs: 30_000,
-      rpcUrl: process.env.SOL_HELIUS_RPC,
-      jupApiKey: process.env.JUP_API,
+    venues: {
+      binance: {
+        riskPollIntervalMs: 5_000,
+        privateReconcileIntervalMs: 60_000,
+        privateStreamStaleAfterMs: 65 * 60_000,
+        listenKeyKeepAliveMs: 30 * 60_000,
+      },
+      juplend: {
+        pollIntervalMs: 30_000,
+        rpcUrl: process.env.SOL_HELIUS_RPC,
+        jupApiKey: process.env.JUP_API,
+      },
     },
   },
 });
 ```
 
-`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`sandbox`、`logger`、`logLevel` 目前是预留位。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `account.venues.binance.riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`account.venues.binance.privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。Juplend 只使用 `account.venues.juplend.pollIntervalMs` 驱动 adapter polling，不继承 Binance 的 reconcile/risk polling 默认。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
 ### 4.2 `start()` / `stop()`
 
@@ -637,16 +641,18 @@ interface CreateClientOptions {
     streamOpenTimeoutMs?: number;
     streamReconnectDelayMs?: number;
     streamReconnectMaxDelayMs?: number;
-    listenKeyKeepAliveMs?: number;
-    binance?: {
-      riskPollIntervalMs?: number;
-      privateReconcileIntervalMs?: number;
-      privateStreamStaleAfterMs?: number;
-    };
-    juplend?: {
-      pollIntervalMs?: number;
-      rpcUrl?: string;
-      jupApiKey?: string;
+    venues?: {
+      binance?: {
+        riskPollIntervalMs?: number;
+        privateReconcileIntervalMs?: number;
+        privateStreamStaleAfterMs?: number;
+        listenKeyKeepAliveMs?: number;
+      };
+      juplend?: {
+        pollIntervalMs?: number;
+        rpcUrl?: string;
+        jupApiKey?: string;
+      };
     };
   };
   order?: {

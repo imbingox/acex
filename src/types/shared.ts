@@ -284,20 +284,26 @@ export interface MarketRuntimeOptions {
   l1ReconnectMaxDelayMs?: number;
 }
 
+export interface BinanceAccountRuntimeOptions {
+  riskPollIntervalMs?: number;
+  privateReconcileIntervalMs?: number;
+  privateStreamStaleAfterMs?: number;
+  listenKeyKeepAliveMs?: number;
+}
+
+export interface JuplendAccountRuntimeOptions {
+  pollIntervalMs?: number;
+  rpcUrl?: string;
+  jupApiKey?: string;
+}
+
 export interface AccountRuntimeOptions {
   streamOpenTimeoutMs?: number;
   streamReconnectDelayMs?: number;
   streamReconnectMaxDelayMs?: number;
-  listenKeyKeepAliveMs?: number;
-  binance?: {
-    riskPollIntervalMs?: number;
-    privateReconcileIntervalMs?: number;
-    privateStreamStaleAfterMs?: number;
-  };
-  juplend?: {
-    pollIntervalMs?: number;
-    rpcUrl?: string;
-    jupApiKey?: string;
+  venues?: {
+    binance?: BinanceAccountRuntimeOptions;
+    juplend?: JuplendAccountRuntimeOptions;
   };
 }
 

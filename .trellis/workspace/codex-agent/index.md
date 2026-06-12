@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 38
+- **Total Sessions**: 39
 - **Last Active**: 2026-06-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1367 | Active |
+| `journal-1.md` | ~1400 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 39 | 2026-06-12 | P1-B5 成交明细字段：独立 order.trade 逐笔事件 | `d3bcffa` | `codex/p1-b5-fee-realized-pnl` |
 | 38 | 2026-06-12 | P1-B4 签名时钟自动同步回路 | `8cf0a72`, `7beac9d` | `codex/p1-b4-clock-resync` |
 | 37 | 2026-06-11 | 完成限流分层 P1-B3 | `3edefc1`, `65e099f`, `3768874`, `838556f`, `ae4e3ee` | `main` |
 | 36 | 2026-06-11 | 批次③ 事件流质量：conflation/背压 + status 发布去重（P1-B1 + P1-B2） | `35b8163` | `feat/event-conflation-status-dedup` |

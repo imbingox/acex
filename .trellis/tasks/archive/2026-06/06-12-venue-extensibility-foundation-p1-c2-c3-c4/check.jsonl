@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "验收 C3 symbol 归一化来源 + C4 心跳/StreamHandle 契约合规"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "验收 C1 registry/catalog 层级边界、internal 不依赖上层"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "验收 C3 miss 不丢 trade/fee、订单状态不污染、命令路径 typed error"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "验收 SymbolMappingError/runtime error 包装与脱敏合规"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "验收 C2 公开类型与无宽化/循环引用、显式返回类型"}
+{"file": ".trellis/spec/backend/venue-lending.md", "reason": "验收 juplend 迁移无遗漏、polling 语义不变"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "通用质量门禁（测试分层、lint/type-check/test、grep-gate）"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "验收 changeset 存在且类型正确（minor/pre 模式）"}

@@ -66,8 +66,6 @@ interface LocalSubscriber<TPayload> {
 interface SubState<TDescriptor, TPayload> {
   readonly descriptor: TDescriptor;
   readonly subscribers: Set<LocalSubscriber<TPayload>>;
-  lastMessageAt: number | undefined;
-  staleTimer: TimerHandle | undefined;
 }
 
 interface ControlFrame<TDescriptor> {
@@ -189,8 +187,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     const sub: SubState<TDescriptor, TPayload> = {
       descriptor,
       subscribers: new Set([localSubscriber]),
-      lastMessageAt: undefined,
-      staleTimer: undefined,
     };
 
     connection.subs.set(subscriptionKey, sub);
@@ -200,7 +196,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       sub,
       localSubscriber,
     );
-    this.scheduleSubStaleTimeout(connection, sub);
 
     if (connection.isOpen) {
       this.enqueueControlFrame(connection, "subscribe", [
@@ -424,10 +419,10 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       return;
     }
 
-    sub.lastMessageAt = receivedAt;
-    this.scheduleSubStaleTimeout(connection, sub);
+    const subscribers: Iterable<LocalSubscriber<TPayload>> =
+      sub.subscribers.size === 1 ? sub.subscribers : [...sub.subscribers];
 
-    for (const localSubscriber of [...sub.subscribers]) {
+    for (const localSubscriber of subscribers) {
       if (!sub.subscribers.has(localSubscriber)) {
         continue;
       }
@@ -477,24 +472,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }, this.options.initialMessageTimeoutMs);
   }
 
-  private scheduleSubStaleTimeout(
-    connection: ConnectionState<TDescriptor, TPayload>,
-    sub: SubState<TDescriptor, TPayload>,
-  ): void {
-    if (sub.staleTimer) {
-      this.clearTimer(sub.staleTimer);
-    }
-
-    sub.staleTimer = this.setTimer(() => {
-      const subscriptionKey = this.protocol.subscriptionKey(sub.descriptor);
-      if (connection.subs.get(subscriptionKey) !== sub) {
-        return;
-      }
-
-      this.markSubStale(sub, "heartbeat_timeout");
-    }, this.options.staleAfterMs);
-  }
-
   private clearInitialTimer(localSubscriber: LocalSubscriber<TPayload>): void {
     if (!localSubscriber.initialTimer) {
       return;
@@ -507,10 +484,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   private clearSubTimers(sub: SubState<TDescriptor, TPayload>): void {
     for (const localSubscriber of sub.subscribers) {
       this.clearInitialTimer(localSubscriber);
-    }
-    if (sub.staleTimer) {
-      this.clearTimer(sub.staleTimer);
-      sub.staleTimer = undefined;
     }
   }
 
@@ -592,7 +565,14 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     reason: StaleReason,
   ): void {
     for (const sub of connection.subs.values()) {
-      this.markSubStale(sub, reason);
+      for (const localSubscriber of sub.subscribers) {
+        if (localSubscriber.freshness === "stale") {
+          continue;
+        }
+
+        localSubscriber.freshness = "stale";
+        localSubscriber.callbacks.onFreshnessChange("stale", reason);
+      }
     }
   }
 
@@ -603,20 +583,6 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       for (const localSubscriber of sub.subscribers) {
         localSubscriber.freshness = "stale";
       }
-    }
-  }
-
-  private markSubStale(
-    sub: SubState<TDescriptor, TPayload>,
-    reason: StaleReason,
-  ): void {
-    for (const localSubscriber of sub.subscribers) {
-      if (localSubscriber.freshness === "stale") {
-        continue;
-      }
-
-      localSubscriber.freshness = "stale";
-      localSubscriber.callbacks.onFreshnessChange("stale", reason);
     }
   }
 

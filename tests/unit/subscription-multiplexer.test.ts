@@ -689,7 +689,7 @@ test("reconnect creates a new socket and replays active subscriptions", async ()
   ]);
 });
 
-test("per-subscription stale is independent and recovers on new data", async () => {
+test("quiet subscription stays fresh while the shared connection receives other data", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
   const a = createCallbacks();
@@ -703,21 +703,24 @@ test("per-subscription stale is independent and recovers on new data", async () 
   socket.emitJson({ key: "a", value: "A1" });
   socket.emitJson({ key: "b", value: "B1" });
   clock.advance(90);
-  socket.emitJson({ key: "b", value: "B2" });
+  socket.emitJson({ key: "a", value: "A2" });
   clock.advance(10);
 
+  expect(a.log.freshness).toEqual([{ freshness: "fresh" }]);
+  expect(b.log.freshness).toEqual([{ freshness: "fresh" }]);
+
+  clock.advance(89);
+  expect(a.log.freshness).toEqual([{ freshness: "fresh" }]);
+  expect(b.log.freshness).toEqual([{ freshness: "fresh" }]);
+
+  clock.advance(1);
   expect(a.log.freshness).toEqual([
     { freshness: "fresh" },
     { freshness: "stale", reason: "heartbeat_timeout" },
   ]);
-  expect(b.log.freshness).toEqual([{ freshness: "fresh" }]);
-
-  socket.emitJson({ key: "a", value: "A2" });
-
-  expect(a.log.freshness).toEqual([
+  expect(b.log.freshness).toEqual([
     { freshness: "fresh" },
     { freshness: "stale", reason: "heartbeat_timeout" },
-    { freshness: "fresh" },
   ]);
 });
 

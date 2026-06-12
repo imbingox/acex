@@ -102,8 +102,8 @@ function marketEventConflateKey(event: MarketEvent): string {
   return `${event.type}:${marketKey(event)}`;
 }
 
-function cloneMarketStatus(status: MarketDataStatus): MarketDataStatus {
-  return { ...status };
+function freezeMarketStatus(status: MarketDataStatus): MarketDataStatus {
+  return Object.freeze({ ...status });
 }
 
 function statusPublicationKey(
@@ -130,18 +130,18 @@ function sameStatusPublicationKey(
   );
 }
 
-function cloneStreamStatus(
+function freezeStreamStatus(
   status: MarketDataStreamStatus,
 ): MarketDataStreamStatus {
-  return { ...status };
+  return Object.freeze({ ...status });
 }
 
-function cloneL1Book(book: L1Book): L1Book {
-  return { ...book, status: cloneStreamStatus(book.status) };
+function freezeL1Book(book: L1Book): L1Book {
+  return Object.freeze(book);
 }
 
-function cloneFundingRate(snapshot: FundingRateSnapshot): FundingRateSnapshot {
-  return { ...snapshot, status: cloneStreamStatus(snapshot.status) };
+function freezeFundingRate(snapshot: FundingRateSnapshot): FundingRateSnapshot {
+  return Object.freeze(snapshot);
 }
 
 function cloneMarketDefinition(definition: MarketDefinition): MarketDefinition {
@@ -456,7 +456,7 @@ export class MarketManagerImpl
 
   getL1Book(key: MarketKeyInput): L1Book | undefined {
     const book = this.records.get(marketKey(key))?.l1Book;
-    return book ? cloneL1Book(book) : undefined;
+    return book;
   }
 
   getL1Books(symbol: string): L1Book[] {
@@ -465,13 +465,13 @@ export class MarketManagerImpl
         (record): record is MarketRecord & { l1Book: L1Book } =>
           record.symbol === symbol && Boolean(record.l1Book),
       )
-      .map((record) => cloneL1Book(record.l1Book))
+      .map((record) => record.l1Book)
       .sort((left, right) => left.venue.localeCompare(right.venue));
   }
 
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined {
     const fundingRate = this.records.get(marketKey(key))?.fundingRate;
-    return fundingRate ? cloneFundingRate(fundingRate) : undefined;
+    return fundingRate;
   }
 
   getFundingRates(symbol: string): FundingRateSnapshot[] {
@@ -482,13 +482,12 @@ export class MarketManagerImpl
         ): record is MarketRecord & { fundingRate: FundingRateSnapshot } =>
           record.symbol === symbol && Boolean(record.fundingRate),
       )
-      .map((record) => cloneFundingRate(record.fundingRate))
+      .map((record) => record.fundingRate)
       .sort((left, right) => left.venue.localeCompare(right.venue));
   }
 
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined {
-    const status = this.records.get(marketKey(key))?.status;
-    return status ? cloneMarketStatus(status) : undefined;
+    return this.records.get(marketKey(key))?.status;
   }
 
   // --- ManagerLifecycle ---
@@ -532,12 +531,12 @@ export class MarketManagerImpl
       this.syncL1BookStatus(record, now, "inactive");
       this.syncFundingRateStatus(record, now, "inactive");
 
-      record.status = {
+      record.status = freezeMarketStatus({
         ...record.status,
         activity: "inactive",
         inactiveSince: now,
         freshness: record.l1Book || record.fundingRate ? "stale" : undefined,
-      };
+      });
       this.publishStatus(record);
     }
   }
@@ -546,7 +545,7 @@ export class MarketManagerImpl
 
   getStatuses(): MarketDataStatus[] {
     return [...this.records.values()]
-      .map((record) => cloneMarketStatus(record.status))
+      .map((record) => record.status)
       .sort((left, right) =>
         `${left.venue}:${left.symbol}`.localeCompare(
           `${right.venue}:${right.symbol}`,
@@ -820,12 +819,12 @@ export class MarketManagerImpl
       symbol: input.symbol,
       l1BookSubscribed: false,
       fundingRateSubscribed: false,
-      status: {
+      status: freezeMarketStatus({
         venue: input.venue,
         symbol: input.symbol,
         activity: "inactive",
         ready: false,
-      },
+      }),
     };
 
     this.records.set(key, record);
@@ -917,21 +916,20 @@ export class MarketManagerImpl
   ): StreamHandle {
     const callbacks: L1BookStreamCallbacks = {
       onUpdate: (update: RawL1BookUpdate) => {
+        record.l1Freshness = "fresh";
+        record.l1Reason = undefined;
         record.l1Book = this.createL1Book(
           record.venue,
           record.symbol,
           update,
           record.l1Book,
         );
-        record.l1Freshness = "fresh";
-        record.l1Reason = undefined;
-        this.syncL1BookStatus(record);
 
         const event: L1BookUpdatedEvent = {
           type: "l1_book.updated",
           venue: record.venue,
           symbol: record.symbol,
-          snapshot: cloneL1Book(record.l1Book),
+          snapshot: record.l1Book,
           ts: this.context.now(),
         };
 
@@ -978,21 +976,20 @@ export class MarketManagerImpl
   ): StreamHandle {
     const callbacks: FundingRateStreamCallbacks = {
       onUpdate: (update: RawFundingRateUpdate) => {
+        record.fundingRateFreshness = "fresh";
+        record.fundingRateReason = undefined;
         record.fundingRate = this.createFundingRate(
           record.venue,
           record.symbol,
           update,
           record.fundingRate,
         );
-        record.fundingRateFreshness = "fresh";
-        record.fundingRateReason = undefined;
-        this.syncFundingRateStatus(record);
 
         const event: FundingRateUpdatedEvent = {
           type: "funding_rate.updated",
           venue: record.venue,
           symbol: record.symbol,
-          snapshot: cloneFundingRate(record.fundingRate),
+          snapshot: record.fundingRate,
           ts: this.context.now(),
         };
 
@@ -1039,7 +1036,7 @@ export class MarketManagerImpl
     input: RawL1BookUpdate,
     previous?: L1Book,
   ): L1Book {
-    return {
+    return freezeL1Book({
       venue,
       symbol,
       bidPrice: toCanonical(input.bidPrice),
@@ -1050,14 +1047,15 @@ export class MarketManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       version: (previous?.version ?? 0) + 1,
-      status: previous?.status ?? {
-        activity: "active",
-        ready: true,
-        freshness: "fresh",
-        lastReceivedAt: input.receivedAt,
-        lastReadyAt: input.receivedAt,
-      },
-    };
+      status: this.createStreamStatus(
+        "active",
+        true,
+        "fresh",
+        undefined,
+        input.receivedAt,
+        input.receivedAt,
+      ),
+    });
   }
 
   private createFundingRate(
@@ -1066,7 +1064,7 @@ export class MarketManagerImpl
     input: RawFundingRateUpdate,
     previous?: FundingRateSnapshot,
   ): FundingRateSnapshot {
-    return {
+    return freezeFundingRate({
       venue,
       symbol,
       fundingRate: toCanonical(input.fundingRate),
@@ -1077,14 +1075,15 @@ export class MarketManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       version: (previous?.version ?? 0) + 1,
-      status: previous?.status ?? {
-        activity: "active",
-        ready: true,
-        freshness: "fresh",
-        lastReceivedAt: input.receivedAt,
-        lastReadyAt: input.receivedAt,
-      },
-    };
+      status: this.createStreamStatus(
+        "active",
+        true,
+        "fresh",
+        undefined,
+        input.receivedAt,
+        input.receivedAt,
+      ),
+    });
   }
 
   private updateConnectionState(
@@ -1117,7 +1116,7 @@ export class MarketManagerImpl
     const staleReason = record.l1Reason ?? record.fundingRateReason;
     const freshness = this.resolveFreshness(record);
 
-    record.status = {
+    const nextStatus: MarketDataStatus = {
       ...record.status,
       activity: active ? "active" : "inactive",
       ready: l1Ready || fundingRateReady,
@@ -1126,10 +1125,12 @@ export class MarketManagerImpl
       inactiveSince: active ? undefined : now,
     };
 
-    if (record.status.ready) {
-      record.status.lastReceivedAt = this.resolveLastReceivedAt(record);
-      record.status.lastReadyAt = this.resolveLastReadyAt(record);
+    if (nextStatus.ready) {
+      nextStatus.lastReceivedAt = this.resolveLastReceivedAt(record);
+      nextStatus.lastReadyAt = this.resolveLastReadyAt(record);
     }
+
+    record.status = freezeMarketStatus(nextStatus);
 
     const publicationKey = statusPublicationKey(record.status);
     if (
@@ -1151,15 +1152,18 @@ export class MarketManagerImpl
       return;
     }
 
-    record.l1Book.status = this.createStreamStatus(
-      activity ?? (record.l1BookSubscribed ? "active" : "inactive"),
-      true,
-      record.l1Freshness,
-      record.l1Reason,
-      record.l1Book.receivedAt,
-      record.l1Book.updatedAt,
-      now,
-    );
+    record.l1Book = freezeL1Book({
+      ...record.l1Book,
+      status: this.createStreamStatus(
+        activity ?? (record.l1BookSubscribed ? "active" : "inactive"),
+        true,
+        record.l1Freshness,
+        record.l1Reason,
+        record.l1Book.receivedAt,
+        record.l1Book.updatedAt,
+        now,
+      ),
+    });
   }
 
   private syncFundingRateStatus(
@@ -1171,15 +1175,18 @@ export class MarketManagerImpl
       return;
     }
 
-    record.fundingRate.status = this.createStreamStatus(
-      activity ?? (record.fundingRateSubscribed ? "active" : "inactive"),
-      true,
-      record.fundingRateFreshness,
-      record.fundingRateReason,
-      record.fundingRate.receivedAt,
-      record.fundingRate.updatedAt,
-      now,
-    );
+    record.fundingRate = freezeFundingRate({
+      ...record.fundingRate,
+      status: this.createStreamStatus(
+        activity ?? (record.fundingRateSubscribed ? "active" : "inactive"),
+        true,
+        record.fundingRateFreshness,
+        record.fundingRateReason,
+        record.fundingRate.receivedAt,
+        record.fundingRate.updatedAt,
+        now,
+      ),
+    });
   }
 
   private createStreamStatus(
@@ -1191,7 +1198,7 @@ export class MarketManagerImpl
     lastReadyAt?: number,
     now = this.context.now(),
   ): MarketDataStreamStatus {
-    return {
+    return freezeStreamStatus({
       activity,
       ready,
       freshness,
@@ -1199,7 +1206,7 @@ export class MarketManagerImpl
       lastReceivedAt,
       lastReadyAt,
       inactiveSince: activity === "active" ? undefined : now,
-    };
+    });
   }
 
   private resolveFreshness(
@@ -1250,7 +1257,7 @@ export class MarketManagerImpl
       type: "market.status_changed",
       venue: record.venue,
       symbol: record.symbol,
-      status: cloneMarketStatus(record.status),
+      status: record.status,
       ts: this.context.now(),
     };
 

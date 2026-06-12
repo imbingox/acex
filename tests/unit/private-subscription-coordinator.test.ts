@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type {
   FetchOrderRequest,
+  PrivateStreamCallbacks,
   PrivateUserDataAdapter,
   RawAccountBootstrap,
   RawAccountUpdate,
@@ -474,6 +475,46 @@ class SlowOpenOrdersBinanceAdapter extends StubBinanceAdapter {
   }
 }
 
+class ManualReconcileBinanceAdapter extends StubBinanceAdapter {
+  callbacks: PrivateStreamCallbacks | undefined;
+  blockOpenOrders = false;
+  fetchOpenOrdersStartedResolvers: Array<() => void> = [];
+  releaseOpenOrders: Array<() => void> = [];
+
+  override fetchOpenOrders(): Promise<RawOpenOrdersSnapshot> {
+    this.fetchOpenOrdersCalls += 1;
+    if (!this.blockOpenOrders) {
+      return Promise.resolve({
+        orders: [],
+        snapshotReceivedAt: Date.now(),
+      });
+    }
+
+    this.fetchOpenOrdersStartedResolvers.shift()?.();
+    return new Promise((resolve) => {
+      this.releaseOpenOrders.push(() =>
+        resolve({
+          orders: [],
+          snapshotReceivedAt: Date.now(),
+        }),
+      );
+    });
+  }
+
+  override createPrivateStream(
+    _credentials?: AccountCredentials,
+    callbacks?: PrivateStreamCallbacks,
+  ): StreamHandle {
+    this.callbacks = callbacks;
+    return {
+      ready: Promise.resolve(),
+      close: () => {
+        this.closeCalls += 1;
+      },
+    };
+  }
+}
+
 class StubJuplendAdapter implements PrivateUserDataAdapter {
   readonly venue = "juplend" as const;
   readonly readOnly = true;
@@ -667,6 +708,47 @@ test("private reconcile polling runs by default and can be disabled independentl
   expect(disabledAdapter.refreshCalls).toBeGreaterThan(0);
   expect(disabledAdapter.reconcileCalls).toBe(0);
   expect(disabledAdapter.fetchOpenOrdersCalls).toBe(1);
+});
+
+test("immediate private reconcile requests are coalesced with one dirty replay", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      binance: {
+        privateReconcileIntervalMs: 0,
+      },
+    },
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  adapter.fetchOpenOrdersCalls = 0;
+  adapter.blockOpenOrders = true;
+
+  const firstStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await firstStarted;
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  const secondStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await secondStarted;
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(5);
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
 });
 
 test("private reconcile polling uses bootstrapAccount fallback when reconcileAccount is absent", async () => {

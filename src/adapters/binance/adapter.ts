@@ -14,8 +14,9 @@ import type {
   StreamHandle,
 } from "../types.ts";
 import {
+  BinanceMarketCatalog,
   type BinanceMarketDefinition,
-  loadBinanceMarkets,
+  type BinanceMarketFamily,
 } from "./market-catalog.ts";
 import { registerBinanceRateLimitTopology } from "./rate-limit-topology.ts";
 import { fetchBinanceServerTime } from "./server-time.ts";
@@ -54,29 +55,24 @@ export class BinanceMarketAdapter implements MarketAdapter {
     marketTypes: ["spot", "swap", "future"],
   };
 
-  private readonly definitions = new Map<string, BinanceMarketDefinition>();
+  private readonly catalog: BinanceMarketCatalog;
   private multiplexer: BinanceMarketMultiplexer | undefined;
   private multiplexerConfig: BinanceMultiplexerConfig | undefined;
 
   constructor(
     private readonly options: {
       readonly rateLimiter?: RateLimiter;
+      readonly marketCatalog?: BinanceMarketCatalog;
     } = {},
   ) {
+    this.catalog =
+      options.marketCatalog ??
+      new BinanceMarketCatalog({ rateLimiter: this.options.rateLimiter });
     registerBinanceRateLimitTopology(this.options.rateLimiter);
   }
 
   async loadMarkets(): Promise<MarketDefinition[]> {
-    const markets = await loadBinanceMarkets(fetch, {
-      rateLimiter: this.options.rateLimiter,
-    });
-    this.definitions.clear();
-
-    for (const market of markets) {
-      this.definitions.set(market.symbol, market);
-    }
-
-    return markets;
+    return await this.catalog.loadAll();
   }
 
   async fetchServerTime(): Promise<VenueServerTime> {
@@ -90,7 +86,7 @@ export class BinanceMarketAdapter implements MarketAdapter {
     callbacks: L1BookStreamCallbacks,
     options: L1BookStreamOptions,
   ): StreamHandle {
-    const binanceMarket = this.definitions.get(market.symbol);
+    const binanceMarket = this.getBinanceMarket(market);
     if (!binanceMarket) {
       throw new Error(`Unknown Binance market: ${market.symbol}`);
     }
@@ -134,7 +130,7 @@ export class BinanceMarketAdapter implements MarketAdapter {
     callbacks: FundingRateStreamCallbacks,
     options: FundingRateStreamOptions,
   ): StreamHandle {
-    const binanceMarket = this.definitions.get(market.symbol);
+    const binanceMarket = this.getBinanceMarket(market);
     if (!binanceMarket) {
       throw new Error(`Unknown Binance market: ${market.symbol}`);
     }
@@ -213,6 +209,25 @@ export class BinanceMarketAdapter implements MarketAdapter {
 
     return this.multiplexer;
   }
+
+  private getBinanceMarket(
+    market: MarketDefinition,
+  ): BinanceMarketDefinition | undefined {
+    return this.catalog.getDefinition(
+      inferBinanceMarketFamily(market),
+      market.symbol,
+    );
+  }
+}
+
+function inferBinanceMarketFamily(
+  market: Pick<MarketDefinition, "contract" | "inverse" | "linear" | "type">,
+): BinanceMarketFamily {
+  if (!market.contract || market.type === "spot") {
+    return "spot";
+  }
+
+  return market.inverse ? "coinm" : "usdm";
 }
 
 function sameMultiplexerConfig(

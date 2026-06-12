@@ -1,4 +1,5 @@
 import { BinanceMarketAdapter } from "../adapters/binance/adapter.ts";
+import { BinanceMarketCatalog } from "../adapters/binance/market-catalog.ts";
 import { BinancePrivateAdapter } from "../adapters/binance/private-adapter.ts";
 import { fetchBinanceServerTime } from "../adapters/binance/server-time.ts";
 import { JuplendPrivateAdapter } from "../adapters/juplend/private-adapter.ts";
@@ -42,9 +43,11 @@ import type {
   HealthEventFilter,
   MarketManager,
   OrderManager,
+  RateLimiter,
   RegisterAccountInput,
   RegisterAccountResult,
   StopOptions,
+  TimeProvider,
   Venue,
   VenueCapabilities,
   VenueOrderCapabilities,
@@ -65,12 +68,128 @@ import {
 
 const activeClients = new Set<AcexClientImpl>();
 
+interface VenueAdapterLifecycle {
+  start(): Promise<void> | void;
+  stop(): void;
+}
+
+interface VenueAdapterFactoryDeps {
+  readonly rateLimiter: RateLimiter;
+  readonly signingClock?: TimeProvider;
+  readonly publishRuntimeError: (
+    source: AcexInternalError["source"],
+    error: Error,
+    metadata?: Omit<AcexInternalError, "error" | "source" | "ts">,
+  ) => void;
+  readonly venueOptions?: Record<string, unknown>;
+}
+
+interface VenueAdapterFactoryResult {
+  readonly marketAdapter?: MarketAdapter;
+  readonly privateAdapter?: PrivateUserDataAdapter;
+  readonly lifecycle?: VenueAdapterLifecycle;
+}
+
+type VenueAdapterFactory = (
+  deps: VenueAdapterFactoryDeps,
+) => VenueAdapterFactoryResult;
+
+const VENUE_ADAPTER_FACTORIES: ReadonlyMap<Venue, VenueAdapterFactory> =
+  new Map([
+    ["binance", createBinanceAdapterGroup],
+    ["juplend", createJuplendAdapterGroup],
+  ]);
+
 function toError(value: unknown, fallback: string): Error {
   if (value instanceof Error) {
     return value;
   }
 
   return new Error(fallback, { cause: value });
+}
+
+function getStringOption(
+  options: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = options?.[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function getNumberOption(
+  options: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = options?.[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function createBinanceAdapterGroup(
+  deps: VenueAdapterFactoryDeps,
+): VenueAdapterFactoryResult {
+  const marketCatalog = new BinanceMarketCatalog({
+    rateLimiter: deps.rateLimiter,
+    publishRuntimeError: deps.publishRuntimeError,
+  });
+  const signingTimeProvider = deps.signingClock
+    ? undefined
+    : new SyncingTimeProvider({
+        sample: () => fetchBinanceServerTime({ rateLimiter: deps.rateLimiter }),
+        onSampleFailed: (event) => {
+          deps.publishRuntimeError(
+            "runtime",
+            toError(
+              event.error,
+              `Binance signing clock ${event.reason} sample failed`,
+            ),
+            { venue: "binance" },
+          );
+        },
+        onDriftWarning: (event) => {
+          deps.publishRuntimeError(
+            "runtime",
+            new Error(
+              `Binance signing clock drift exceeded threshold: drift=${event.driftMs}ms threshold=${event.thresholdMs}ms`,
+            ),
+            { venue: "binance" },
+          );
+        },
+      });
+  const signingClock = deps.signingClock ?? signingTimeProvider;
+
+  return {
+    marketAdapter: new BinanceMarketAdapter({
+      rateLimiter: deps.rateLimiter,
+      marketCatalog,
+    }),
+    privateAdapter: new BinancePrivateAdapter({
+      signingClock,
+      rateLimiter: deps.rateLimiter,
+      marketCatalog,
+    }),
+    lifecycle: signingTimeProvider
+      ? {
+          start: () => signingTimeProvider.start(),
+          stop: () => signingTimeProvider.stop(),
+        }
+      : undefined,
+  };
+}
+
+function createJuplendAdapterGroup(
+  deps: VenueAdapterFactoryDeps,
+): VenueAdapterFactoryResult {
+  return {
+    privateAdapter: new JuplendPrivateAdapter(
+      getStringOption(deps.venueOptions, "rpcUrl"),
+      getStringOption(deps.venueOptions, "jupApiKey"),
+      {
+        pollIntervalMs: getNumberOption(deps.venueOptions, "pollIntervalMs"),
+      },
+    ),
+  };
 }
 
 export function stopAllClientsForTests(): void {
@@ -133,7 +252,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketAdapters: Map<Venue, MarketAdapter>;
   private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
-  private readonly signingTimeProvider: SyncingTimeProvider | undefined;
+  private readonly adapterLifecycles: VenueAdapterLifecycle[];
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
@@ -143,46 +262,33 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       new ReactiveRateLimiter({
         utilizationTarget: options.rateLimit?.utilizationTarget,
       });
-    this.signingTimeProvider = options.clock
-      ? undefined
-      : new SyncingTimeProvider({
-          sample: () => fetchBinanceServerTime({ rateLimiter }),
-          onSampleFailed: (event) => {
-            this.publishRuntimeError(
-              "runtime",
-              toError(
-                event.error,
-                `Binance signing clock ${event.reason} sample failed`,
-              ),
-              { venue: "binance" },
-            );
-          },
-          onDriftWarning: (event) => {
-            this.publishRuntimeError(
-              "runtime",
-              new Error(
-                `Binance signing clock drift exceeded threshold: drift=${event.driftMs}ms threshold=${event.thresholdMs}ms`,
-              ),
-              { venue: "binance" },
-            );
-          },
-        });
-    const signingClock = options.clock ?? this.signingTimeProvider;
-    const marketAdapter = new BinanceMarketAdapter({ rateLimiter });
-    this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
-    const privateAdapters = [
-      new BinancePrivateAdapter({
-        signingClock,
-        rateLimiter,
-      }),
-      new JuplendPrivateAdapter(
-        options.account?.juplend?.rpcUrl,
-        options.account?.juplend?.jupApiKey,
-        {
-          pollIntervalMs: options.account?.juplend?.pollIntervalMs,
-        },
+    const adapterGroups = [...VENUE_ADAPTER_FACTORIES.entries()].map(
+      ([venue, factory]) =>
+        factory({
+          rateLimiter,
+          signingClock: options.clock,
+          publishRuntimeError: this.publishRuntimeError.bind(this),
+          venueOptions:
+            venue === "binance"
+              ? options.account?.binance
+              : venue === "juplend"
+                ? options.account?.juplend
+                : undefined,
+        }),
+    );
+    this.adapterLifecycles = adapterGroups.flatMap((group) =>
+      group.lifecycle ? [group.lifecycle] : [],
+    );
+    this.marketAdapters = new Map(
+      adapterGroups.flatMap((group) =>
+        group.marketAdapter
+          ? [[group.marketAdapter.venue, group.marketAdapter]]
+          : [],
       ),
-    ];
+    );
+    const privateAdapters = adapterGroups.flatMap((group) =>
+      group.privateAdapter ? [group.privateAdapter] : [],
+    );
     this.privateAdapters = new Map(
       privateAdapters.map((adapter) => [adapter.venue, adapter]),
     );
@@ -315,7 +421,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     this.setClientStatus("starting");
-    void this.signingTimeProvider?.start();
+    for (const lifecycle of this.adapterLifecycles) {
+      void lifecycle.start();
+    }
     this.setClientStatus("running");
 
     this.marketManager.onClientStarted();
@@ -335,7 +443,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.setClientStatus("stopping");
 
     const now = this.now();
-    this.signingTimeProvider?.stop();
+    for (const lifecycle of this.adapterLifecycles) {
+      lifecycle.stop();
+    }
     this.privateCoordinator.onClientStopping();
     this.marketManager.onClientStopping(now);
     this.accountManager.onClientStopping(now);

@@ -1931,6 +1931,124 @@ test("createOrder retains pending claim after timeout", async () => {
   expect(pending[0]).toMatch(/^acex-/);
 });
 
+test("createOrder retains pending claim after network failure", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  debugClient.createOrder = async () => {
+    throw new TransportError("Network failed", {
+      kind: "network",
+      attempts: 1,
+      retryable: true,
+      url: "https://papi.binance.com/papi/v1/um/order?query=[REDACTED]",
+    });
+  };
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).details?.orderState).toBe("unknown");
+  expect(isOrderStateUnknown(failure)).toBe(true);
+
+  const pending = [
+    ...(debugClient.orderManager.records
+      .get("main-binance")
+      ?.pendingClientOrderIdIndex.keys() ?? []),
+  ];
+  expect(pending).toHaveLength(1);
+  expect(pending[0]).toMatch(/^acex-/);
+});
+
+test("createOrder treats catalog preflight failure as not placed and clears pending claim", async () => {
+  const debugClientClock = {
+    now: () => 1_710_000_000_000,
+  };
+  let catalogRequests = 0;
+  let papiOrderPosts = 0;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: string | URL | Request) => {
+      const rawUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const url = new URL(rawUrl);
+      if (url.toString() === "https://fapi.binance.com/fapi/v1/exchangeInfo") {
+        catalogRequests += 1;
+        throw new TypeError("exchangeInfo unavailable");
+      }
+      if (
+        url.origin === "https://papi.binance.com" &&
+        url.pathname === "/papi/v1/um/order"
+      ) {
+        papiOrderPosts += 1;
+      }
+
+      throw new Error(`Unexpected fetch URL: ${url.toString()}`);
+    },
+  });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+  const client = createClient({ clock: debugClientClock });
+  const debugClient = client as unknown as ClientDebugView;
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect((failure as AcexError).code).toBe("ORDER_CREATE_FAILED");
+  expect((failure as AcexError).details?.orderState).toBe("not_placed");
+  expect(isOrderStateUnknown(failure)).toBe(false);
+  expect(catalogRequests).toBe(1);
+  expect(papiOrderPosts).toBe(0);
+  expect(
+    debugClient.orderManager.records.get("main-binance")
+      ?.pendingClientOrderIdIndex.size,
+  ).toBe(0);
+});
+
 test("expired createOrder pending claim is cleared when the venue confirms it is missing", async () => {
   const requests = installBinancePrivateAccountInfra({
     openOrders: [],

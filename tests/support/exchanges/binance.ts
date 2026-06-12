@@ -123,6 +123,84 @@ const binanceFixtures = {
         ],
       },
       {
+        symbol: "BTCUSDT_250627",
+        status: "TRADING",
+        contractType: "CURRENT_QUARTER",
+        deliveryDate: Date.UTC(2025, 5, 27),
+        baseAsset: "BTC",
+        quoteAsset: "USDT",
+        marginAsset: "USDT",
+        pricePrecision: 2,
+        quantityPrecision: 3,
+        filters: [
+          {
+            filterType: "PRICE_FILTER",
+            tickSize: "0.10",
+          },
+          {
+            filterType: "LOT_SIZE",
+            minQty: "0.001",
+            stepSize: "0.001",
+          },
+          {
+            filterType: "MIN_NOTIONAL",
+            minNotional: "5",
+          },
+        ],
+      },
+      {
+        symbol: "BTCUSDC",
+        status: "TRADING",
+        contractType: "PERPETUAL",
+        deliveryDate: 0,
+        baseAsset: "BTC",
+        quoteAsset: "USDC",
+        marginAsset: "USDC",
+        pricePrecision: 2,
+        quantityPrecision: 3,
+        filters: [
+          {
+            filterType: "PRICE_FILTER",
+            tickSize: "0.10",
+          },
+          {
+            filterType: "LOT_SIZE",
+            minQty: "0.001",
+            stepSize: "0.001",
+          },
+          {
+            filterType: "MIN_NOTIONAL",
+            minNotional: "5",
+          },
+        ],
+      },
+      {
+        symbol: "1000SHIBUSDT",
+        status: "TRADING",
+        contractType: "PERPETUAL",
+        deliveryDate: 0,
+        baseAsset: "1000SHIB",
+        quoteAsset: "USDT",
+        marginAsset: "USDT",
+        pricePrecision: 6,
+        quantityPrecision: 0,
+        filters: [
+          {
+            filterType: "PRICE_FILTER",
+            tickSize: "0.000001",
+          },
+          {
+            filterType: "LOT_SIZE",
+            minQty: "1",
+            stepSize: "1",
+          },
+          {
+            filterType: "MIN_NOTIONAL",
+            minNotional: "5",
+          },
+        ],
+      },
+      {
         symbol: "ETHUSDT",
         status: "TRADING",
         contractType: "PERPETUAL",
@@ -423,6 +501,13 @@ export function installBinancePrivateAccountInfra(options?: {
       const headers = new Headers(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
+
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(binanceFixtures.usdm);
+      }
+      if (url.toString() === USDM_SERVER_TIME_URL) {
+        return jsonResponse({ serverTime: 1710000000123 });
+      }
 
       requests.push({
         method,

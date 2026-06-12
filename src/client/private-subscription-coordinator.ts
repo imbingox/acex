@@ -43,6 +43,7 @@ interface PrivateSubscriptionRecord {
   privateReconcileGeneration: number;
   startPromise?: Promise<void>;
   reconcilePromise?: Promise<void>;
+  reconcileDirty: boolean;
 }
 
 const DEFAULT_STREAM_OPEN_TIMEOUT_MS = 15_000;
@@ -464,6 +465,7 @@ export class PrivateSubscriptionCoordinator {
       accountSubscriptionGeneration: 0,
       orderSubscriptionGeneration: 0,
       privateReconcileGeneration: 0,
+      reconcileDirty: false,
     };
 
     this.records.set(account.accountId, record);
@@ -1343,13 +1345,10 @@ export class PrivateSubscriptionCoordinator {
           }
         },
         onReconnected: () => {
-          if (!record.reconcilePromise) {
-            record.reconcilePromise = this.reconcileRecord(record)
-              .catch(() => {})
-              .finally(() => {
-                record.reconcilePromise = undefined;
-              });
-          }
+          this.requestImmediateReconcile(record);
+        },
+        requestReconcile: () => {
+          this.requestImmediateReconcile(record);
         },
         onError: (error) => {
           this.context.publishRuntimeError("adapter", error, {
@@ -1454,6 +1453,29 @@ export class PrivateSubscriptionCoordinator {
         false,
       );
     }
+  }
+
+  private requestImmediateReconcile(record: PrivateSubscriptionRecord): void {
+    if (record.reconcilePromise) {
+      record.reconcileDirty = true;
+      return;
+    }
+
+    record.reconcilePromise = (async () => {
+      do {
+        record.reconcileDirty = false;
+        try {
+          await this.reconcileRecord(record);
+        } catch {
+          // Individual reconcile failures are reported by reconcileAccount /
+          // reconcileOrders. Keep the request coalescer alive for one dirty
+          // replay rather than surfacing an unhandled promise rejection.
+        }
+      } while (record.reconcileDirty && this.isActive(record));
+    })().finally(() => {
+      record.reconcileDirty = false;
+      record.reconcilePromise = undefined;
+    });
   }
 
   private async bootstrapAccount(

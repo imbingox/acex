@@ -23,7 +23,7 @@
 | ② 订单生命周期收尾 | A1 + A2 | 都是"订单查不到/claim 悬挂"的终态化处理，共享 fetchOrder 回查模式与测试场景 | 代码完成 → .trellis/tasks/06-11-open-pending-claim-ttl-p1-a1-p1-a2 |
 | ③ 事件流质量 | B1 + B2 | 同在事件总线/状态发布路径；B2 是小修可捎带 | 代码完成 → .trellis/tasks/06-11-conflation-status-p1-b1-p1-b2 |
 | ④ 限流分层 | B3 | 工作量偏大，独立任务 | |
-| ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | |
+| ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | 代码完成 → .trellis/tasks/06-12-p1-b4-clock-resync |
 | ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | |
 | ⑦ 流层打磨 | B6 + B7 + B8 | 三个小项打包成一个任务 | |
 | ⑧ 多交易所开放点 | C1 + C2 + C3 + C4 | SPI/配置抽象；C3 有正确性成分（交割合约映射已错），如有需要可提前单独做 | |
@@ -120,12 +120,13 @@
 - **验证方式**：单测模拟 weight 头递增逼近上限时主动延迟；429 后断言全 venue 阻塞而非单 endpoint。
 - **状态**：代码已完成（→ `.trellis/tasks/06-11-p1-b3-scope`）：新增 optional rate-limit topology/plan SPI、bucket-level fixed-window budget admission、Binance host/request-weight 与 per-account order 桶、usage header 回填、request-not-sent refund、bucket-level 429/418 block、cancel-priority reserve headroom 与 fallback jitter；core 限流器保持 venue-agnostic，Binance 权重表和 header 解析留在 adapter 层。
 
-### - [ ] P1-B4 签名时钟无自动同步回路
+### - [x] P1-B4 签名时钟无自动同步回路
 
 - **位置**：`src/client/runtime.ts:116`（`signingClock: options.clock`，默认 `Date.now`）、`src/adapters/binance/server-time.ts`
 - **问题**：`fetchBinanceServerTime` 实现质量很好（单调钟 RTT、中点 offset）但没人调度它：无周期重测、无多次采样、无 -1021 自动 resync。本地时钟漂移超过 recvWindow 时全部签名请求失败且无自愈。
 - **修复方案**：内置 venue 级 TimeProvider：启动时 N 次采样取中位、周期性重测 + 漂移平滑、收到 -1021（venueError.code）触发立即重校；`options.clock` 保留为覆盖入口。
 - **验证方式**：单测注入漂移时钟，断言 offset 收敛与 -1021 触发重校；live account smoke 观察长跑无 -1021。
+- **状态**：代码已完成（→ .trellis/tasks/06-12-p1-b4-clock-resync）：新增 core 通用 `SyncingTimeProvider`（`src/internal/`，venue-agnostic，sampler 由 Binance 注入 `fetchBinanceServerTime`），`now()=本地墙钟+平滑 offset`；启动串行采样 5 次取中位、每 5min EMA(α=0.3) 周期重测、`TimeProvider.requestResync?()` 2s 去抖立即重校（直接采纳不走 EMA）；private adapter 归一到 `timestamp_out_of_sync` 时发信号、不持有任何 offset/timer 逻辑；offset 仅作用签名 timestamp，**不污染** freshness/`receivedAt`（隔离单测断言）；`options.clock` 注入时不创建 sampler/timer。失败/漂移经 runtime error stream 上报。`bun run lint`/`type-check`/`test`（245 pass）独立复核通过；patch changeset + adapter-contract spec §签名时钟 + docs/api.md 已回写。live account smoke 长跑复核待安排。
 
 ### - [ ] P1-B5 成交明细字段全部丢弃（手续费 / 逐笔成交 / 已实现盈亏）
 

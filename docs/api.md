@@ -597,7 +597,10 @@ interface VenueCapabilities {
 ```ts
 interface CreateClientOptions {
   sandbox?: boolean;
-  clock?: { now(): number };
+  clock?: {
+    now(): number;
+    requestResync?(): void;
+  };
   rateLimiter?: RateLimiter;
   rateLimit?: {
     utilizationTarget?: number;
@@ -792,6 +795,8 @@ interface AccountCredentials {
   extra?: Record<string, string>;
 }
 ```
+
+`clock` 只用于私有签名请求的 `timestamp`，不参与 `receivedAt`、WebSocket freshness 或本地状态时间。默认不传 `clock` 时，runtime 会为 Binance 签名请求启用 venue 级 server-time 自动校准；当交易所返回 `timestamp_out_of_sync` 时，SDK 会触发一次去抖后的重校。显式传入 `clock` 表示调用方完全接管签名时间，SDK 不会创建默认 server-time sampler 或同步 timer。
 
 ```ts
 interface MarketDefinition {

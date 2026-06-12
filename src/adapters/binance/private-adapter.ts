@@ -625,17 +625,49 @@ function isBinanceOrderNotFound(error: unknown): boolean {
     return false;
   }
 
-  const rawBody = error.rawBody;
+  return (
+    normalizeBinanceErrorReasonFromRawBody(error.rawBody) === "order_not_found"
+  );
+}
+
+function normalizeBinanceErrorReasonFromRawBody(
+  rawBody: string | undefined,
+): ReturnType<typeof normalizeBinanceErrorCode> | undefined {
   if (!rawBody) {
-    return false;
+    return undefined;
   }
 
   try {
-    const parsed = JSON.parse(rawBody) as { code?: unknown };
-    return normalizeBinanceErrorCode(`${parsed.code}`) === "order_not_found";
+    return normalizeBinanceErrorReasonFromPayload(JSON.parse(rawBody));
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function normalizeBinanceErrorReasonFromPayload(
+  payload: unknown,
+): ReturnType<typeof normalizeBinanceErrorCode> | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+
+  const code = (payload as Record<string, unknown>).code;
+  if (typeof code !== "string" && typeof code !== "number") {
+    return undefined;
+  }
+
+  return normalizeBinanceErrorCode(`${code}`);
+}
+
+function requestSigningClockResyncIfTimestampOutOfSync(
+  signingClock: TimeProvider | undefined,
+  reason: ReturnType<typeof normalizeBinanceErrorCode> | undefined,
+): void {
+  if (reason !== "timestamp_out_of_sync") {
+    return;
+  }
+
+  signingClock?.requestResync?.();
 }
 
 export class BinancePrivateAdapter implements PrivateUserDataAdapter {
@@ -1281,6 +1313,10 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         usage: parseBinanceRateLimitUsage(response.headers),
         reservation,
       });
+      requestSigningClockResyncIfTimestampOutOfSync(
+        this.options.signingClock,
+        normalizeBinanceErrorReasonFromPayload(response.body),
+      );
 
       return response.body;
     } catch (error) {
@@ -1292,6 +1328,10 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
           usage: parseBinanceRateLimitUsage(error.headers),
           reservation,
         });
+        requestSigningClockResyncIfTimestampOutOfSync(
+          this.options.signingClock,
+          normalizeBinanceErrorReasonFromRawBody(error.rawBody),
+        );
       }
 
       throw error;

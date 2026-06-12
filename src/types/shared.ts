@@ -27,6 +27,8 @@ export interface Logger {
 export interface TimeProvider {
   /** Millisecond timestamp used for outbound request/signing timestamps. */
   now(): number;
+  /** Optional signal that a venue rejected the timestamp and the clock should resync. */
+  requestResync?(): void;
 }
 
 export interface RateLimitScope {
@@ -307,7 +309,7 @@ export interface OrderRuntimeOptions {
 
 export interface CreateClientOptions {
   sandbox?: boolean;
-  /** Request/signing clock; local receivedAt/freshness clocks stay independent. */
+  /** Request/signing clock override; local receivedAt/freshness clocks stay independent. */
   clock?: TimeProvider;
   rateLimiter?: RateLimiter;
   rateLimit?: RateLimitOptions;

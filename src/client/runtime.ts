@@ -1,5 +1,6 @@
 import { BinanceMarketAdapter } from "../adapters/binance/adapter.ts";
 import { BinancePrivateAdapter } from "../adapters/binance/private-adapter.ts";
+import { fetchBinanceServerTime } from "../adapters/binance/server-time.ts";
 import { JuplendPrivateAdapter } from "../adapters/juplend/private-adapter.ts";
 import type {
   CancelAllOrdersRequest,
@@ -19,6 +20,7 @@ import type { AsyncEventBusOverflowInfo } from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { matchesHealthFilter } from "../internal/filters.ts";
 import { ReactiveRateLimiter } from "../internal/rate-limiter.ts";
+import { SyncingTimeProvider } from "../internal/syncing-time-provider.ts";
 import { AccountManagerImpl } from "../managers/account-manager.ts";
 import { MarketManagerImpl } from "../managers/market-manager.ts";
 import { OrderManagerImpl } from "../managers/order-manager.ts";
@@ -62,6 +64,14 @@ import {
 } from "./venue-capabilities.ts";
 
 const activeClients = new Set<AcexClientImpl>();
+
+function toError(value: unknown, fallback: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+
+  return new Error(fallback, { cause: value });
+}
 
 export function stopAllClientsForTests(): void {
   const clients = [...activeClients];
@@ -123,6 +133,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketAdapters: Map<Venue, MarketAdapter>;
   private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
+  private readonly signingTimeProvider: SyncingTimeProvider | undefined;
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
@@ -132,11 +143,36 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       new ReactiveRateLimiter({
         utilizationTarget: options.rateLimit?.utilizationTarget,
       });
+    this.signingTimeProvider = options.clock
+      ? undefined
+      : new SyncingTimeProvider({
+          sample: () => fetchBinanceServerTime({ rateLimiter }),
+          onSampleFailed: (event) => {
+            this.publishRuntimeError(
+              "runtime",
+              toError(
+                event.error,
+                `Binance signing clock ${event.reason} sample failed`,
+              ),
+              { venue: "binance" },
+            );
+          },
+          onDriftWarning: (event) => {
+            this.publishRuntimeError(
+              "runtime",
+              new Error(
+                `Binance signing clock drift exceeded threshold: drift=${event.driftMs}ms threshold=${event.thresholdMs}ms`,
+              ),
+              { venue: "binance" },
+            );
+          },
+        });
+    const signingClock = options.clock ?? this.signingTimeProvider;
     const marketAdapter = new BinanceMarketAdapter({ rateLimiter });
     this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
     const privateAdapters = [
       new BinancePrivateAdapter({
-        signingClock: options.clock,
+        signingClock,
         rateLimiter,
       }),
       new JuplendPrivateAdapter(
@@ -279,6 +315,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     this.setClientStatus("starting");
+    void this.signingTimeProvider?.start();
     this.setClientStatus("running");
 
     this.marketManager.onClientStarted();
@@ -298,6 +335,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.setClientStatus("stopping");
 
     const now = this.now();
+    this.signingTimeProvider?.stop();
     this.privateCoordinator.onClientStopping();
     this.marketManager.onClientStopping(now);
     this.accountManager.onClientStopping(now);

@@ -125,12 +125,16 @@ class StubContext implements ClientContext {
 }
 
 class StubAccountConsumer implements PrivateAccountDataConsumer {
+  pendingCalls = 0;
   updates: RawAccountUpdate[] = [];
+  reconcilePreserveStatus: Array<boolean | undefined> = [];
   states: PrivateSubscriptionState[] = [];
 
   constructor(private readonly trace?: string[]) {}
 
-  onPrivateAccountPending(_accountId: string, _venue: Venue): void {}
+  onPrivateAccountPending(_accountId: string, _venue: Venue): void {
+    this.pendingCalls += 1;
+  }
 
   onPrivateAccountBootstrap(
     _accountId: string,
@@ -153,8 +157,10 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
     _accountId: string,
     _venue: Venue,
     bootstrap: RawAccountBootstrap,
+    options: { preserveStatus?: boolean },
   ): void {
     this.trace?.push("account-reconcile");
+    this.reconcilePreserveStatus.push(options.preserveStatus);
     this.updates.push({
       balances: bootstrap.balances,
       positions: bootstrap.positions,
@@ -174,7 +180,9 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
 }
 
 class StubOrderConsumer implements PrivateOrderDataConsumer {
+  pendingCalls = 0;
   reconciles = 0;
+  reconcilePreserveStatus: Array<boolean | undefined> = [];
   updates: RawOrderUpdate[] = [];
   states: PrivateSubscriptionState[] = [];
   expiredClaimRequests = 0;
@@ -185,15 +193,23 @@ class StubOrderConsumer implements PrivateOrderDataConsumer {
     private readonly expiredClaims: ExpiredPendingOrderClaim[] = [],
   ) {}
 
-  onPrivateOrderPending(): void {}
+  onPrivateOrderPending(): void {
+    this.pendingCalls += 1;
+  }
 
   onPrivateOrderBootstrap(): OrderSnapshot[] {
     this.reconciles += 1;
     return this.disappeared;
   }
 
-  onPrivateOrderReconcile(): OrderSnapshot[] {
+  onPrivateOrderReconcile(
+    _accountId: string,
+    _venue: Venue,
+    _snapshot: RawOpenOrdersSnapshot,
+    options: { preserveStatus?: boolean },
+  ): OrderSnapshot[] {
     this.reconciles += 1;
+    this.reconcilePreserveStatus.push(options.preserveStatus);
     return this.disappeared;
   }
 
@@ -661,6 +677,19 @@ function withSetTimeoutCounter<T>(
     });
 }
 
+async function waitFor<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = 200,
+): Promise<T> {
+  return await Promise.race([
+    promise,
+    Bun.sleep(timeoutMs).then(() => {
+      throw new Error(`Timed out waiting for ${label}`);
+    }),
+  ]);
+}
+
 test("websocket-like account subscriptions start the stream before bootstrapping and schedule refresh polling", async () => {
   const trace: string[] = [];
   const context = new StubContext();
@@ -863,21 +892,188 @@ test("immediate private reconcile requests are coalesced with one dirty replay",
     adapter.fetchOpenOrdersStartedResolvers.push(resolve);
   });
   adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(firstStarted, "first immediate reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
   adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
   adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
-  await firstStarted;
+  await Bun.sleep(0);
   expect(adapter.fetchOpenOrdersCalls).toBe(1);
 
   const secondStarted = new Promise<void>((resolve) => {
     adapter.fetchOpenOrdersStartedResolvers.push(resolve);
   });
   adapter.releaseOpenOrders.shift()?.();
-  await secondStarted;
+  await waitFor(secondStarted, "dirty replay reconcile");
   expect(adapter.fetchOpenOrdersCalls).toBe(2);
 
   adapter.releaseOpenOrders.shift()?.();
   await Bun.sleep(5);
   expect(adapter.fetchOpenOrdersCalls).toBe(2);
+});
+
+test("private reconcile re-arms dirty requests queued in the finalizer window", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  adapter.fetchOpenOrdersCalls = 0;
+  orderConsumer.reconciles = 0;
+  adapter.blockOpenOrders = true;
+
+  type CoordinatorDrainHook = {
+    drainPrivateReconcileRequests(record: unknown): Promise<void>;
+  };
+  const coordinatorDrainHook = coordinator as unknown as CoordinatorDrainHook;
+  const originalDrain =
+    coordinatorDrainHook.drainPrivateReconcileRequests.bind(coordinator);
+  let queuedFinalizerWindowRequest = false;
+  coordinatorDrainHook.drainPrivateReconcileRequests = async (
+    record: unknown,
+  ): Promise<void> => {
+    await originalDrain(record);
+    if (queuedFinalizerWindowRequest) {
+      return;
+    }
+
+    queuedFinalizerWindowRequest = true;
+    queueMicrotask(() => {
+      adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+    });
+  };
+
+  const firstStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(firstStarted, "first immediate reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  const secondStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(secondStarted, "finalizer-window re-armed reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(5);
+  expect(orderConsumer.reconciles).toBe(2);
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+});
+
+test("periodic private reconcile shares the immediate coalescer and keeps polling", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const accountConsumer = new StubAccountConsumer();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    orderConsumer,
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 10,
+    }),
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  expect(adapter.callbacks?.onReconnected).toBeDefined();
+
+  adapter.reconcileCalls = 0;
+  adapter.fetchOpenOrdersCalls = 0;
+  accountConsumer.pendingCalls = 0;
+  accountConsumer.reconcilePreserveStatus = [];
+  orderConsumer.pendingCalls = 0;
+  orderConsumer.reconciles = 0;
+  orderConsumer.reconcilePreserveStatus = [];
+  adapter.blockOpenOrders = true;
+
+  const firstStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  await waitFor(firstStarted, "first periodic reconcile");
+  expect(adapter.reconcileCalls).toBe(1);
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  adapter.callbacks?.onReconnected?.();
+  await Bun.sleep(0);
+  expect(adapter.reconcileCalls).toBe(1);
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  const secondStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(secondStarted, "dirty replay reconcile");
+  expect(adapter.reconcileCalls).toBe(2);
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+
+  const thirdStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(thirdStarted, "rescheduled periodic reconcile");
+  expect(adapter.reconcileCalls).toBe(3);
+  expect(adapter.fetchOpenOrdersCalls).toBe(3);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(0);
+  coordinator.unsubscribeOrderFeed("main-binance");
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(accountConsumer.reconcilePreserveStatus).toEqual([true, false, true]);
+  expect(orderConsumer.reconcilePreserveStatus).toEqual([true, false, true]);
+  expect(accountConsumer.pendingCalls).toBe(1);
+  expect(orderConsumer.pendingCalls).toBe(1);
+});
+
+test("in-flight private reconcile ignores stale generation after client stop", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  adapter.fetchOpenOrdersCalls = 0;
+  orderConsumer.reconciles = 0;
+  adapter.blockOpenOrders = true;
+
+  const reconcileStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(reconcileStarted, "manual reconcile");
+  coordinator.onClientStopping();
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(0);
+
+  expect(orderConsumer.reconciles).toBe(0);
+  expect(context.errors).toHaveLength(0);
 });
 
 test("private reconcile polling uses bootstrapAccount fallback when reconcileAccount is absent", async () => {

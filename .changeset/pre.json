@@ -24,6 +24,7 @@
     "stream-layer-polish",
     "venue-capability-dispatch",
     "venue-error-reason-order-state",
+    "venue-extensibility-foundation",
     "venue-rate-limiter",
     "venue-server-time",
     "venue-time-provider"

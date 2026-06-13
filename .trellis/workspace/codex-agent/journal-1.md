@@ -1540,3 +1540,36 @@ P2 批①：事件总线并发 next 改 FIFO + resumeStreams 并发恢复、cid 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 44: P2-4 onMetric 可观测性钩子 + 延迟打点
+
+**Date**: 2026-06-13
+**Task**: P2-4 onMetric 可观测性钩子 + 延迟打点
+**Branch**: `codex/p2-4-observability`
+
+### Summary
+
+P2-4：CreateClientOptions.onMetric(name,value,type,tags?) 同步钩子 + METRIC_NAMES 常量；下单 RTT（monotonic timing，含 outcome）、WS 消息延迟（L1+private，timing）、reconnect（counter，首连不计）、buffer overflow（counter）四类打点；metricsEnabled guard 保证未注入 onMetric 时热路径零开销（不构造 tags），异常吞掉不打断主流程；logger/logLevel 占位保留。codex 实现 + 对抗式二审（ClientContext metric 方法 optional→required + 下单 RTT guard 加固，6 blocker 点 correct）；因 P2 批①已合并 #83 而 rebase onto main。318 pass，minor changeset，PR #85。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9c231de` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

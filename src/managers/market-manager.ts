@@ -49,6 +49,7 @@ import type {
   Venue,
   VenueServerTime,
 } from "../types/index.ts";
+import { METRIC_NAMES } from "../types/index.ts";
 
 export interface MarketManagerOptions {
   initialL1TimeoutMs?: number;
@@ -916,6 +917,19 @@ export class MarketManagerImpl
   ): StreamHandle {
     const callbacks: L1BookStreamCallbacks = {
       onUpdate: (update: RawL1BookUpdate) => {
+        if (this.context.metricsEnabled && update.exchangeTs !== undefined) {
+          this.context.emitMetric(
+            METRIC_NAMES.wsMessageLatency,
+            update.receivedAt - update.exchangeTs,
+            "timing",
+            {
+              venue: record.venue,
+              channel: "l1book",
+              symbol: record.symbol,
+            },
+          );
+        }
+
         record.l1Freshness = "fresh";
         record.l1Reason = undefined;
         record.l1Book = this.createL1Book(
@@ -1284,6 +1298,9 @@ export class MarketManagerImpl
     stream: string,
   ): (info: AsyncEventBusOverflowInfo) => void {
     return ({ maxBuffer }) => {
+      this.context.emitMetric(METRIC_NAMES.eventBufferOverflow, 1, "counter", {
+        stream,
+      });
       const error = new AcexError(
         "EVENT_BUFFER_OVERFLOW",
         `Event stream buffer overflow: ${stream}`,

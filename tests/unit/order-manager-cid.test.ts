@@ -19,6 +19,7 @@ import type {
 
 class StubOrderContext implements ClientContext {
   readonly createdClientOrderIds: string[] = [];
+  readonly metricsEnabled = false;
 
   now(): number {
     return 1710000000000;
@@ -99,6 +100,8 @@ class StubOrderContext implements ClientContext {
   ): void {}
 
   publishHealthEvent(_event: HealthEvent): void {}
+
+  emitMetric(): void {}
 }
 
 test("OrderManager generated client order ids include per-manager entropy", async () => {

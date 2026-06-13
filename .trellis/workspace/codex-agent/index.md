@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 43
+- **Total Sessions**: 44
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1542 | Active |
+| `journal-1.md` | ~1575 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 44 | 2026-06-13 | P2-4 onMetric 可观测性钩子 + 延迟打点 | `9c231de` | `codex/p2-4-observability` |
 | 43 | 2026-06-13 | PR #83 review 修复：cid entropy Set 内存泄漏 | `b620eb8` | `codex/p2-batch1-engineering-cleanup` |
 | 42 | 2026-06-13 | P2 批① 工程清理 + PAPI riskLevelChange 风控事件 | `86fa011`, `c2f07a3`, `7e95c58`, `8f060c2`, `716185b`, `549546d` | `codex/p2-batch1-engineering-cleanup` |
 | 41 | 2026-06-12 | P1-C2/C3/C4 多交易所内置扩展基建 | `bd014d5`, `ae76e37`, `6dc95fa`, `93cbd6d`, `3e43e73` | `codex/p1-c2-c3-c4-venue-extensibility` |

@@ -5,6 +5,7 @@ import type {
   VenueMarketCapabilities,
   VenueServerTime,
 } from "../../types/index.ts";
+import { METRIC_NAMES, type OnMetric } from "../../types/index.ts";
 import type {
   FundingRateStreamCallbacks,
   FundingRateStreamOptions,
@@ -63,6 +64,7 @@ export class BinanceMarketAdapter implements MarketAdapter {
     private readonly options: {
       readonly rateLimiter?: RateLimiter;
       readonly marketCatalog?: BinanceMarketCatalog;
+      readonly emitMetric?: OnMetric;
     } = {},
   ) {
     this.catalog =
@@ -192,6 +194,9 @@ export class BinanceMarketAdapter implements MarketAdapter {
           maxSubscriptionsPerConnection:
             BINANCE_MAX_SUBSCRIPTIONS_PER_CONNECTION,
           now: config.now,
+          onReconnect: ({ descriptors }) => {
+            this.emitReconnectMetric(descriptors);
+          },
         },
       );
       this.multiplexerConfig = config;
@@ -217,6 +222,25 @@ export class BinanceMarketAdapter implements MarketAdapter {
       inferBinanceMarketFamily(market),
       market.symbol,
     );
+  }
+
+  private emitReconnectMetric(
+    descriptors: readonly BinanceStreamDescriptor[],
+  ): void {
+    const emitMetric = this.options.emitMetric;
+    if (!emitMetric) {
+      return;
+    }
+
+    const channels = new Set(
+      descriptors.map((descriptor) => descriptor.channel),
+    );
+    for (const channel of channels) {
+      emitMetric(METRIC_NAMES.wsReconnect, 1, "counter", {
+        venue: this.venue,
+        channel,
+      });
+    }
   }
 }
 

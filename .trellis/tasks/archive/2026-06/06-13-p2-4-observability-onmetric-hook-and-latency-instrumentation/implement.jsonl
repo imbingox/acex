@@ -1,0 +1,3 @@
+{"file": ".trellis/tasks/06-13-p2-4-observability-onmetric-hook-and-latency-instrumentation/research/observability-context.md", "reason": "本任务核心调研：onMetric 注入路径、ClientContext 扩展点、打点候选位置与现有时间数据、热路径零开销约束"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "adapter callback / factory deps 注入约定（onMetric emitter 若下沉 adapter 走此模式）+ WS exchangeTs/receivedAt 语义"}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "公开类型与 internal 分层约定，新增 onMetric/MetricType/metric name 常量放置位置"}

@@ -13,6 +13,7 @@ import type {
   CancelOrderInput,
   CreateOrderInput,
   HealthEvent,
+  MetricType,
   OrderSnapshot,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
@@ -28,6 +29,7 @@ export interface RegisteredAccountRecord {
 }
 
 export interface ClientContext {
+  readonly metricsEnabled: boolean;
   now(): number;
   assertStarted(): void;
   getRegisteredAccount(accountId: string): RegisteredAccountRecord;
@@ -50,6 +52,12 @@ export interface ClientContext {
     metadata?: Omit<AcexInternalError, "error" | "source" | "ts">,
   ): void;
   publishHealthEvent(event: HealthEvent): void;
+  emitMetric(
+    name: string,
+    value: number,
+    type: MetricType,
+    tags?: Record<string, string>,
+  ): void;
 }
 
 export interface ManagerLifecycle {

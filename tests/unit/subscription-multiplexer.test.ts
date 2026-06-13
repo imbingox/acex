@@ -771,6 +771,51 @@ test("reconnect creates a new socket and replays active subscriptions", async ()
   ]);
 });
 
+test("reconnect callback fires only after an established connection opens again", async () => {
+  const clock = new FakeClock();
+  const reconnects: Array<{ connectionKey: string; keys: string[] }> = [];
+  const multiplexer = new SubscriptionMultiplexer(protocol, {
+    initialMessageTimeoutMs: 5_000,
+    staleAfterMs: 100,
+    reconnectDelayMs: 10,
+    reconnectMaxDelayMs: 10,
+    now: clock.now,
+    setTimer: clock.setTimer as unknown as typeof setTimeout,
+    clearTimer: clock.clearTimer as unknown as typeof clearTimeout,
+    createWebSocket(url): WebSocket {
+      return new FakeWebSocket(url) as unknown as WebSocket;
+    },
+    onReconnect({ connectionKey, descriptors }): void {
+      reconnects.push({
+        connectionKey,
+        keys: descriptors.map((item) => item.key),
+      });
+    },
+  });
+  const { callbacks } = createCallbacks();
+
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks);
+  const firstSocket = await openSocket("wss://fake.test/alpha");
+  await Promise.resolve();
+  expect(reconnects).toEqual([]);
+
+  emitRaw(firstSocket, JSON.stringify({ key: "a", value: "first" }));
+  await handle.ready;
+  firstSocket.disconnect();
+  clock.advance(10);
+  await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+
+  expect(reconnects).toEqual([
+    {
+      connectionKey: "alpha",
+      keys: ["a"],
+    },
+  ]);
+
+  handle.close();
+});
+
 test("quiet subscription stays fresh while the shared connection receives other data", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);

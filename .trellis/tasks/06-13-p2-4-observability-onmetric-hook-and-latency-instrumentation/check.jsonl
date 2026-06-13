@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/06-13-p2-4-observability-onmetric-hook-and-latency-instrumentation/research/observability-context.md", "reason": "校验打点位置/零开销/异常隔离是否与调研结论一致"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "校验 onMetric 注入是否遵循既有 callback/factory-deps 约定"}

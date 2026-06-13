@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import { BinanceMarketCatalog } from "../../src/adapters/binance/market-catalog.ts";
 import { BinancePrivateAdapter } from "../../src/adapters/binance/private-adapter.ts";
-import { SymbolMappingError } from "../../src/adapters/types.ts";
+import {
+  type RawRiskLevelChange,
+  SymbolMappingError,
+} from "../../src/adapters/types.ts";
 import { isTransportError } from "../../src/internal/http-client.ts";
 import {
   FakeWebSocket,
@@ -240,6 +243,7 @@ test("BinancePrivateAdapter normalizes websocket order types and preserves rawTy
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(update): void {
         updates.push(update);
       },
@@ -271,6 +275,129 @@ test("BinancePrivateAdapter normalizes websocket order types and preserves rawTy
       rawType: "VENUE_ONLY_TYPE",
     },
   ]);
+  handle.close();
+});
+
+test("BinancePrivateAdapter maps PAPI riskLevelChange risk levels", async () => {
+  FakeWebSocket.reset();
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/listenKey"
+      ) {
+        return jsonResponse({ listenKey: "test-listen-key" });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+  const events: RawRiskLevelChange[] = [];
+  const riskFrames = [
+    {
+      e: "riskLevelChange",
+      E: 1710000000001,
+      u: "1.2300",
+      s: "MARGIN_CALL",
+      eq: "30.2341672800",
+      ae: "28.1000",
+      m: "15.1170837100",
+    },
+    {
+      e: "riskLevelChange",
+      E: 1710000000002,
+      u: "2.3400",
+      s: "REDUCE_ONLY",
+      eq: "31.0000",
+      ae: "29.0000",
+      m: "16.0000",
+    },
+    {
+      e: "riskLevelChange",
+      E: 1710000000003,
+      u: "3.4500",
+      s: "FORCE_LIQUIDATION",
+      eq: "32.0000",
+      ae: "30.0000",
+      m: "17.0000",
+    },
+    {
+      e: "riskLevelChange",
+      E: 1710000000004,
+      s: "VENUE_ONLY_RISK",
+    },
+  ];
+
+  const handle = adapter.createPrivateStream(
+    { apiKey: "key", secret: "secret" },
+    {
+      onAccountSnapshot(): void {},
+      onAccountUpdate(): void {},
+      onRiskLevelChange(event): void {
+        events.push(event);
+      },
+      onOrderUpdate(): void {},
+      onFreshnessChange(): void {},
+      onDisconnected(): void {},
+      onReconnected(): void {},
+      onError(error): void {
+        throw error;
+      },
+    },
+    streamOptions,
+  );
+
+  const socket = await waitForSocket(PAPI_WS_URL);
+  await handle.ready;
+  for (const frame of riskFrames) {
+    expect(frame.e).toBe("riskLevelChange");
+    expect(frame.e).not.toBe("MARGIN_CALL");
+    socket.emitJson(frame);
+  }
+
+  await waitForCondition(() => events.length === 4);
+  expect(events).toMatchObject([
+    {
+      riskLevel: "margin_call",
+      riskRatio: "1.23",
+      netEquity: "30.23416728",
+      riskEquity: "28.1",
+      maintenanceMargin: "15.11708371",
+      exchangeTs: 1710000000001,
+    },
+    {
+      riskLevel: "reduce_only",
+      riskRatio: "2.34",
+      netEquity: "31",
+      riskEquity: "29",
+      maintenanceMargin: "16",
+      exchangeTs: 1710000000002,
+    },
+    {
+      riskLevel: "force_liquidation",
+      riskRatio: "3.45",
+      netEquity: "32",
+      riskEquity: "30",
+      maintenanceMargin: "17",
+      exchangeTs: 1710000000003,
+    },
+    {
+      riskLevel: "margin_call",
+      exchangeTs: 1710000000004,
+    },
+  ]);
+  socket.emitJson({ e: "ACCOUNT_CONFIG_UPDATE", E: 1710000000005 });
+  await Bun.sleep(0);
+  expect(events).toHaveLength(4);
   handle.close();
 });
 
@@ -396,6 +523,7 @@ test("BinancePrivateAdapter waits for catalog before creating the private WebSoc
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(): void {},
       onFreshnessChange(): void {},
       onDisconnected(): void {},
@@ -458,6 +586,7 @@ test("BinancePrivateAdapter quarantines symbol misses, refreshes catalog, and re
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(update): void {
         updates.push(update);
       },
@@ -537,6 +666,7 @@ test("BinancePrivateAdapter does not request reconcile or replay after close dur
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(update): void {
         updates.push(update);
       },
@@ -621,6 +751,7 @@ test("BinancePrivateAdapter retains quarantined trade updates when catalog refre
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(update): void {
         updates.push(update);
       },
@@ -695,6 +826,7 @@ test("BinancePrivateAdapter drops quarantined raw updates after refresh still mi
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(update): void {
         updates.push(update);
       },
@@ -765,6 +897,7 @@ test("BinancePrivateAdapter cooldown limits repeated bad-symbol refresh and reco
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(): void {},
       onFreshnessChange(): void {},
       onDisconnected(): void {},
@@ -848,6 +981,7 @@ test("BinancePrivateAdapter reports overflowed quarantined symbol misses and req
     {
       onAccountSnapshot(): void {},
       onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
       onOrderUpdate(): void {},
       onFreshnessChange(): void {},
       onDisconnected(): void {},

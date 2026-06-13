@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  type AccountEvent,
   AcexError,
   BigNumber,
   createClient,
@@ -35,6 +36,23 @@ async function waitForCondition<T>(
   }
 
   throw new Error(message);
+}
+
+async function nextAccountEventOfType<T extends AccountEvent["type"]>(
+  iterator: AsyncIterator<AccountEvent>,
+  type: T,
+  timeoutMs = 1000,
+): Promise<Extract<AccountEvent, { type: T }>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const event = await nextEvent(iterator, remainingMs);
+    if (event.type === type) {
+      return event as Extract<AccountEvent, { type: T }>;
+    }
+  }
+
+  throw new Error(`Timed out waiting for ${type}`);
 }
 
 function signedBootstrapRequests(
@@ -130,6 +148,7 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     unrealizedPnl: new BigNumber("10.50").toFixed(),
   });
   expect(risk).toMatchObject({
+    riskLevel: "normal",
     netEquity: new BigNumber("1300.50").toFixed(),
     riskEquity: new BigNumber("1400.75").toFixed(),
     riskRatio: new BigNumber(1).dividedBy("31.0").toFixed(),
@@ -229,6 +248,162 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     reason: undefined,
   });
 
+  await iterator.return?.();
+});
+
+test("Binance PAPI riskLevelChange publishes account event and backfills risk snapshot", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 500,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 10_000,
+          privateReconcileIntervalMs: 0,
+          privateStreamStaleAfterMs: 250,
+        },
+      },
+    },
+  });
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000000000,
+    },
+  });
+
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+
+  const initialRisk = client.account.getRiskSnapshot("main-binance");
+  if (!initialRisk) {
+    throw new Error("Expected bootstrap risk snapshot");
+  }
+  expect(initialRisk).toMatchObject({
+    riskLevel: "normal",
+    netEquity: new BigNumber("1300.50").toFixed(),
+    riskEquity: new BigNumber("1400.75").toFixed(),
+    maintenanceMargin: new BigNumber("45.20").toFixed(),
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  const staleRiskLevelChange = {
+    e: "riskLevelChange",
+    E: 1710000000000,
+    u: "9.0000",
+    s: "REDUCE_ONLY",
+    eq: "9.0000",
+    ae: "9.0000",
+    m: "9.0000",
+  };
+  expect(staleRiskLevelChange.e).toBe("riskLevelChange");
+  expect(staleRiskLevelChange.e).not.toBe("MARGIN_CALL");
+
+  await Bun.sleep(150);
+  const beforeRiskFrame = Date.now();
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+  socket.emitJson(staleRiskLevelChange);
+
+  expect(
+    await nextAccountEventOfType(iterator, "account.risk_level_change", 200),
+  ).toMatchObject({
+    type: "account.risk_level_change",
+    riskLevel: "reduce_only",
+    riskRatio: new BigNumber("9.0000").toFixed(),
+    netEquity: new BigNumber("9.0000").toFixed(),
+    riskEquity: new BigNumber("9.0000").toFixed(),
+    maintenanceMargin: new BigNumber("9.0000").toFixed(),
+    exchangeTs: 1710000000000,
+  });
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLevel: "normal",
+    netEquity: initialRisk.netEquity,
+    riskEquity: initialRisk.riskEquity,
+    maintenanceMargin: initialRisk.maintenanceMargin,
+    exchangeTs: initialRisk.exchangeTs,
+  });
+
+  const riskLevelChange = {
+    e: "riskLevelChange",
+    E: 1710000000500,
+    u: "1.9999999900",
+    s: "MARGIN_CALL",
+    eq: "30.2341672800",
+    ae: "28.1000",
+    m: "15.1170837100",
+  };
+  expect(riskLevelChange.e).toBe("riskLevelChange");
+  expect(riskLevelChange.e).not.toBe("MARGIN_CALL");
+
+  socket.emitJson(riskLevelChange);
+  const riskLevelEvent = await nextAccountEventOfType(
+    iterator,
+    "account.risk_level_change",
+    200,
+  );
+  expect(riskLevelEvent).toMatchObject({
+    type: "account.risk_level_change",
+    riskLevel: "margin_call",
+    riskRatio: new BigNumber("1.9999999900").toFixed(),
+    netEquity: new BigNumber("30.2341672800").toFixed(),
+    riskEquity: new BigNumber("28.1000").toFixed(),
+    maintenanceMargin: new BigNumber("15.1170837100").toFixed(),
+    exchangeTs: 1710000000500,
+  });
+  const riskUpdatedEvent = await nextAccountEventOfType(
+    iterator,
+    "risk.updated",
+    200,
+  );
+  expect(riskUpdatedEvent).toMatchObject({
+    type: "risk.updated",
+    snapshot: {
+      riskLevel: "margin_call",
+      riskRatio: new BigNumber("1.9999999900").toFixed(),
+      netEquity: new BigNumber("30.2341672800").toFixed(),
+      riskEquity: new BigNumber("28.1000").toFixed(),
+      maintenanceMargin: new BigNumber("15.1170837100").toFixed(),
+      exchangeTs: 1710000000500,
+    },
+  });
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLevel: "margin_call",
+    riskRatio: new BigNumber("1.9999999900").toFixed(),
+    netEquity: new BigNumber("30.2341672800").toFixed(),
+    riskEquity: new BigNumber("28.1000").toFixed(),
+    maintenanceMargin: new BigNumber("15.1170837100").toFixed(),
+    receivedAt: riskLevelEvent.receivedAt,
+  });
+
+  await Bun.sleep(120);
+  expect(client.account.getAccountStatus("main-binance")).toMatchObject({
+    activity: "active",
+    runtimeStatus: "healthy",
+    lastReceivedAt: riskLevelEvent.receivedAt,
+  });
+  expect(
+    client.account.getAccountStatus("main-binance")?.lastReceivedAt,
+  ).toBeGreaterThanOrEqual(beforeRiskFrame);
+
+  await client.account.unsubscribeAccount({
+    accountId: "main-binance",
+  });
   await iterator.return?.();
 });
 

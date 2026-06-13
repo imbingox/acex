@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import BigNumber from "bignumber.js";
+import { toCanonical } from "../../internal/decimal.ts";
 import {
   type HttpClientMessages,
   type HttpRetryPolicy,
@@ -14,6 +15,8 @@ import type {
   RateLimiter,
   RateLimitPriority,
   RateLimitScope,
+  RiskAlertLevel,
+  RiskLevel,
   TimeProvider,
   VenueAccountCapabilities,
   VenueOrderCapabilities,
@@ -32,6 +35,7 @@ import type {
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
   RawPositionUpdate,
+  RawRiskLevelChange,
   RawRiskUpdate,
   StreamHandle,
 } from "../types.ts";
@@ -70,6 +74,7 @@ interface BinancePapiAccount {
   accountMaintMargin?: string;
   totalMaintMargin?: string;
   uniMMR?: string;
+  accountStatus?: string;
   updateTime?: number;
 }
 
@@ -181,10 +186,27 @@ interface BinanceListenKeyExpiredMessage {
   listenKey?: string;
 }
 
+interface BinanceRiskLevelChangeMessage {
+  e?: string;
+  E?: number;
+  u?: string;
+  s?: string;
+  eq?: string;
+  ae?: string;
+  m?: string;
+}
+
+interface BinanceAccountConfigUpdateMessage {
+  e?: string;
+  E?: number;
+}
+
 type BinancePrivateMessage =
   | BinanceAccountUpdateMessage
   | BinanceOrderTradeUpdateMessage
-  | BinanceListenKeyExpiredMessage;
+  | BinanceListenKeyExpiredMessage
+  | BinanceRiskLevelChangeMessage
+  | BinanceAccountConfigUpdateMessage;
 
 interface QuarantinedPrivateMessage {
   readonly message: BinancePrivateMessage;
@@ -215,6 +237,20 @@ const BINANCE_ORDER_TYPE_MAP: Record<string, OrderType> = {
   TAKE_PROFIT_MARKET: "take_profit_market",
   TRAILING_STOP_MARKET: "trailing_stop_market",
 };
+const BINANCE_RISK_LEVEL_CHANGE_MAP: Record<string, RiskAlertLevel> = {
+  MARGIN_CALL: "margin_call",
+  REDUCE_ONLY: "reduce_only",
+  FORCE_LIQUIDATION: "force_liquidation",
+};
+const BINANCE_ACCOUNT_STATUS_RISK_LEVEL_MAP: Record<string, RiskLevel> = {
+  NORMAL: "normal",
+  MARGIN_CALL: "margin_call",
+  SUPPLY_MARGIN: "margin_call",
+  REDUCE_ONLY: "reduce_only",
+  ACTIVE_LIQUIDATION: "force_liquidation",
+  FORCE_LIQUIDATION: "force_liquidation",
+  BANKRUPTED: "force_liquidation",
+};
 function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
   return {
     http: ({ status, statusText, url, rawBody }) =>
@@ -243,6 +279,10 @@ function requirePrivateCredentials(credentials: AccountCredentials): {
 
 function firstString(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => value !== undefined && value !== "");
+}
+
+function canonicalString(value: string | undefined): string | undefined {
+  return value === undefined || value === "" ? undefined : toCanonical(value);
 }
 
 function getNumberOption(
@@ -345,6 +385,20 @@ function normalizeOrderType(
   };
 }
 
+function normalizeRiskAlertLevel(rawLevel: string | undefined): RiskAlertLevel {
+  return rawLevel
+    ? (BINANCE_RISK_LEVEL_CHANGE_MAP[rawLevel] ?? "margin_call")
+    : "margin_call";
+}
+
+function normalizeAccountStatusRiskLevel(
+  rawStatus: string | undefined,
+): RiskLevel | undefined {
+  return rawStatus
+    ? BINANCE_ACCOUNT_STATUS_RISK_LEVEL_MAP[rawStatus]
+    : undefined;
+}
+
 function mapBalance(
   input: BinancePapiBalance,
   receivedAt: number,
@@ -384,6 +438,7 @@ function mapAccountRisk(
   const riskEquity = firstString(input.accountEquity, input.totalEquity);
   const riskLeverage = calculateRiskLeverage(riskEquity, positions);
   const risk: RawRiskUpdate = {
+    riskLevel: normalizeAccountStatusRiskLevel(input.accountStatus),
     netEquity,
     riskEquity,
     riskRatio,
@@ -406,7 +461,8 @@ function mapAccountRisk(
     !risk.riskRatio &&
     !risk.riskLeverage &&
     !risk.initialMargin &&
-    !risk.maintenanceMargin
+    !risk.maintenanceMargin &&
+    !risk.riskLevel
   ) {
     return undefined;
   }
@@ -593,7 +649,9 @@ function parsePrivateMessage(data: string): BinancePrivateMessage | undefined {
   const parsed = JSON.parse(data) as BinancePrivateMessage;
   return parsed.e === "ACCOUNT_UPDATE" ||
     parsed.e === "ORDER_TRADE_UPDATE" ||
-    parsed.e === "listenKeyExpired"
+    parsed.e === "listenKeyExpired" ||
+    parsed.e === "riskLevelChange" ||
+    parsed.e === "ACCOUNT_CONFIG_UPDATE"
     ? parsed
     : undefined;
 }
@@ -608,6 +666,18 @@ function isListenKeyExpiredMessage(
   message: BinancePrivateMessage,
 ): message is BinanceListenKeyExpiredMessage {
   return message.e === "listenKeyExpired";
+}
+
+function isRiskLevelChangeMessage(
+  message: BinancePrivateMessage,
+): message is BinanceRiskLevelChangeMessage {
+  return message.e === "riskLevelChange";
+}
+
+function isAccountConfigUpdateMessage(
+  message: BinancePrivateMessage,
+): message is BinanceAccountConfigUpdateMessage {
+  return message.e === "ACCOUNT_CONFIG_UPDATE";
 }
 
 function mapAccountUpdate(
@@ -631,6 +701,21 @@ function mapAccountUpdate(
       return mapped ? [mapped] : [];
     }),
     exchangeTs,
+    receivedAt,
+  };
+}
+
+function mapRiskLevelChange(
+  message: BinanceRiskLevelChangeMessage,
+  receivedAt: number,
+): RawRiskLevelChange {
+  return {
+    riskLevel: normalizeRiskAlertLevel(message.s),
+    riskRatio: canonicalString(message.u),
+    netEquity: canonicalString(message.eq),
+    riskEquity: canonicalString(message.ae),
+    maintenanceMargin: canonicalString(message.m),
+    exchangeTs: message.E,
     receivedAt,
   };
 }
@@ -1209,6 +1294,15 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     ): boolean => {
       if (isListenKeyExpiredMessage(message)) {
         recoverPrivateStream("listen_key_expired");
+        return false;
+      }
+
+      if (isRiskLevelChangeMessage(message)) {
+        callbacks.onRiskLevelChange(mapRiskLevelChange(message, receivedAt));
+        return false;
+      }
+
+      if (isAccountConfigUpdateMessage(message)) {
         return false;
       }
 

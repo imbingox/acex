@@ -7,6 +7,8 @@ import type {
   OrderStatus,
   OrderType,
   PositionSide,
+  RiskAlertLevel,
+  RiskLevel,
   Venue,
   VenueAccountCapabilities,
   VenueMarketCapabilities,
@@ -219,6 +221,7 @@ export interface RawPositionUpdate {
 }
 
 export interface RawRiskUpdate {
+  riskLevel?: RiskLevel;
   netEquity?: string;
   riskEquity?: string;
   riskRatio?: string;
@@ -228,6 +231,16 @@ export interface RawRiskUpdate {
   exchangeTs?: number;
   receivedAt: number;
   lending?: RawLendingRiskUpdate;
+}
+
+export interface RawRiskLevelChange {
+  riskLevel: RiskAlertLevel;
+  riskRatio?: string;
+  netEquity?: string;
+  riskEquity?: string;
+  maintenanceMargin?: string;
+  exchangeTs?: number;
+  receivedAt: number;
 }
 
 export interface RawLendingRiskUpdate {
@@ -324,6 +337,7 @@ export interface CancelAllOrdersRequest {
 export interface PrivateStreamCallbacks {
   onAccountSnapshot(snapshot: RawAccountBootstrap): void;
   onAccountUpdate(update: RawAccountUpdate): void;
+  onRiskLevelChange(event: RawRiskLevelChange): void;
   onOrderUpdate(update: RawOrderUpdate): void;
   onFreshnessChange(freshness: "stale", reason: "heartbeat_timeout"): void;
   onDisconnected(): void;

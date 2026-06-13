@@ -48,6 +48,14 @@ export interface AccountEventFilter {
   symbol?: string;
 }
 
+export type RiskLevel =
+  | "normal"
+  | "margin_call"
+  | "reduce_only"
+  | "force_liquidation";
+
+export type RiskAlertLevel = Exclude<RiskLevel, "normal">;
+
 export interface BalanceSnapshot {
   accountId: string;
   venue: Venue;
@@ -91,6 +99,7 @@ export interface PositionSnapshot {
 export interface RiskSnapshot {
   accountId: string;
   venue: Venue;
+  riskLevel?: RiskLevel;
   netEquity?: string;
   riskEquity?: string;
   riskRatio?: string;
@@ -147,6 +156,17 @@ export interface RiskUpdatedEvent extends AccountEventBase {
   snapshot: RiskSnapshot;
 }
 
+export interface RiskLevelChangedEvent extends AccountEventBase {
+  type: "account.risk_level_change";
+  riskLevel: RiskAlertLevel;
+  riskRatio?: string;
+  netEquity?: string;
+  riskEquity?: string;
+  maintenanceMargin?: string;
+  exchangeTs?: number;
+  receivedAt: number;
+}
+
 export interface AccountSnapshotReplacedEvent extends AccountEventBase {
   type: "account.snapshot_replaced";
   snapshot: AccountSnapshot;
@@ -156,6 +176,7 @@ export type AccountEvent =
   | BalanceUpdatedEvent
   | PositionUpdatedEvent
   | RiskUpdatedEvent
+  | RiskLevelChangedEvent
   | AccountSnapshotReplacedEvent;
 
 export interface AccountEventStreams {

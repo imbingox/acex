@@ -1351,6 +1351,18 @@ export class PrivateSubscriptionCoordinator {
             update,
           );
         },
+        onRiskLevelChange: (event) => {
+          if (!record.accountSubscribed) {
+            return;
+          }
+
+          record.accountReady = true;
+          this.accountConsumer.onPrivateRiskLevelChange(
+            record.accountId,
+            record.venue,
+            event,
+          );
+        },
         onOrderUpdate: (update) => {
           if (!record.ordersSubscribed) {
             return;

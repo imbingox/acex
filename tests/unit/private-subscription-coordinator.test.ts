@@ -8,6 +8,7 @@ import type {
   RawAccountUpdate,
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
+  RawRiskLevelChange,
   StreamHandle,
 } from "../../src/adapters/types.ts";
 import type {
@@ -127,6 +128,7 @@ class StubContext implements ClientContext {
 class StubAccountConsumer implements PrivateAccountDataConsumer {
   pendingCalls = 0;
   updates: RawAccountUpdate[] = [];
+  riskLevelChanges: RawRiskLevelChange[] = [];
   reconcilePreserveStatus: Array<boolean | undefined> = [];
   states: PrivateSubscriptionState[] = [];
 
@@ -151,6 +153,15 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
   ): void {
     this.trace?.push("account-update");
     this.updates.push(update);
+  }
+
+  onPrivateRiskLevelChange(
+    _accountId: string,
+    _venue: Venue,
+    event: RawRiskLevelChange,
+  ): void {
+    this.trace?.push("risk-level-change");
+    this.riskLevelChanges.push(event);
   }
 
   onPrivateAccountReconcile(
@@ -910,6 +921,49 @@ test("immediate private reconcile requests are coalesced with one dirty replay",
   adapter.releaseOpenOrders.shift()?.();
   await Bun.sleep(5);
   expect(adapter.fetchOpenOrdersCalls).toBe(2);
+});
+
+test("risk level changes are forwarded only when account data is subscribed", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const accountConsumer = new StubAccountConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    new StubOrderConsumer(),
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  adapter.callbacks?.onRiskLevelChange({
+    riskLevel: "margin_call",
+    riskRatio: "1.23",
+    exchangeTs: 1710000000000,
+    receivedAt: 1710000000100,
+  });
+  expect(accountConsumer.riskLevelChanges).toHaveLength(0);
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  adapter.callbacks?.onRiskLevelChange({
+    riskLevel: "reduce_only",
+    riskRatio: "2.34",
+    exchangeTs: 1710000000200,
+    receivedAt: 1710000000300,
+  });
+  expect(accountConsumer.riskLevelChanges).toEqual([
+    {
+      riskLevel: "reduce_only",
+      riskRatio: "2.34",
+      exchangeTs: 1710000000200,
+      receivedAt: 1710000000300,
+    },
+  ]);
+
+  coordinator.unsubscribeOrderFeed("main-binance");
+  coordinator.unsubscribeAccountFeed("main-binance");
 });
 
 test("private reconcile re-arms dirty requests queued in the finalizer window", async () => {

@@ -4,6 +4,7 @@ import type {
   RawAccountUpdate,
   RawBalanceUpdate,
   RawPositionUpdate,
+  RawRiskLevelChange,
   RawRiskUpdate,
 } from "../adapters/types.ts";
 import type {
@@ -34,6 +35,7 @@ import type {
   BalanceSnapshot,
   PositionKeyInput,
   PositionSnapshot,
+  RiskLevelChangedEvent,
   RiskSnapshot,
   SubscribeAccountInput,
   UnsubscribeAccountInput,
@@ -494,6 +496,78 @@ export class AccountManagerImpl
     this.publishStatus(record);
   }
 
+  onPrivateRiskLevelChange(
+    accountId: string,
+    venue: Venue,
+    event: RawRiskLevelChange,
+  ): void {
+    const record = this.getOrCreateRecord(accountId, venue);
+    if (!record.subscribed) {
+      return;
+    }
+
+    const riskEvent: RiskLevelChangedEvent = {
+      type: "account.risk_level_change",
+      accountId,
+      venue,
+      riskLevel: event.riskLevel,
+      riskRatio: event.riskRatio,
+      netEquity: event.netEquity,
+      riskEquity: event.riskEquity,
+      maintenanceMargin: event.maintenanceMargin,
+      exchangeTs: event.exchangeTs,
+      receivedAt: event.receivedAt,
+      ts: this.context.now(),
+    };
+    this.accountBus.publish(riskEvent);
+
+    const previous =
+      record.snapshot ?? this.createEmptySnapshot(accountId, venue);
+    const riskUpdate: RawRiskUpdate = {
+      riskLevel: event.riskLevel,
+      riskRatio: event.riskRatio,
+      netEquity: event.netEquity,
+      riskEquity: event.riskEquity,
+      maintenanceMargin: event.maintenanceMargin,
+      exchangeTs: event.exchangeTs,
+      receivedAt: event.receivedAt,
+    };
+
+    if (
+      shouldApplyWatermarkedUpdate(previous.risk, riskUpdate, {
+        source: "stream",
+      })
+    ) {
+      const risk = this.createRisk(accountId, venue, riskUpdate, previous.risk);
+      record.snapshot = freezeAccountSnapshot({
+        accountId,
+        venue,
+        balances: previous.balances,
+        positions: previous.positions,
+        risk,
+        exchangeTs:
+          event.exchangeTs === undefined
+            ? previous.exchangeTs
+            : event.exchangeTs,
+        receivedAt: event.receivedAt,
+        updatedAt: event.receivedAt,
+      });
+      this.accountBus.publish({
+        type: "risk.updated",
+        accountId,
+        venue,
+        snapshot: risk,
+        ts: this.context.now(),
+      });
+    }
+
+    record.status = successfulStatus(record.status, {
+      lastReceivedAt: event.receivedAt,
+      lastReadyAt: event.receivedAt,
+    });
+    this.publishStatus(record);
+  }
+
   onPrivateAccountReconcile(
     accountId: string,
     venue: Venue,
@@ -844,6 +918,8 @@ export class AccountManagerImpl
     return freezeRisk({
       accountId,
       venue,
+      riskLevel:
+        input.riskLevel === undefined ? previous?.riskLevel : input.riskLevel,
       netEquity:
         input.netEquity === undefined
           ? previous?.netEquity

@@ -419,7 +419,7 @@ interface AccountManager {
 
 `AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，数组视图用 `getBalances()`。
 
-Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。WS `ACCOUNT_UPDATE` 会更新发生变化的余额和仓位；`/papi/v1/account` + `/papi/v1/um/positionRisk` refresh 用于校准风险字段和 mark-to-market 仓位字段。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
+Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。WS `ACCOUNT_UPDATE` 会更新发生变化的余额和仓位；PAPI 私有流的账户风控告警是 `riskLevelChange`，SDK 会发布 `account.risk_level_change` 并用事件里的 `u/eq/ae/m` 回填 `RiskSnapshot.riskRatio/netEquity/riskEquity/maintenanceMargin` 和 `riskLevel`。`riskLevelChange` 是账户级聚合事件，没有 symbol 或逐仓位数组；USDⓈ-M 独立合约流的 `MARGIN_CALL` 形状不适用于 PAPI。`/papi/v1/account` + `/papi/v1/um/positionRisk` refresh 用于校准风险字段和 mark-to-market 仓位字段，REST `accountStatus` 存在时会映射到 `RiskSnapshot.riskLevel`。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
 
 Account 事件用于消费余额、仓位、风险或全量快照替换：
 
@@ -429,6 +429,9 @@ for await (const event of client.account.events.updates({
 }, { maxBuffer: 20_000 })) {
   if (event.type === "risk.updated") {
     console.log(event.snapshot.riskRatio);
+  }
+  if (event.type === "account.risk_level_change") {
+    console.log(event.riskLevel, event.riskRatio);
   }
   break;
 }
@@ -937,13 +940,24 @@ interface PositionSnapshot {
   liquidationPrice?: string;
 }
 
+type RiskLevel =
+  | "normal"
+  | "margin_call"
+  | "reduce_only"
+  | "force_liquidation";
+
+type RiskAlertLevel = Exclude<RiskLevel, "normal">;
+
 interface RiskSnapshot {
   accountId: string;
   venue: Venue;
+  riskLevel?: RiskLevel;
   netEquity?: string;
   riskEquity?: string;
   riskRatio?: string;
   riskLeverage?: string;
+  initialMargin?: string;
+  maintenanceMargin?: string;
   lending?: {
     marginLevel?: string;
     healthFactor?: string;
@@ -1061,6 +1075,7 @@ type AccountEvent =
   | { type: "balance.updated"; accountId: string; venue: Venue; asset: string; snapshot: BalanceSnapshot; ts: number }
   | { type: "position.updated"; accountId: string; venue: Venue; symbol: string; snapshot: PositionSnapshot; ts: number }
   | { type: "risk.updated"; accountId: string; venue: Venue; snapshot: RiskSnapshot; ts: number }
+  | { type: "account.risk_level_change"; accountId: string; venue: Venue; riskLevel: RiskAlertLevel; riskRatio?: string; netEquity?: string; riskEquity?: string; maintenanceMargin?: string; exchangeTs?: number; receivedAt: number; ts: number }
   | { type: "account.snapshot_replaced"; accountId: string; venue: Venue; snapshot: AccountSnapshot; ts: number };
 
 type OrderEvent =

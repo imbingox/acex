@@ -54,6 +54,7 @@ import {
   successfulStatus,
 } from "./order/data-status.ts";
 import {
+  createSdkClientOrderIdEntropy,
   getOrderLookupKeys,
   isSystemClientOrderId,
   SDK_CLIENT_ORDER_ID_PREFIX,
@@ -113,6 +114,7 @@ export class OrderManagerImpl
     new AsyncEventBus<OrderStatusChangedEvent>();
   private readonly tradesBus = new AsyncEventBus<OrderTradeEvent>();
   private readonly records = new Map<string, OrderRecord>();
+  private readonly localOrderEntropy = createSdkClientOrderIdEntropy();
   private localOrderSequence = 0;
 
   constructor(context: ClientContext, options: OrderManagerOptions = {}) {
@@ -1141,7 +1143,7 @@ export class OrderManagerImpl
     avoidOpenClientOrderId?: boolean;
   }): string {
     while (true) {
-      const candidate = `${SDK_CLIENT_ORDER_ID_PREFIX}${this.context.now().toString(36)}-${(this.localOrderSequence++).toString(36)}`;
+      const candidate = `${SDK_CLIENT_ORDER_ID_PREFIX}${this.localOrderEntropy}-${this.context.now().toString(36)}-${(this.localOrderSequence++).toString(36)}`;
       if (
         (options?.record &&
           options.avoidOpenClientOrderId &&

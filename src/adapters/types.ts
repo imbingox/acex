@@ -5,6 +5,7 @@ import type {
   MarketDefinition,
   OrderSide,
   OrderStatus,
+  OrderType,
   PositionSide,
   Venue,
   VenueAccountCapabilities,
@@ -272,7 +273,8 @@ export interface RawOrderUpdate {
   clientOrderId?: string;
   symbol: string;
   side: OrderSide;
-  type: string;
+  type: OrderType;
+  rawType?: string;
   status: OrderStatus;
   price?: string;
   triggerPrice?: string;

@@ -463,7 +463,7 @@ interface OrderEventStreams {
 
 - `createOrder()` 支持 `limit` / `market`
 - `limit` 可传 `postOnly: true`，Binance PAPI UM 映射为 `timeInForce=GTX`
-- 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-` 前缀，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
+- 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-<entropy>-<ts>-<seq>`，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
 - `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
 - `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
 - hedge mode 下必须显式传 `positionSide: "long" | "short"`
@@ -543,6 +543,14 @@ type ClientStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
 type MarketType = "spot" | "swap" | "future";
 type PositionSide = "long" | "short" | "net";
 type CreateOrderType = "limit" | "market";
+type OrderType =
+  | CreateOrderType
+  | "stop"
+  | "stop_market"
+  | "take_profit"
+  | "take_profit_market"
+  | "trailing_stop_market"
+  | "unknown";
 type OrderSide = "buy" | "sell";
 type OrderStatus =
   | "open"
@@ -1006,7 +1014,8 @@ interface OrderSnapshot {
   clientOrderId?: string;
   symbol: string;
   side: OrderSide;
-  type: string;
+  type: OrderType;
+  rawType?: string;
   status: OrderStatus;
   price?: string;
   amount: string;

@@ -9,6 +9,7 @@ import {
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type {
   AccountCredentials,
+  OrderType,
   PositionSide,
   RateLimiter,
   RateLimitPriority,
@@ -205,6 +206,15 @@ const NO_RETRY_POLICY: HttpRetryPolicy = {
   idempotent: false,
   maxAttempts: 1,
 };
+const BINANCE_ORDER_TYPE_MAP: Record<string, OrderType> = {
+  LIMIT: "limit",
+  MARKET: "market",
+  STOP: "stop",
+  STOP_MARKET: "stop_market",
+  TAKE_PROFIT: "take_profit",
+  TAKE_PROFIT_MARKET: "take_profit_market",
+  TRAILING_STOP_MARKET: "trailing_stop_market",
+};
 function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
   return {
     http: ({ status, statusText, url, rawBody }) =>
@@ -320,6 +330,19 @@ function normalizeOrderStatus(
     default:
       return value ? "open" : undefined;
   }
+}
+
+function normalizeOrderType(
+  rawType: string | undefined,
+): Pick<RawOrderUpdate, "type" | "rawType"> {
+  if (!rawType) {
+    return { type: "unknown" };
+  }
+
+  return {
+    type: BINANCE_ORDER_TYPE_MAP[rawType] ?? "unknown",
+    rawType,
+  };
 }
 
 function mapBalance(
@@ -492,6 +515,7 @@ function mapOpenOrder(
   receivedAt: number,
 ): RawOrderUpdate | undefined {
   const status = normalizeOrderStatus(input.status);
+  const orderType = normalizeOrderType(input.type);
   if (!input.symbol || !status) {
     return undefined;
   }
@@ -506,7 +530,7 @@ function mapOpenOrder(
     clientOrderId: input.clientOrderId,
     symbol,
     side: normalizeOrderSide(input.side),
-    type: input.type ?? "unknown",
+    ...orderType,
     status,
     price: input.price,
     triggerPrice: input.stopPrice,
@@ -618,6 +642,7 @@ function mapOrderUpdate(
 ): RawOrderUpdate | undefined {
   const payload = message.o;
   const status = normalizeOrderStatus(payload?.X);
+  const orderType = normalizeOrderType(payload?.o);
   if (!payload?.s || !status) {
     return undefined;
   }
@@ -632,7 +657,7 @@ function mapOrderUpdate(
     clientOrderId: payload.c,
     symbol,
     side: normalizeOrderSide(payload.S),
-    type: payload.o ?? "unknown",
+    ...orderType,
     status,
     price: payload.p,
     triggerPrice: payload.sp,

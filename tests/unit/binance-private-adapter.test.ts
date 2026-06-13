@@ -59,7 +59,7 @@ function newUsdtSymbol() {
   };
 }
 
-function orderTradeUpdate(symbol: string) {
+function orderTradeUpdate(symbol: string, orderType = "LIMIT") {
   return {
     e: "ORDER_TRADE_UPDATE",
     E: 1710000000000,
@@ -68,7 +68,7 @@ function orderTradeUpdate(symbol: string) {
       i: 9001,
       c: "cid-9001",
       S: "BUY",
-      o: "LIMIT",
+      o: orderType,
       x: "TRADE",
       X: "FILLED",
       p: "1.00",
@@ -158,6 +158,120 @@ test("BinancePrivateAdapter safe reads do not retry HTTP failures", async () => 
   }
   expect(error.attempts).toBe(1);
   expect(error.kind).toBe("http");
+});
+
+test("BinancePrivateAdapter normalizes REST open order types and preserves rawType", async () => {
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/um/openOrders"
+      ) {
+        return jsonResponse([
+          { ...successfulOrderResponse("BTCUSDT"), orderId: 1, type: "LIMIT" },
+          { ...successfulOrderResponse("BTCUSDT"), orderId: 2, type: "MARKET" },
+          {
+            ...successfulOrderResponse("BTCUSDT"),
+            orderId: 3,
+            type: "STOP_MARKET",
+          },
+          {
+            ...successfulOrderResponse("BTCUSDT"),
+            orderId: 4,
+            type: "LIMIT_MAKER",
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const updates = await adapter.bootstrapOpenOrders({
+    apiKey: "key",
+    secret: "secret",
+  });
+
+  expect(
+    updates.map((update) => ({
+      orderId: update.orderId,
+      type: update.type,
+      rawType: update.rawType,
+    })),
+  ).toEqual([
+    { orderId: "1", type: "limit", rawType: "LIMIT" },
+    { orderId: "2", type: "market", rawType: "MARKET" },
+    { orderId: "3", type: "stop_market", rawType: "STOP_MARKET" },
+    { orderId: "4", type: "unknown", rawType: "LIMIT_MAKER" },
+  ]);
+});
+
+test("BinancePrivateAdapter normalizes websocket order types and preserves rawType", async () => {
+  FakeWebSocket.reset();
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/listenKey"
+      ) {
+        return jsonResponse({ listenKey: "test-listen-key" });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+  const updates: unknown[] = [];
+
+  const handle = adapter.createPrivateStream(
+    { apiKey: "key", secret: "secret" },
+    {
+      onAccountSnapshot(): void {},
+      onAccountUpdate(): void {},
+      onOrderUpdate(update): void {
+        updates.push(update);
+      },
+      onFreshnessChange(): void {},
+      onDisconnected(): void {},
+      onReconnected(): void {},
+      onError(error): void {
+        throw error;
+      },
+    },
+    streamOptions,
+  );
+
+  const socket = await waitForSocket(PAPI_WS_URL);
+  await handle.ready;
+  socket.emitJson(orderTradeUpdate("BTCUSDT", "TAKE_PROFIT_MARKET"));
+  socket.emitJson(orderTradeUpdate("BTCUSDT", "VENUE_ONLY_TYPE"));
+
+  await waitForCondition(() => updates.length === 2);
+  expect(updates).toMatchObject([
+    {
+      symbol: "BTC/USDT:USDT",
+      type: "take_profit_market",
+      rawType: "TAKE_PROFIT_MARKET",
+    },
+    {
+      symbol: "BTC/USDT:USDT",
+      type: "unknown",
+      rawType: "VENUE_ONLY_TYPE",
+    },
+  ]);
+  handle.close();
 });
 
 test("BinancePrivateAdapter requests signing clock resync on timestamp errors", async () => {

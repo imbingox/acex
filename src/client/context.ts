@@ -4,6 +4,7 @@ import type {
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
   RawRiskLevelChange,
+  RawSymbolFeeRate,
 } from "../adapters/types.ts";
 import type { VenueErrorReason } from "../errors.ts";
 import type {
@@ -12,6 +13,7 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  GetSymbolFeeRateInput,
   HealthEvent,
   MetricType,
   OrderSnapshot,
@@ -46,6 +48,7 @@ export interface ClientContext {
   createOrder(input: CreateOrderInput): Promise<RawOrderUpdate>;
   cancelOrder(input: CancelOrderInput): Promise<RawOrderUpdate>;
   cancelAllOrders(input: CancelAllOrdersInput): Promise<RawOrderUpdate[]>;
+  fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate>;
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,

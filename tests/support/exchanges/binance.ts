@@ -329,6 +329,11 @@ const binanceFixtures = {
         updateTime: 1710000000300,
       },
     ],
+    commissionRate: {
+      symbol: "BTCUSDT",
+      makerCommissionRate: "0.00020000",
+      takerCommissionRate: "0.00050000",
+    },
   },
 };
 
@@ -442,6 +447,9 @@ export function installBinancePrivateAccountInfra(options?: {
   openOrdersDelayMs?: number;
   queryOrder?: unknown;
   queryOrderResponses?: unknown[];
+  commissionRate?: unknown;
+  beforeCommissionRateResponse?: () => void;
+  failCommissionRate?: boolean;
   failQueryOrder?: boolean;
   networkErrorQueryOrder?: boolean;
   networkErrorQueryOrderCount?: number;
@@ -707,6 +715,17 @@ export function installBinancePrivateAccountInfra(options?: {
               },
               queryOrderRequestCount++,
             ),
+          );
+        case "GET /papi/v1/um/commissionRate":
+          if (options?.failCommissionRate) {
+            return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+              status: 401,
+              statusText: "Unauthorized",
+            });
+          }
+          options?.beforeCommissionRateResponse?.();
+          return jsonResponse(
+            options?.commissionRate ?? binanceFixtures.papi.commissionRate,
           );
         case "POST /papi/v1/um/order":
           if (options?.createOrderDelayMs) {

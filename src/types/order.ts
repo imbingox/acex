@@ -98,6 +98,11 @@ export interface CancelAllOrdersInput {
   symbol: string;
 }
 
+export interface GetSymbolFeeRateInput {
+  accountId: string;
+  symbol: string;
+}
+
 export interface OrderEventFilter {
   accountId?: string;
   venue?: Venue;
@@ -140,6 +145,15 @@ export interface OrderTrade {
   maker?: boolean;
   positionSide?: PositionSide;
   exchangeTs?: number;
+  receivedAt: number;
+}
+
+export interface SymbolFeeRate {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  maker: string;
+  taker: string;
   receivedAt: number;
 }
 
@@ -218,6 +232,7 @@ export interface OrderManager {
   createOrder(input: CreateOrderInput): Promise<OrderSnapshot>;
   cancelOrder(input: CancelOrderInput): Promise<OrderSnapshot>;
   cancelAllOrders(input: CancelAllOrdersInput): Promise<OrderSnapshot[]>;
+  getSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<SymbolFeeRate>;
 
   getOrder(input: GetOrderInput): OrderSnapshot | undefined;
   getOpenOrders(accountId: string, symbol?: string): OrderSnapshot[];

@@ -26,6 +26,7 @@ import type {
   CancelOrderRequest,
   CreateOrderRequest,
   FetchOrderRequest,
+  FetchSymbolFeeRateRequest,
   PrivateStreamCallbacks,
   PrivateStreamOptions,
   PrivateUserDataAdapter,
@@ -37,6 +38,7 @@ import type {
   RawPositionUpdate,
   RawRiskLevelChange,
   RawRiskUpdate,
+  RawSymbolFeeRate,
   StreamHandle,
 } from "../types.ts";
 import { CatalogUnavailableError, isSymbolMappingError } from "../types.ts";
@@ -113,6 +115,12 @@ interface BinancePapiOpenOrder {
 interface BinancePapiCancelAllResponse {
   code?: number | string;
   msg?: string;
+}
+
+interface BinancePapiUmCommissionRate {
+  symbol?: string;
+  makerCommissionRate?: string;
+  takerCommissionRate?: string;
 }
 
 interface BinanceListenKeyResponse {
@@ -783,6 +791,23 @@ function mapOrderTrade(
   };
 }
 
+function mapCommissionRate(
+  response: BinancePapiUmCommissionRate,
+  symbol: string,
+  receivedAt: number,
+): RawSymbolFeeRate {
+  if (!response.makerCommissionRate || !response.takerCommissionRate) {
+    throw new Error("Binance PAPI commissionRate response is missing rates");
+  }
+
+  return {
+    symbol,
+    maker: response.makerCommissionRate,
+    taker: response.takerCommissionRate,
+    receivedAt,
+  };
+}
+
 function missingUmPositionVenueIds(
   catalog: BinanceMarketCatalog,
   positions: BinancePapiUmPosition[],
@@ -933,6 +958,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     supported: true,
     openOrders: "supported",
     updates: "websocket",
+    fees: "supported",
     create: "supported",
     cancel: "supported",
     cancelAll: "symbol",
@@ -1105,6 +1131,27 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
 
       throw error;
     }
+  }
+
+  async fetchSymbolFeeRate(
+    credentials: AccountCredentials,
+    request: FetchSymbolFeeRateRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolFeeRate> {
+    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const response = await this.signedRequest<BinancePapiUmCommissionRate>(
+      "GET",
+      "/papi/v1/um/commissionRate",
+      credentials,
+      accountOptions,
+      {
+        symbol,
+      },
+      SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+    );
+    const receivedAt = Date.now();
+
+    return mapCommissionRate(response, request.symbol, receivedAt);
   }
 
   async createOrder(

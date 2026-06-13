@@ -680,6 +680,7 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
     supported: false,
     openOrders: "unsupported",
     updates: "unsupported",
+    fees: "unsupported",
     create: "unsupported",
     cancel: "unsupported",
     cancelAll: "unsupported",

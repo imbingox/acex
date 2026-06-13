@@ -30,6 +30,7 @@ export const BINANCE_RATE_LIMIT_PLANS = {
   papiBalance: "binance:papi:balance",
   papiAccount: "binance:papi:account",
   papiPositionRisk: "binance:papi:position-risk",
+  papiCommissionRate: "binance:papi:commission-rate",
   papiQueryOrder: "binance:papi:query-order",
   papiOpenOrdersSymbol: "binance:papi:open-orders:symbol",
   papiOpenOrdersAll: "binance:papi:open-orders:all",
@@ -119,6 +120,11 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       5,
     ),
     requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiCommissionRate,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.papiQueryOrder,
       BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
       1,
@@ -204,6 +210,8 @@ export function getBinancePapiRateLimitPlanId(
       return BINANCE_RATE_LIMIT_PLANS.papiAccount;
     case "GET /papi/v1/um/positionRisk":
       return BINANCE_RATE_LIMIT_PLANS.papiPositionRisk;
+    case "GET /papi/v1/um/commissionRate":
+      return BINANCE_RATE_LIMIT_PLANS.papiCommissionRate;
     case "GET /papi/v1/um/order":
       return BINANCE_RATE_LIMIT_PLANS.papiQueryOrder;
     case "GET /papi/v1/um/openOrders":

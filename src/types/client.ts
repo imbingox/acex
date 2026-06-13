@@ -110,6 +110,7 @@ export interface VenueOrderCapabilities {
   supported: boolean;
   openOrders: VenueCapabilitySupport;
   updates: PrivateUpdateCapability;
+  fees: VenueCapabilitySupport;
   create: VenueCapabilitySupport;
   cancel: VenueCapabilitySupport;
   cancelAll: CancelAllOrdersCapability;

@@ -7,9 +7,11 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  FetchSymbolFeeRateRequest,
   MarketAdapter,
   PrivateUserDataAdapter,
   RawOrderUpdate,
+  RawSymbolFeeRate,
 } from "../adapters/types.ts";
 import {
   AcexError,
@@ -40,6 +42,7 @@ import {
   type ClientStatusChangedEvent,
   type CreateClientOptions,
   type CreateOrderInput,
+  type GetSymbolFeeRateInput,
   type HealthEvent,
   type HealthEventFilter,
   type JuplendAccountRuntimeOptions,
@@ -619,6 +622,52 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         { ...account.options, accountId: account.accountId },
       ),
     );
+  }
+
+  fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate> {
+    this.assertStarted();
+    const account = this.getRegisteredAccount(input.accountId);
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (
+      adapter.orderCapabilities.fees === "unsupported" ||
+      !adapter.fetchSymbolFeeRate
+    ) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support symbol fee rate queries: ${account.venue}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    if (
+      !hasPrivateCredentials(
+        account.credentials,
+        adapter.accountCapabilities.credentialsRequired,
+      )
+    ) {
+      throw this.createError(
+        "CREDENTIALS_MISSING",
+        `Account credentials are required for symbol fee rate queries: ${input.accountId}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    const request: FetchSymbolFeeRateRequest = {
+      symbol: input.symbol,
+    };
+
+    return adapter.fetchSymbolFeeRate(account.credentials ?? {}, request, {
+      ...account.options,
+      accountId: account.accountId,
+    });
   }
 
   publishRuntimeError(

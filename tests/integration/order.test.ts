@@ -483,6 +483,113 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
   await iterator.return?.();
 });
 
+test("getSymbolFeeRate fetches Binance PAPI UM maker and taker rates", async () => {
+  let now = 1710000001000;
+  const requests = installBinancePrivateAccountInfra({
+    commissionRate: {
+      symbol: "BTCUSDT",
+      makerCommissionRate: "0.00020000",
+      takerCommissionRate: "0.00050000",
+    },
+    beforeCommissionRateResponse: () => {
+      now = 1710000002000;
+    },
+  });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000000000,
+      recvWindow: 5000,
+    },
+  });
+  await client.start();
+
+  const fetchFeeRateWithMockedNow = async () => {
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      return await client.order.getSymbolFeeRate({
+        accountId: "main-binance",
+        symbol: "BTC/USDT:USDT",
+      });
+    } finally {
+      Date.now = originalDateNow;
+    }
+  };
+
+  const feeRate = await fetchFeeRateWithMockedNow();
+
+  expect(feeRate).toMatchObject({
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    maker: "0.0002",
+    taker: "0.0005",
+  });
+  expect(feeRate.receivedAt).toBe(1710000002000);
+
+  const request = requests.find(
+    (entry) =>
+      entry.method === "GET" &&
+      entry.url.pathname === "/papi/v1/um/commissionRate",
+  );
+  expect(request).toBeDefined();
+  expect(request?.apiKey).toBe("key");
+  expect(request?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+  expect(request?.url.searchParams.get("timestamp")).toBe("1710000000000");
+  expect(request?.url.searchParams.get("recvWindow")).toBe("5000");
+  expect(request?.url.searchParams.get("signature")).toBeTruthy();
+});
+
+test("getSymbolFeeRate wraps Binance fee rate failures with public error details", async () => {
+  installBinancePrivateAccountInfra({ failCommissionRate: true });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.order
+    .getSymbolFeeRate({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
+    code: "ORDER_FEE_RATE_FETCH_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      venueError: {
+        code: "-2015",
+        message: "Invalid API-key",
+        reason: "unknown",
+      },
+      transport: {
+        kind: "http",
+        status: 401,
+        url: "https://papi.binance.com/papi/v1/um/commissionRate?query=[REDACTED]",
+      },
+    },
+  });
+  expect((failure as AcexError).details?.orderState).toBeUndefined();
+});
+
 test("order trades stream publishes Binance per-trade fee, maker flag, realized pnl, and seq", async () => {
   const { client, socket } = await createSubscribedOrderClient({});
   const iterator = client.order.events
@@ -4430,5 +4537,15 @@ test("Juplend order commands are rejected before adapter command methods", async
   ).rejects.toMatchObject({
     code: "VENUE_NOT_SUPPORTED",
     message: "Venue does not support private order commands: juplend",
+  });
+
+  await expect(
+    client.order.getSymbolFeeRate({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    message: "Venue does not support symbol fee rate queries: juplend",
   });
 });

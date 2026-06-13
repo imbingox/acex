@@ -473,6 +473,7 @@ interface OrderManager {
   createOrder(input: CreateOrderInput): Promise<OrderSnapshot>;
   cancelOrder(input: CancelOrderInput): Promise<OrderSnapshot>;
   cancelAllOrders(input: CancelAllOrdersInput): Promise<OrderSnapshot[]>;
+  getSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<SymbolFeeRate>;
 
   getOrder(input: GetOrderInput): OrderSnapshot | undefined;
   getOpenOrders(accountId: string, symbol?: string): OrderSnapshot[];
@@ -493,13 +494,29 @@ interface OrderEventStreams {
 - 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-<entropy>-<ts>-<seq>`，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
 - `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
 - `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
+- `getSymbolFeeRate()` 按 `accountId + symbol` 查询账号实际 maker / taker 费率；当前 Binance PAPI UM 支持，返回 canonical decimal string
 - hedge mode 下必须显式传 `positionSide: "long" | "short"`
 
 ### 7.2 精度限制
 
 `createOrder()` 不会自动纠偏。调用方应先用 `MarketDefinition.priceStep`、`amountStep`、`minAmount`、`minNotional` 和 `normalizeOrderInput()` 处理输入。交易所拒单会包装成 `ORDER_CREATE_FAILED`。
 
-### 7.3 本地缓存与查询
+### 7.3 Symbol 手续费费率
+
+`getSymbolFeeRate()` 查询的是账号级交易费率，不是已发生成交手续费汇总。费率会受交易所账号等级、折扣和 symbol 规则影响，因此入口在 `OrderManager`，需要账号凭证：
+
+```ts
+const feeRate = await client.order.getSymbolFeeRate({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+console.log(feeRate.maker, feeRate.taker);
+```
+
+返回的 `maker` / `taker` 是费率小数，例如 `"0.0002"` 表示 0.02%。Binance 当前使用 PAPI UM `commissionRate` 接口；不支持的 venue 会抛 `VENUE_NOT_SUPPORTED`，接口失败会包装为 `ORDER_FEE_RATE_FETCH_FAILED`。
+
+### 7.4 本地缓存与查询
 
 - OrderManager 内部按 open / closed 分层缓存订单。**closed（filled / canceled / rejected / expired / unknown）订单按 symbol 各保留最近 N 个**，`N = CreateClientOptions.order.maxClosedOrdersPerSymbol`（默认 500，非正或非整数回退默认），超限按 FIFO 裁剪最旧；**open 订单不受此上限限制**。`getOpenOrders()` 查询复杂度与历史终态订单数量无关。
 - `getOrder(input)` 需带 `orderId` 或 `clientOrderId`（否则返回 `undefined`），`symbol` 可选：
@@ -523,7 +540,7 @@ for await (const event of client.order.events.updates({
 }
 ```
 
-Binance 私有 WS 的逐笔成交、手续费与 realized PnL 通过独立 `order.trade` 事件消费，不挂在 `OrderSnapshot` 上：
+Binance 私有 WS 的逐笔成交、已发生手续费金额与 realized PnL 通过独立 `order.trade` 事件消费，不挂在 `OrderSnapshot` 上：
 
 ```ts
 for await (const event of client.order.events.trades({
@@ -535,7 +552,7 @@ for await (const event of client.order.events.trades({
 }
 ```
 
-`OrderTradeEvent.seq` 是该账户订单成交流的单调序号，可用于检测慢消费者 buffer 溢出造成的缺口；`orderSeq` 在同一交易所 update 成功推进订单快照时关联 `OrderSnapshot.seq`。REST 订单查询/命令回包不含逐笔手续费，不会发布 `order.trade`。
+`OrderTradeEvent.seq` 是该账户订单成交流的单调序号，可用于检测慢消费者 buffer 溢出造成的缺口；`orderSeq` 在同一交易所 update 成功推进订单快照时关联 `OrderSnapshot.seq`。REST 订单查询/命令回包不含逐笔手续费，不会发布 `order.trade`。如果需要“已发生手续费按 symbol 汇总”，下游应消费 `order.trade` 并按 `event.symbol` 聚合；`getSymbolFeeRate()` 只返回费率。
 
 Order 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；订单中间状态、逐笔成交和错误恢复信号默认按 buffer 语义保留顺序。慢消费者超过 buffer 上限时会丢弃最旧事件，并通过 `EVENT_BUFFER_OVERFLOW` runtime error 上报对应 stream（例如 `order.trades`）。
 
@@ -1061,6 +1078,11 @@ interface CancelAllOrdersInput {
   symbol: string;
 }
 
+interface GetSymbolFeeRateInput {
+  accountId: string;
+  symbol: string;
+}
+
 interface OrderSnapshot {
   accountId: string;
   venue: Venue;
@@ -1099,6 +1121,15 @@ interface OrderTrade {
   maker?: boolean;
   positionSide?: PositionSide;
   exchangeTs?: number;
+  receivedAt: number;
+}
+
+interface SymbolFeeRate {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  maker: string;
+  taker: string;
   receivedAt: number;
 }
 ```

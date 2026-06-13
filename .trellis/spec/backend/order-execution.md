@@ -519,6 +519,145 @@ this.publishOrderEvent(accountId, venue, snapshot);
 
 效果：快照仍保持单调不回退，逐笔成交作为事实流水独立发布；能写入快照时用 `orderSeq` 关联，不能写入时仍保留 trade。
 
+## Scenario: 账号级 symbol 手续费费率查询
+
+### 1. Scope / Trigger
+
+- Trigger: 新增或修改 `OrderManager.getSymbolFeeRate()`、adapter `fetchSymbolFeeRate()`、venue order fee capability、或 Binance PAPI UM commission rate 映射时。
+- 目标: 下游能按账号和 unified symbol 查询 maker / taker 交易费率，同时不把“费率查询”和“已发生手续费流水”混淆。
+
+### 2. Signatures
+
+```ts
+export interface GetSymbolFeeRateInput {
+  accountId: string;
+  symbol: string;
+}
+
+export interface SymbolFeeRate {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  maker: string;
+  taker: string;
+  receivedAt: number;
+}
+
+export interface OrderManager {
+  getSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<SymbolFeeRate>;
+}
+
+export interface PrivateUserDataAdapter {
+  fetchSymbolFeeRate?(
+    credentials: AccountCredentials,
+    request: { symbol: string },
+    accountOptions?: Record<string, unknown>,
+  ): Promise<{ symbol: string; maker: string; taker: string; receivedAt: number }>;
+}
+```
+
+`VenueOrderCapabilities.fees` 必须声明该 venue runtime 是否支持账号级 symbol fee rate 查询。
+
+### 3. Contracts
+
+- `getSymbolFeeRate()` 是账号级 private read API，必须先 `assertStarted()`、解析 `accountId`、校验私有凭证；它不是下单/撤单命令，不登记 pending claim，不更新订单缓存，不产生 order event。
+- Public input 使用 unified symbol（例如 `BTC/USDT:USDT`）；adapter 内部负责转换成 venue symbol（例如 Binance PAPI UM `BTCUSDT`）。
+- Public output 的 `maker` / `taker` 必须是 canonical decimal string；`receivedAt` 是 SDK 本地收到 REST 响应附近的墙钟时间，必须在 adapter 的 `signedRequest()` resolve 之后采集，不能在 symbol mapping 或 REST 请求前预采样。
+- Binance 第一版落点固定为 `GET /papi/v1/um/commissionRate`，query 包含 `symbol`、`timestamp`、`recvWindow`、`signature`，返回 `makerCommissionRate` / `takerCommissionRate`。
+- Binance commission rate 权重是 20，必须有独立 `BINANCE_RATE_LIMIT_PLANS.papiCommissionRate`，不能复用 query order / open orders plan。
+- 已发生手续费金额仍通过 `events.order.trades()` 的 `OrderTrade.fee` 消费；如果下游要按 symbol 汇总已发生手续费，应该 fold `order.trade`，不要从 `getSymbolFeeRate()` 推导。
+
+### 4. Validation & Error Matrix
+
+| 场景 | 约定 |
+|---|---|
+| client 未 started | 抛 `CLIENT_NOT_STARTED` |
+| `accountId` 未注册 | 抛 `ACCOUNT_NOT_FOUND` |
+| 私有凭证缺失 | 抛 `CREDENTIALS_MISSING` |
+| venue `fees` unsupported 或 adapter 未实现 `fetchSymbolFeeRate` | 抛 `VENUE_NOT_SUPPORTED`，message 指向 symbol fee rate queries |
+| Binance symbol mapping miss / catalog 预热失败 | 不发 REST，由 manager 包装为 `ORDER_FEE_RATE_FETCH_FAILED` |
+| Binance REST 4xx/5xx/timeout/network/parse | 由 `httpRequest` 抛脱敏 `TransportError`，manager 包装为 `ORDER_FEE_RATE_FETCH_FAILED`；不填写 `orderState` |
+| Binance 响应缺少 maker/taker rate | adapter 抛普通 `Error`，manager 包装为 `ORDER_FEE_RATE_FETCH_FAILED` |
+| 费率为 `"0.00020000"` | public 输出 canonical 化为 `"0.0002"` |
+
+### 5. Good / Base / Bad Cases
+
+#### Good
+
+```ts
+const feeRate = await client.order.getSymbolFeeRate({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+console.log(feeRate.maker, feeRate.taker);
+```
+
+#### Base
+
+`getVenueCapabilities("binance").order.fees === "supported"` 表示当前 SDK runtime 有 Binance PAPI UM 费率查询实现。`juplend` 等只读或未实现 venue 应返回 `"unsupported"`。
+
+#### Bad
+
+```ts
+const feeRate = client.market.getMarket("binance", symbol)?.feeRate;
+```
+
+问题：交易费率依赖账号等级、折扣和权限，不是 public market catalog metadata；把它挂在 market definition 会误导下游认为无需账号凭证。
+
+### 6. Tests Required
+
+```bash
+bun run lint
+bun run type-check
+bun run test
+```
+
+断言重点：
+
+- `tests/integration/order.test.ts` 覆盖 Binance 成功路径：请求 `GET /papi/v1/um/commissionRate`，query symbol 为 venue id，签名/timestamp/recvWindow 存在，返回 canonical maker/taker。
+- 成功路径必须断言 `receivedAt` 取自 commissionRate REST 响应返回后，避免把请求前时间误当成数据接收时间。
+- 覆盖 REST 失败包装：错误码 `ORDER_FEE_RATE_FETCH_FAILED`、`details.venue/accountId/symbol`、`details.venueError`、脱敏 `details.transport.url`，且不含 `details.orderState`。
+- 覆盖 unsupported venue：`VENUE_NOT_SUPPORTED` message 使用 symbol fee rate queries，而不是 private order commands。
+- `tests/integration/client-lifecycle.test.ts` 覆盖 venue capability `order.fees`。
+- `tests/unit/rate-limiter.test.ts` 覆盖 commissionRate semantic plan 和 20 weight。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+async getSymbolFeeRate(input) {
+  const order = await this.context.fetchOrder({ ...input });
+  return order.feeRate;
+}
+```
+
+问题：per-order 查询不返回账号费率；即使订单成交，返回的也是订单生命周期，不是 maker/taker fee schedule。
+
+#### Correct
+
+```ts
+async fetchSymbolFeeRate(credentials, request, options) {
+  const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+  const response = await this.signedRequest(
+    "GET",
+    "/papi/v1/um/commissionRate",
+    credentials,
+    options,
+    { symbol },
+    SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+  );
+  return {
+    symbol: request.symbol,
+    maker: response.makerCommissionRate,
+    taker: response.takerCommissionRate,
+    receivedAt: Date.now(),
+  };
+}
+```
+
+效果：交易所 symbol 和签名细节留在 adapter；manager 只负责 public error 包装和 decimal canonical 化。
+
 ## Scenario: OrderManager 本地订单存储分层、内部 localOrderId 身份与 closed 裁剪
 
 ### 1. Scope / Trigger

@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import type { RawOrderUpdate } from "../../src/adapters/types.ts";
+import type {
+  RawOrderUpdate,
+  RawSymbolFeeRate,
+} from "../../src/adapters/types.ts";
 import type {
   ClientContext,
   RegisteredAccountRecord,
@@ -12,6 +15,7 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  GetSymbolFeeRateInput,
   HealthEvent,
   Venue,
   VenueOrderCapabilities,
@@ -90,6 +94,10 @@ class StubOrderContext implements ClientContext {
   }
 
   cancelAllOrders(_input: CancelAllOrdersInput): Promise<RawOrderUpdate[]> {
+    throw new Error("not implemented");
+  }
+
+  fetchSymbolFeeRate(_input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate> {
     throw new Error("not implemented");
   }
 

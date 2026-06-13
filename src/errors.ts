@@ -19,6 +19,7 @@ export type AcexErrorCode =
   | "ORDER_CANCEL_ALL_FAILED"
   | "ORDER_CANCEL_FAILED"
   | "ORDER_CREATE_FAILED"
+  | "ORDER_FEE_RATE_FETCH_FAILED"
   | "ORDER_INPUT_INVALID";
 
 export type AcexErrorTransportKind =

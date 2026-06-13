@@ -1173,14 +1173,18 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       }
     };
 
+    /**
+     * Returns `true` when a replayed message had to be dropped because its
+     * symbol is still unmapped after the catalog refresh.
+     */
     const dispatchPrivateMessage = (
       message: BinancePrivateMessage,
       receivedAt: number,
       replaying: boolean,
-    ) => {
+    ): boolean => {
       if (isListenKeyExpiredMessage(message)) {
         recoverPrivateStream("listen_key_expired");
-        return;
+        return false;
       }
 
       if (isAccountUpdateMessage(message)) {
@@ -1195,16 +1199,16 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
           );
           if (replaying) {
             this.reportSymbolMappingMisses(venueIds);
-          } else {
-            quarantineSymbolMappingMiss(message, receivedAt, venueIds);
+            return true;
           }
-          return;
+          quarantineSymbolMappingMiss(message, receivedAt, venueIds);
+          return false;
         }
 
         callbacks.onAccountUpdate(
           mapAccountUpdate(this.marketCatalog, message, receivedAt),
         );
-        return;
+        return false;
       }
 
       const missingVenueId = missingOrderUpdateVenueId(
@@ -1214,10 +1218,10 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       if (missingVenueId) {
         if (replaying) {
           this.reportSymbolMappingMisses([missingVenueId]);
-        } else {
-          quarantineSymbolMappingMiss(message, receivedAt, [missingVenueId]);
+          return true;
         }
-        return;
+        quarantineSymbolMappingMiss(message, receivedAt, [missingVenueId]);
+        return false;
       }
 
       const orderUpdate = mapOrderUpdate(
@@ -1228,6 +1232,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       if (orderUpdate) {
         callbacks.onOrderUpdate(orderUpdate);
       }
+      return false;
     };
 
     const quarantinedVenueIds = () =>
@@ -1248,25 +1253,27 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       }
 
       const refreshResult = await this.refreshUsdmCatalogAfterMiss(venueIds);
-      if (closed) {
+      if (closed || refreshResult !== "refreshed") {
         return;
       }
 
-      if (refreshResult !== "refreshed") {
-        if (refreshResult === "failed") {
-          requestReconcileForSymbolMappingMiss();
-        }
-        return;
-      }
-
-      requestReconcileForSymbolMappingMiss();
+      // Per order-execution.md §3.3.1 the immediate reconcile compensates for
+      // dropped events only; a fully replayed quarantine must not flip the
+      // account/order runtime status.
       const replay = symbolMappingQuarantine.splice(0);
+      let droppedAfterReplay = false;
       for (const entry of replay) {
         if (closed) {
           return;
         }
 
-        dispatchPrivateMessage(entry.message, entry.receivedAt, true);
+        droppedAfterReplay =
+          dispatchPrivateMessage(entry.message, entry.receivedAt, true) ||
+          droppedAfterReplay;
+      }
+
+      if (droppedAfterReplay) {
+        requestReconcileForSymbolMappingMiss();
       }
     };
 

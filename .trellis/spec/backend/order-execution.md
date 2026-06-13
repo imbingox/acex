@@ -97,7 +97,9 @@ DELETE /papi/v1/um/allOpenOrders
 - 命令侧 catalog 预热失败同样属于 pre-flight：不得发 REST 下单 / 撤单请求，不得写入订单缓存；错误按命令失败包装，但 `orderState` 仍为 `"not_placed"`，pending claim 必须清理。
 - 入站 `toUnified` miss（WS raw 帧 / REST openOrders / fetchOrder / account position）不得把 venue raw symbol 写入主状态。订单存储按 unified `symbol` 建 location key，写 raw id 会分裂 openOrders、pending claim 与 reconcile 身份。
 - WS raw 帧的 order / position miss 必须进入有界 raw quarantine，然后触发 catalog refresh（按 family single-flight）。refresh 成功后 replay 原始帧；order replay 必须保留原始 `trade` / `fee` / `realizedPnl` 字段，不能降级为 REST 回查结果。
-- WS replay 后仍 miss 时才 drop，并发布去重 runtime error（按 venue/family/raw symbol/reason 去重）。drop 同时触发一次 immediate private reconcile，用 REST account/open orders 把可恢复状态收敛回来；但该 reconcile 不能替代 replay，因为 REST `fetchOrder` 补不回逐笔成交、手续费和 realized PnL。
+- WS replay 后仍 miss 时才 drop，并发布去重 runtime error（按 venue/family/raw symbol/reason 去重）。drop 同时触发一次 immediate private reconcile，用 REST account/open orders 把可恢复状态收敛回来；但该 reconcile 不能替代 replay，因为 REST `fetchOrder` 补不回逐笔成交、手续费和 realized PnL。反向约束：replay 全部成功（无 drop）时**不得**触发该 reconcile，也不得把 account/order runtimeStatus 翻成 pending——新上币的正常事件流不应产生状态闪断。
+- miss-refresh cooldown 只约束"refresh 成功但 symbol 仍不存在"的重复刷新；catalog refresh 本身失败（网络 / 5xx）不得消耗整个 cooldown，必须按更短的 failure backoff 重试（默认 `min(cooldown, 5s)`），否则一次瞬时 exchangeInfo 故障会把被隔离的成交 replay 拖满 30s。
+- symbol-miss runtime error 的去重 key 在该 symbol 重新可映射（出现在新 catalog 快照中）后必须重置：之后再次 miss 要重新上报，不允许进程级永久抑制。
 - REST 路径（bootstrap / refresh / reconcileAccount / openOrders / fetchOrder）已持有响应数据，不进入 raw quarantine；catalog refresh 后必须对同一响应 inline 重映射，仍 miss 才 drop 该条记录并 report runtime error，且不得写入 raw symbol。
 
 #### 3.4 精度与最小名义金额

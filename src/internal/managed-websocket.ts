@@ -269,6 +269,17 @@ export function createManagedWebSocket<TMessage>(
         return;
       }
 
+      // Lazy idle check: inbound activity only updates the timestamp, so the
+      // timer re-sleeps for the remaining idle window instead of being
+      // rescheduled on every message.
+      if (
+        heartbeatMode === "idle-timeout" &&
+        now() - lastHeartbeatActivityAt < heartbeat.intervalMs
+      ) {
+        scheduleHeartbeat(socket);
+        return;
+      }
+
       sendHeartbeat(socket);
     }, delay);
   };
@@ -279,9 +290,6 @@ export function createManagedWebSocket<TMessage>(
     }
 
     lastHeartbeatActivityAt = activityAt;
-    if (heartbeatMode === "idle-timeout") {
-      scheduleHeartbeat(socket);
-    }
   };
 
   const noteConnectionActivity = (

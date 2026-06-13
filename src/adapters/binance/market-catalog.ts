@@ -81,6 +81,7 @@ const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 const BINANCE_MARKET_FAMILIES = ["spot", "usdm", "coinm"] as const;
 const MAX_DELIVERY_TOMBSTONES_PER_FAMILY = 512;
 const DEFAULT_MISS_REFRESH_COOLDOWN_MS = 30_000;
+const DEFAULT_MISS_REFRESH_FAILURE_RETRY_MS = 5_000;
 const BINANCE_CATALOG_HTTP_MESSAGES: HttpClientMessages = {
   http: ({ status, statusText }) =>
     `Binance request failed: ${status} ${statusText ?? ""}`,
@@ -381,6 +382,7 @@ export class BinanceMarketCatalog {
     | BinanceCatalogRuntimeErrorPublisher
     | undefined;
   private readonly missRefreshCooldownMs: number;
+  private readonly missRefreshFailureRetryMs: number;
   private readonly now: () => number;
   private readonly definitionsByFamily = new Map<
     BinanceMarketFamily,
@@ -415,6 +417,7 @@ export class BinanceMarketCatalog {
       readonly rateLimiter?: RateLimiter;
       readonly publishRuntimeError?: BinanceCatalogRuntimeErrorPublisher;
       readonly missRefreshCooldownMs?: number;
+      readonly missRefreshFailureRetryMs?: number;
       readonly now?: () => number;
     } = {},
   ) {
@@ -423,6 +426,10 @@ export class BinanceMarketCatalog {
     this.publishRuntimeError = options.publishRuntimeError;
     this.missRefreshCooldownMs = normalizeCooldownMs(
       options.missRefreshCooldownMs,
+    );
+    this.missRefreshFailureRetryMs = normalizeFailureRetryMs(
+      options.missRefreshFailureRetryMs,
+      this.missRefreshCooldownMs,
     );
     this.now = options.now ?? Date.now;
   }
@@ -448,7 +455,23 @@ export class BinanceMarketCatalog {
       return "cooldown";
     }
 
-    await this.refreshFamily(family);
+    try {
+      await this.refreshFamily(family);
+    } catch (error) {
+      // A failed refresh must not consume the full miss cooldown: restamp the
+      // claimed symbols with the shorter failure retry window so transient
+      // exchangeInfo errors do not delay quarantined replays by a whole
+      // cooldown period.
+      const retryAt = this.now() + this.missRefreshFailureRetryMs;
+      for (const symbol of claimed) {
+        this.missRefreshNextAllowedAt.set(
+          missRefreshKey(family, symbol),
+          retryAt,
+        );
+      }
+      throw error;
+    }
+
     return "refreshed";
   }
 
@@ -604,6 +627,30 @@ export class BinanceMarketCatalog {
     this.definitionsByFamily.set(family, nextByVenueId);
     this.venueIdByUnifiedByFamily.set(family, nextVenueIdByUnified);
     this.dropLiveTombstones(family, nextByVenueId);
+    this.clearResolvedRuntimeErrorKeys(family, nextByVenueId);
+  }
+
+  /**
+   * Re-arm once-only runtime errors that the freshly installed snapshot
+   * resolves, so a symbol that misses again after being mapped (or a later
+   * catalog-load outage) is reported instead of being suppressed for the
+   * process lifetime.
+   */
+  private clearResolvedRuntimeErrorKeys(
+    family: BinanceMarketFamily,
+    nextByVenueId: Map<string, BinanceMarketDefinition>,
+  ): void {
+    this.reportedRuntimeErrorKeys.delete(`catalog-load:${family}`);
+
+    const prefix = `symbol-mapping:${family}:`;
+    for (const key of this.reportedRuntimeErrorKeys) {
+      if (
+        key.startsWith(prefix) &&
+        nextByVenueId.has(key.slice(prefix.length))
+      ) {
+        this.reportedRuntimeErrorKeys.delete(key);
+      }
+    }
   }
 
   private retainRemovedDeliveryDefinitions(
@@ -731,6 +778,17 @@ function normalizeCooldownMs(value: number | undefined): number {
   return value !== undefined && Number.isFinite(value) && value >= 0
     ? value
     : DEFAULT_MISS_REFRESH_COOLDOWN_MS;
+}
+
+function normalizeFailureRetryMs(
+  value: number | undefined,
+  cooldownMs: number,
+): number {
+  if (value !== undefined && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+
+  return Math.min(cooldownMs, DEFAULT_MISS_REFRESH_FAILURE_RETRY_MS);
 }
 
 function missRefreshKey(family: BinanceMarketFamily, symbol: string): string {

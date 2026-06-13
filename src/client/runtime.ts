@@ -42,6 +42,7 @@ import type {
   CreateOrderInput,
   HealthEvent,
   HealthEventFilter,
+  JuplendAccountRuntimeOptions,
   MarketManager,
   OrderManager,
   RateLimiter,
@@ -74,9 +75,9 @@ interface VenueAdapterLifecycle {
   stop(): void;
 }
 
-type AccountVenueRuntimeOptions = NonNullable<
+type AccountVenueRuntimeOptionsMap = NonNullable<
   AccountRuntimeOptions["venues"]
->[keyof NonNullable<AccountRuntimeOptions["venues"]>];
+>;
 
 interface VenueAdapterFactoryDeps {
   readonly rateLimiter: RateLimiter;
@@ -86,7 +87,6 @@ interface VenueAdapterFactoryDeps {
     error: Error,
     metadata?: Omit<AcexInternalError, "error" | "source" | "ts">,
   ) => void;
-  readonly venueOptions?: AccountVenueRuntimeOptions;
 }
 
 interface VenueAdapterFactoryResult {
@@ -95,15 +95,19 @@ interface VenueAdapterFactoryResult {
   readonly lifecycle?: VenueAdapterLifecycle;
 }
 
-type VenueAdapterFactory = (
+// Per-venue factories receive their own statically typed options slice, so a
+// renamed venue option fails type-check here instead of silently reading a
+// dead key at runtime. Adding a venue = one factory + one entry in
+// createVenueAdapterGroups.
+function createVenueAdapterGroups(
   deps: VenueAdapterFactoryDeps,
-) => VenueAdapterFactoryResult;
-
-const VENUE_ADAPTER_FACTORIES: ReadonlyMap<Venue, VenueAdapterFactory> =
-  new Map([
-    ["binance", createBinanceAdapterGroup],
-    ["juplend", createJuplendAdapterGroup],
-  ]);
+  venueOptions: AccountVenueRuntimeOptionsMap | undefined,
+): VenueAdapterFactoryResult[] {
+  return [
+    createBinanceAdapterGroup(deps),
+    createJuplendAdapterGroup(deps, venueOptions?.juplend),
+  ];
+}
 
 function toError(value: unknown, fallback: string): Error {
   if (value instanceof Error) {
@@ -111,38 +115,6 @@ function toError(value: unknown, fallback: string): Error {
   }
 
   return new Error(fallback, { cause: value });
-}
-
-function getStringOption(
-  options: AccountVenueRuntimeOptions | undefined,
-  key: string,
-): string | undefined {
-  const value = options ? (options as Record<string, unknown>)[key] : undefined;
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function getNumberOption(
-  options: AccountVenueRuntimeOptions | undefined,
-  key: string,
-): number | undefined {
-  const value = options ? (options as Record<string, unknown>)[key] : undefined;
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function getAccountVenueOptions(
-  options: AccountRuntimeOptions | undefined,
-  venue: Venue,
-): AccountVenueRuntimeOptions | undefined {
-  switch (venue) {
-    case "binance":
-      return options?.venues?.binance;
-    case "juplend":
-      return options?.venues?.juplend;
-    default:
-      return undefined;
-  }
 }
 
 function createBinanceAdapterGroup(
@@ -198,14 +170,15 @@ function createBinanceAdapterGroup(
 }
 
 function createJuplendAdapterGroup(
-  deps: VenueAdapterFactoryDeps,
+  _deps: VenueAdapterFactoryDeps,
+  venueOptions: JuplendAccountRuntimeOptions | undefined,
 ): VenueAdapterFactoryResult {
   return {
     privateAdapter: new JuplendPrivateAdapter(
-      getStringOption(deps.venueOptions, "rpcUrl"),
-      getStringOption(deps.venueOptions, "jupApiKey"),
+      venueOptions?.rpcUrl,
+      venueOptions?.jupApiKey,
       {
-        pollIntervalMs: getNumberOption(deps.venueOptions, "pollIntervalMs"),
+        pollIntervalMs: venueOptions?.pollIntervalMs,
       },
     ),
   };
@@ -281,14 +254,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       new ReactiveRateLimiter({
         utilizationTarget: options.rateLimit?.utilizationTarget,
       });
-    const adapterGroups = [...VENUE_ADAPTER_FACTORIES.entries()].map(
-      ([venue, factory]) =>
-        factory({
-          rateLimiter,
-          signingClock: options.clock,
-          publishRuntimeError: this.publishRuntimeError.bind(this),
-          venueOptions: getAccountVenueOptions(options.account, venue),
-        }),
+    const adapterGroups = createVenueAdapterGroups(
+      {
+        rateLimiter,
+        signingClock: options.clock,
+        publishRuntimeError: this.publishRuntimeError.bind(this),
+      },
+      options.account?.venues,
     );
     this.adapterLifecycles = adapterGroups.flatMap((group) =>
       group.lifecycle ? [group.lifecycle] : [],

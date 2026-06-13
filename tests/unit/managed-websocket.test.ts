@@ -323,3 +323,57 @@ test("managed websocket pong does not satisfy readyWhen message initial timeout"
   expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
   expect(clock.timerCount).toBe(0);
 });
+
+test("managed websocket idle heartbeat does not reschedule timers per inbound message", async () => {
+  const clock = new FakeClock();
+  let setTimerCalls = 0;
+  const countingSetTimer: typeof clock.setTimer = (
+    handler,
+    timeout,
+    ...args
+  ) => {
+    setTimerCalls += 1;
+    return clock.setTimer(handler, timeout, ...args);
+  };
+  const socket = new FakeWebSocket("wss://example.test/ws");
+  const session = createManagedWebSocket<{ value?: string }>({
+    url: socket.url,
+    initialMessageTimeoutMs: 1_000,
+    parseMessage(data) {
+      return JSON.parse(data) as { value?: string };
+    },
+    onMessage() {},
+    onUnexpectedClose() {},
+    createWebSocket() {
+      return socket as unknown as WebSocket;
+    },
+    heartbeat: {
+      intervalMs: 100,
+      mode: "idle-timeout",
+      frame: () => "ping",
+      isPong: (raw) => raw === "pong",
+    },
+    now: clock.now,
+    setTimer: countingSetTimer as unknown as typeof setTimeout,
+    clearTimer: clock.clearTimer as unknown as typeof clearTimeout,
+  });
+
+  socket.emitJson({ value: "ready" });
+  await session.ready;
+
+  const baseline = setTimerCalls;
+  for (let i = 0; i < 100; i += 1) {
+    clock.advance(1);
+    socket.emitJson({ value: `tick-${i}` });
+  }
+
+  // Sustained inbound traffic only stamps the activity time; the idle timer
+  // re-sleeps lazily instead of being cleared and recreated per message.
+  expect(setTimerCalls - baseline).toBeLessThanOrEqual(2);
+  expect(socket.sentFrames).toHaveLength(0);
+
+  clock.advance(100);
+  expect(socket.sentFrames).toEqual(["ping"]);
+
+  session.close();
+});

@@ -304,7 +304,7 @@ test("BinancePrivateAdapter waits for catalog before creating the private WebSoc
   handle.close();
 });
 
-test("BinancePrivateAdapter quarantines symbol misses, refreshes catalog, and replays raw order updates", async () => {
+test("BinancePrivateAdapter quarantines symbol misses, refreshes catalog, and replays raw order updates without reconcile churn", async () => {
   FakeWebSocket.reset();
   Object.defineProperty(globalThis, "WebSocket", {
     configurable: true,
@@ -366,7 +366,7 @@ test("BinancePrivateAdapter quarantines symbol misses, refreshes catalog, and re
   expect(updates).toHaveLength(0);
 
   await waitForCondition(() => updates.length === 1);
-  expect(reconcileRequests).toBe(1);
+  expect(reconcileRequests).toBe(0);
   expect(catalogRequests).toBe(2);
   expect(updates[0]).toMatchObject({
     symbol: "NEW/USDT:USDT",

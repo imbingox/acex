@@ -258,3 +258,74 @@ test("BinanceMarketCatalog throws typed SymbolMappingError for command-side miss
     SymbolMappingError,
   );
 });
+
+test("BinanceMarketCatalog failed miss refresh retries after the failure window instead of the full cooldown", async () => {
+  let nowMs = 0;
+  let failRefresh = false;
+  const catalog = new BinanceMarketCatalog({
+    now: () => nowMs,
+    missRefreshCooldownMs: 30_000,
+    fetchFn: fetchForFamilies([], {
+      usdm: async () => {
+        if (failRefresh) {
+          return textResponse("binance down", {
+            status: 503,
+            statusText: "Service Unavailable",
+          });
+        }
+
+        return jsonResponse(usdmExchangeInfo());
+      },
+    }),
+  });
+
+  await catalog.ensureLoaded("usdm");
+
+  failRefresh = true;
+  await expect(
+    catalog.refreshFamilyAfterMiss("usdm", ["NEWUSDT"]),
+  ).rejects.toThrow();
+
+  // Failure backoff defaults to min(cooldown, 5s) rather than the 30s cooldown.
+  expect(catalog.getMissRefreshDelayMs("usdm", ["NEWUSDT"])).toBe(5_000);
+
+  nowMs = 4_999;
+  await expect(
+    catalog.refreshFamilyAfterMiss("usdm", ["NEWUSDT"]),
+  ).resolves.toBe("cooldown");
+
+  nowMs = 5_000;
+  failRefresh = false;
+  await expect(
+    catalog.refreshFamilyAfterMiss("usdm", ["NEWUSDT"]),
+  ).resolves.toBe("refreshed");
+});
+
+test("BinanceMarketCatalog re-arms symbol miss reporting after the symbol becomes mapped", async () => {
+  const runtimeErrors: Error[] = [];
+  let includeNew = false;
+  const catalog = new BinanceMarketCatalog({
+    publishRuntimeError: (_source, error) => {
+      runtimeErrors.push(error);
+    },
+    fetchFn: fetchForFamilies([], {
+      usdm: async () =>
+        jsonResponse(
+          usdmExchangeInfo(true, includeNew ? [newUsdmExtraSymbol()] : []),
+        ),
+    }),
+  });
+
+  await catalog.ensureLoaded("usdm");
+  catalog.reportSymbolMappingMiss("usdm", "ETHUSDT");
+  catalog.reportSymbolMappingMiss("usdm", "ETHUSDT");
+  expect(runtimeErrors).toHaveLength(1);
+
+  includeNew = true;
+  await catalog.refreshFamily("usdm");
+  includeNew = false;
+  await catalog.refreshFamily("usdm");
+
+  catalog.reportSymbolMappingMiss("usdm", "ETHUSDT");
+  expect(runtimeErrors).toHaveLength(2);
+});

@@ -1507,3 +1507,36 @@ P2 批①：事件总线并发 next 改 FIFO + resumeStreams 并发恢复、cid 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 43: PR #83 review 修复：cid entropy Set 内存泄漏
+
+**Date**: 2026-06-13
+**Task**: PR #83 review 修复：cid entropy Set 内存泄漏
+**Branch**: `codex/p2-batch1-engineering-cleanup`
+
+### Summary
+
+修复 PR #83 review finding：src/managers/order/identity.ts 的模块级 sdkClientOrderIdEntropies Set + sdkClientOrderIdEntropyFallback 造成无界内存泄漏（每个 OrderManager 实例 add 一条、永不释放，累积到 36^4 上限）。createSdkClientOrderIdEntropy 简化为纯 crypto 随机（return randomBase36Entropy），纯删 20 行，cid 格式不变；进程内 entropy 碰撞概率退化为 1/167万、与跨进程一致可忽略，已记为 trade-off。codex 实现 + 主 session 独立 verify+gate（311 pass）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b620eb8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

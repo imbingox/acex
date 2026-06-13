@@ -75,11 +75,14 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
   await client.market.loadMarkets();
 
   expect(client.market.listMarkets().map((market) => market.symbol)).toEqual([
+    "1000SHIB/USDT:USDT",
     "AAPL/USDT:USDT",
     "BTC/USD:BTC",
     "BTC/USD:BTC-20250627",
+    "BTC/USDC:USDC",
     "BTC/USDT",
     "BTC/USDT:USDT",
+    "BTC/USDT:USDT-20250627",
     "ETH/USDT",
     "ETH/USDT:USDT",
   ]);

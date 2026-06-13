@@ -26,7 +26,7 @@
 | ⑤ 时钟自动同步 | B4 | 独立任务；消费批次①的 `timestamp_out_of_sync` 归一码作为 -1021 重校触发信号 | 代码完成 → .trellis/tasks/06-12-p1-b4-clock-resync |
 | ⑥ 成交明细字段 | B5 | 公开类型扩展，独立 minor changeset | 代码完成 → .trellis/tasks/06-12-p1-b5-fee-realized-pnl |
 | ⑦ 流层打磨 | B6 + B7 + B8 | 三个小项打包成一个任务（B8 仅做 jitter，冗余热备拆后续） | 代码完成 → .trellis/tasks/archive/2026-06/06-12-p1-b6-b7-b8-stream-layer-polish（PR #79；B8 双连接冗余热备待后续任务） |
-| ⑧ 多交易所开放点 | C1 + C2 + C3 + C4 | SPI/配置抽象；C3 有正确性成分（交割合约映射已错），如有需要可提前单独做 | |
+| ⑧ 多交易所开放点 | C1 + C2 + C3 + C4 | SPI/配置抽象；C3 有正确性成分（交割合约映射已错） | C2/C3/C4 代码完成 → .trellis/tasks/archive/2026-06/06-12-venue-extensibility-foundation-p1-c2-c3-c4（PR #81）；C1 仅内部 venue registry 已做，公开第三方 SPI 按 YAGNI 待真实需求 |
 
 ---
 
@@ -170,26 +170,30 @@
 - **问题**：SPI（`src/adapters/types.ts`）本身是交易所无关的，但 `CreateClientOptions` 没有注册自定义 adapter 的入口——新交易所/第三方只能改 SDK 源码。"多交易所 SDK"的核心承诺没有开放点。
 - **修复方案**：`createClient({ adapters: { market?: MarketAdapter[], private?: PrivateUserDataAdapter[] } })` 注入口 + SPI 类型从入口导出并标注稳定性（experimental）。需要 minor changeset。
 - **验证方式**：集成测试注册一个 fake venue adapter 走通 market + order 全链路。
+- **状态**：仅"内部 venue→工厂 registry"部分实现（→ 批⑧ 同任务，PR #81）：runtime 构造改 venue 工厂映射、Binance 工厂注入共享 catalog + 时钟生命周期、工厂收静态类型 per-venue options。**公开第三方 adapter 注入（`createClient({ adapters })`）+ SPI 导出按 YAGNI 未做、待真实需求**（评审判定：典型下游用内置 venue，第三方注入小众，导出 SPI 有 semver 成本）。
 
-### - [ ] P1-C2 venue 专属配置泄漏进通用协调器
+### - [x] P1-C2 venue 专属配置泄漏进通用协调器
 
 - **位置**：`src/client/private-subscription-coordinator.ts:119-127`（`binanceRiskPollIntervalMs`/`binancePrivateReconcileIntervalMs` 被用作所有 venue 的调度参数）
 - **修复方案**：配置改为 per-venue 命名空间（`account: { [venue]: { riskPollIntervalMs, privateReconcileIntervalMs } }` 已有雏形），协调器按 record.venue 取值；旧字段保留兼容期。
 - **验证方式**：单测两 venue 不同 interval 互不影响。
+- **状态**：代码已完成（→ 批⑧ 同任务，PR #81）：删旧 `account.binance`/`account.juplend`/顶层 `listenKeyKeepAliveMs`，统一进 `account.venues.{binance,juplend}`（异构 per-venue，breaking minor，不留兼容别名）；协调器按 `record.venue` 取构造期快照，**Juplend 不继承 CEX reconcile/riskPoll 默认**；`privateReconcileIntervalMs:0` 关周期 reconcile。grep-gate 全仓迁移（含 docs/scripts/tests/spec，CHANGELOG 历史除外）。
 
-### - [ ] P1-C3 私有链路 symbol 归一化是字符串后缀 hack
+### - [x] P1-C3 私有链路 symbol 归一化是字符串后缀 hack
 
 - **位置**：`src/adapters/binance/private-adapter.ts:227`（`normalizeUmSymbol` 硬编码 quote 列表 endsWith 切割）vs `src/adapters/binance/market-catalog.ts:143`（exchangeInfo base/quote 正路）
 - **问题**：两套归一化平行存在；交割合约（`BTCUSDT_250627`）私有链路产物与 catalog（`BTC/USDT:USDT-20250627`）已不一致。
 - **修复方案**：私有适配器持有/查询 market catalog 的 venueId→unified 映射（注入或懒加载），删除后缀推断。
 - **验证方式**：单测覆盖交割合约、`1000SHIBUSDT`、多 quote 资产符号双向映射。
+- **状态**：代码已完成（→ 批⑧ 同任务，PR #81）：抽出共享 family-scoped `BinanceMarketCatalog`（single-flight 加载 / 原子 swap / delivery tombstone / miss-refresh cooldown+失败短 backoff）注入 market+private 两 adapter；私有 UM 归一改查 catalog、删后缀 hack，修交割合约错配（`BTCUSDT_250627`→`BTC/USDT:USDT-20250627`，family-scoped 防 spot/usdm 同名串）。miss 安全：命令 `toVenueId` miss→refresh+retry→`SymbolMappingError`/catalog 预热失败 preflight→`orderState:not_placed`+清 pending claim；入站 WS 帧 miss→有界 quarantine→refresh→replay（**不丢逐笔成交**），仅 replay 仍 drop 时触发一次 immediate reconcile；REST 路径 refresh 后 inline 重映射。只实现 UM，catalog 查找 family-scoped 为 spot/CM 留扩展。
 
-### - [ ] P1-C4 流协议层无客户端心跳钩子
+### - [x] P1-C4 流协议层无客户端心跳钩子
 
 - **位置**：`src/internal/subscription-multiplexer.ts:24`（`VenueStreamProtocol` 接口）
 - **问题**：OKX/Bybit 要求客户端主动 ping（文本帧），当前协议接口没有位置，接入时必须改 multiplexer。
 - **修复方案**：协议接口增加可选 `heartbeat?: { intervalMs, frame(): string, isPong(msg): boolean }`，multiplexer 通用调度。
 - **验证方式**：fake 协议单测：按 interval 发 ping、pong 计入活性。
+- **状态**：代码已完成（→ 批⑧ 同任务，PR #81）：`VenueStreamProtocol` 加可选 `heartbeat`（`intervalMs/mode(idle|fixed)/pongTimeoutMs/frame()/isPong(raw)/countAnyInboundAsActivity`，形状依 OKX/Bybit/Gate 协议调研——OKX 文本 ping idle<30s、Bybit JSON 固定 20s 且 linear pong 的 op 仍是 ping、Gate-futures 靠协议层 pong）。实现落 `managed-websocket`：raw `isPong` 先于 parse 消费、idle/fixed 调度、pong 超时复用 raw `socket.close()`→既有 reconnect+replay、timer 生命周期（close/重连清理、不重复 ping、pong 不清 initial timeout）。协议层 ping/pong 交 Bun WebSocket，未建模 `transportPingPong`。Binance 未配 heartbeat→零行为变化。
 
 ### - [x] P1-C5 venue 错误码不归一
 

@@ -1,0 +1,9 @@
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "C1 内部 adapter registry 落点（runtime 编排器已含 adapter registry 职责）、共享 catalog 放 internal vs adapter 的层级边界"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "C3 symbol 归一化来源契约、C4 心跳/StreamHandle 语义、C1 TimeProvider 注入与 RateLimiter seam"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "C3 PAPI UM 命令契约、miss/trade 语义、订单状态写入约束（store 按 symbol 建 key）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "C3 SymbolMappingError 归类、AcexError contract、adapter→runtime 错误包装与 publishRuntimeError 通道、脱敏"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "C2 新公开类型（account.venues 异构 per-venue）放置、显式返回类型、避免宽化/循环引用"}
+{"file": ".trellis/spec/backend/venue-lending.md", "reason": "C2 juplend 配置（rpcUrl/jupApiKey/pollIntervalMs）迁移 + polling adapter 语义（不吃 CEX reconcile/riskPoll 默认）"}
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "C2 周期 reconcile/riskPoll 调度按 venue capability/options 存在性 gate 的语义"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "本任务 1 个 minor changeset 的约定（pre/beta 模式）"}
+{"file": ".trellis/tasks/06-12-venue-extensibility-foundation-p1-c2-c3-c4/research/venue-heartbeat-protocols.md", "reason": "C4 心跳钩子形状依据（OKX/Bybit/Gate 协议、pong 形态、idle/fixed mode、协议层 pong 交 ws 库）"}

@@ -21,7 +21,17 @@ export interface MultiplexedStreamCallbacks<TPayload> {
   onError(error: Error): void;
 }
 
+export interface VenueHeartbeat {
+  intervalMs: number;
+  mode?: "fixed-interval" | "idle-timeout";
+  pongTimeoutMs?: number;
+  frame(): string;
+  isPong(raw: string): boolean;
+  countAnyInboundAsActivity?: boolean;
+}
+
 export interface VenueStreamProtocol<TMessage, TDescriptor, TPayload> {
+  heartbeat?: VenueHeartbeat;
   subscriptionKey(descriptor: TDescriptor): string;
   connectionKey(descriptor: TDescriptor): string;
   connectionUrl(connectionKey: string): string;
@@ -295,6 +305,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
         maxDelayMs: this.options.reconnectMaxDelayMs,
         reconnectWithoutMessages: true,
       },
+      heartbeat: this.protocol.heartbeat,
       now: this.now,
       createWebSocket: this.createWebSocket,
       setTimer: this.setTimer,

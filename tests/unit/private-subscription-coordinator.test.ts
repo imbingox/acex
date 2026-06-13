@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import type {
   FetchOrderRequest,
+  PrivateStreamCallbacks,
+  PrivateStreamOptions,
   PrivateUserDataAdapter,
   RawAccountBootstrap,
   RawAccountUpdate,
@@ -21,6 +23,7 @@ import { AcexError, type VenueErrorReason } from "../../src/errors.ts";
 import { TransportError } from "../../src/internal/http-client.ts";
 import type {
   AccountCredentials,
+  AccountRuntimeOptions,
   AcexInternalError,
   CancelAllOrdersInput,
   CancelOrderInput,
@@ -31,6 +34,12 @@ import type {
   VenueAccountCapabilities,
   VenueOrderCapabilities,
 } from "../../src/types/index.ts";
+
+function binanceRuntimeOptions(
+  binance: NonNullable<AccountRuntimeOptions["venues"]>["binance"],
+): AccountRuntimeOptions {
+  return { venues: { binance } };
+}
 
 class StubContext implements ClientContext {
   account: RegisteredAccountRecord | undefined = {
@@ -116,12 +125,16 @@ class StubContext implements ClientContext {
 }
 
 class StubAccountConsumer implements PrivateAccountDataConsumer {
+  pendingCalls = 0;
   updates: RawAccountUpdate[] = [];
+  reconcilePreserveStatus: Array<boolean | undefined> = [];
   states: PrivateSubscriptionState[] = [];
 
   constructor(private readonly trace?: string[]) {}
 
-  onPrivateAccountPending(_accountId: string, _venue: Venue): void {}
+  onPrivateAccountPending(_accountId: string, _venue: Venue): void {
+    this.pendingCalls += 1;
+  }
 
   onPrivateAccountBootstrap(
     _accountId: string,
@@ -144,8 +157,10 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
     _accountId: string,
     _venue: Venue,
     bootstrap: RawAccountBootstrap,
+    options: { preserveStatus?: boolean },
   ): void {
     this.trace?.push("account-reconcile");
+    this.reconcilePreserveStatus.push(options.preserveStatus);
     this.updates.push({
       balances: bootstrap.balances,
       positions: bootstrap.positions,
@@ -165,7 +180,9 @@ class StubAccountConsumer implements PrivateAccountDataConsumer {
 }
 
 class StubOrderConsumer implements PrivateOrderDataConsumer {
+  pendingCalls = 0;
   reconciles = 0;
+  reconcilePreserveStatus: Array<boolean | undefined> = [];
   updates: RawOrderUpdate[] = [];
   states: PrivateSubscriptionState[] = [];
   expiredClaimRequests = 0;
@@ -176,15 +193,23 @@ class StubOrderConsumer implements PrivateOrderDataConsumer {
     private readonly expiredClaims: ExpiredPendingOrderClaim[] = [],
   ) {}
 
-  onPrivateOrderPending(): void {}
+  onPrivateOrderPending(): void {
+    this.pendingCalls += 1;
+  }
 
   onPrivateOrderBootstrap(): OrderSnapshot[] {
     this.reconciles += 1;
     return this.disappeared;
   }
 
-  onPrivateOrderReconcile(): OrderSnapshot[] {
+  onPrivateOrderReconcile(
+    _accountId: string,
+    _venue: Venue,
+    _snapshot: RawOpenOrdersSnapshot,
+    options: { preserveStatus?: boolean },
+  ): OrderSnapshot[] {
     this.reconciles += 1;
+    this.reconcilePreserveStatus.push(options.preserveStatus);
     return this.disappeared;
   }
 
@@ -259,6 +284,7 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
   bootstrapCalls = 0;
   createStreamCalls = 0;
   closeCalls = 0;
+  lastStreamOptions: PrivateStreamOptions | undefined;
   bootstrapAccountError: unknown;
 
   constructor(private readonly trace?: string[]) {}
@@ -351,8 +377,13 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     throw new Error("not implemented");
   }
 
-  createPrivateStream(): StreamHandle {
+  createPrivateStream(
+    _credentials?: AccountCredentials,
+    _callbacks?: PrivateStreamCallbacks,
+    options?: PrivateStreamOptions,
+  ): StreamHandle {
     this.createStreamCalls += 1;
+    this.lastStreamOptions = options;
     this.trace?.push("stream-create");
     return {
       ready: Promise.resolve().then(() => {
@@ -474,6 +505,46 @@ class SlowOpenOrdersBinanceAdapter extends StubBinanceAdapter {
   }
 }
 
+class ManualReconcileBinanceAdapter extends StubBinanceAdapter {
+  callbacks: PrivateStreamCallbacks | undefined;
+  blockOpenOrders = false;
+  fetchOpenOrdersStartedResolvers: Array<() => void> = [];
+  releaseOpenOrders: Array<() => void> = [];
+
+  override fetchOpenOrders(): Promise<RawOpenOrdersSnapshot> {
+    this.fetchOpenOrdersCalls += 1;
+    if (!this.blockOpenOrders) {
+      return Promise.resolve({
+        orders: [],
+        snapshotReceivedAt: Date.now(),
+      });
+    }
+
+    this.fetchOpenOrdersStartedResolvers.shift()?.();
+    return new Promise((resolve) => {
+      this.releaseOpenOrders.push(() =>
+        resolve({
+          orders: [],
+          snapshotReceivedAt: Date.now(),
+        }),
+      );
+    });
+  }
+
+  override createPrivateStream(
+    _credentials?: AccountCredentials,
+    callbacks?: PrivateStreamCallbacks,
+  ): StreamHandle {
+    this.callbacks = callbacks;
+    return {
+      ready: Promise.resolve(),
+      close: () => {
+        this.closeCalls += 1;
+      },
+    };
+  }
+}
+
 class StubJuplendAdapter implements PrivateUserDataAdapter {
   readonly venue = "juplend" as const;
   readonly readOnly = true;
@@ -505,6 +576,8 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
   };
 
   bootstrapCalls = 0;
+  reconcileCalls = 0;
+  fetchOpenOrdersCalls = 0;
   createStreamCalls = 0;
   closeCalls = 0;
 
@@ -529,6 +602,23 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
 
   bootstrapOpenOrders(): Promise<RawOrderUpdate[]> {
     return Promise.resolve([]);
+  }
+
+  reconcileAccount(): Promise<RawAccountBootstrap> {
+    this.reconcileCalls += 1;
+    return Promise.resolve({
+      balances: [],
+      positions: [],
+      receivedAt: Date.now(),
+    });
+  }
+
+  fetchOpenOrders(): Promise<RawOpenOrdersSnapshot> {
+    this.fetchOpenOrdersCalls += 1;
+    return Promise.resolve({
+      orders: [],
+      snapshotReceivedAt: Date.now(),
+    });
   }
 
   createOrder(
@@ -569,19 +659,35 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
 
 function withSetTimeoutCounter<T>(
   fn: () => Promise<T>,
-): Promise<{ result: T; scheduled: number }> {
+): Promise<{ result: T; scheduled: number; delays: number[] }> {
   const originalSetTimeout = globalThis.setTimeout;
   let scheduled = 0;
+  const delays: number[] = [];
   globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
     scheduled += 1;
+    const delay = args[1];
+    delays.push(typeof delay === "number" ? delay : 0);
     return originalSetTimeout(...args);
   }) as typeof setTimeout;
 
   return fn()
-    .then((result) => ({ result, scheduled }))
+    .then((result) => ({ result, scheduled, delays }))
     .finally(() => {
       globalThis.setTimeout = originalSetTimeout;
     });
+}
+
+async function waitFor<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = 200,
+): Promise<T> {
+  return await Promise.race([
+    promise,
+    Bun.sleep(timeoutMs).then(() => {
+      throw new Error(`Timed out waiting for ${label}`);
+    }),
+  ]);
 }
 
 test("websocket-like account subscriptions start the stream before bootstrapping and schedule refresh polling", async () => {
@@ -594,12 +700,10 @@ test("websocket-like account subscriptions start the stream before bootstrapping
     [adapter],
     accountConsumer,
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const { scheduled } = await withSetTimeoutCounter(() =>
@@ -619,6 +723,107 @@ test("websocket-like account subscriptions start the stream before bootstrapping
   expect(adapter.refreshCalls).toBeGreaterThan(0);
 });
 
+test("Binance stream options are read from account venues config", async () => {
+  const context = new StubContext();
+  const adapter = new StubBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    binanceRuntimeOptions({
+      listenKeyKeepAliveMs: 5,
+      privateStreamStaleAfterMs: 50,
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(adapter.lastStreamOptions).toMatchObject({
+    listenKeyKeepAliveMs: 5,
+    staleAfterMs: 50,
+  });
+});
+
+test("Binance coordinator options are snapshotted during construction", async () => {
+  const context = new StubContext();
+  const adapter = new StubBinanceAdapter();
+  const options = binanceRuntimeOptions({
+    riskPollIntervalMs: 25,
+    listenKeyKeepAliveMs: 5,
+    privateStreamStaleAfterMs: 50,
+    privateReconcileIntervalMs: 0,
+  });
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    options,
+  );
+
+  const binanceOptions = options.venues?.binance;
+  if (!binanceOptions) {
+    throw new Error("expected Binance options");
+  }
+  binanceOptions.riskPollIntervalMs = 1;
+  binanceOptions.listenKeyKeepAliveMs = 99;
+  binanceOptions.privateStreamStaleAfterMs = 99;
+  binanceOptions.privateReconcileIntervalMs = 1;
+
+  const { delays } = await withSetTimeoutCounter(() =>
+    coordinator.subscribeAccountFeed("main-binance"),
+  );
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(delays).toEqual([25]);
+  expect(adapter.lastStreamOptions).toMatchObject({
+    listenKeyKeepAliveMs: 5,
+    staleAfterMs: 50,
+  });
+});
+
+test("Juplend does not inherit Binance coordinator polling intervals", async () => {
+  const context = new StubContext();
+  context.account = {
+    accountId: "jup-loop-a",
+    venue: "juplend",
+    options: {
+      walletAddress: "wallet",
+    },
+  };
+  const adapter = new StubJuplendAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [new StubBinanceAdapter(), adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    {
+      venues: {
+        binance: {
+          riskPollIntervalMs: 5,
+          privateReconcileIntervalMs: 5,
+        },
+        juplend: {
+          pollIntervalMs: 5,
+        },
+      },
+    },
+  );
+
+  const { scheduled } = await withSetTimeoutCounter(() =>
+    coordinator.subscribeAccountFeed("jup-loop-a"),
+  );
+  await Bun.sleep(20);
+  coordinator.unsubscribeAccountFeed("jup-loop-a");
+
+  expect(scheduled).toBe(0);
+  expect(adapter.reconcileCalls).toBe(0);
+  expect(adapter.fetchOpenOrdersCalls).toBe(0);
+});
+
 test("private reconcile polling runs by default and can be disabled independently", async () => {
   const context = new StubContext();
   const enabledAdapter = new StubBinanceAdapter();
@@ -627,12 +832,10 @@ test("private reconcile polling runs by default and can be disabled independentl
     [enabledAdapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 60_000,
-        privateReconcileIntervalMs: 5,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 5,
+    }),
   );
 
   await enabledCoordinator.subscribeAccountFeed("main-binance");
@@ -650,12 +853,10 @@ test("private reconcile polling runs by default and can be disabled independentl
     [disabledAdapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   await disabledCoordinator.subscribeAccountFeed("main-binance");
@@ -669,6 +870,212 @@ test("private reconcile polling runs by default and can be disabled independentl
   expect(disabledAdapter.fetchOpenOrdersCalls).toBe(1);
 });
 
+test("immediate private reconcile requests are coalesced with one dirty replay", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    new StubOrderConsumer(),
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  adapter.fetchOpenOrdersCalls = 0;
+  adapter.blockOpenOrders = true;
+
+  const firstStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(firstStarted, "first immediate reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await Bun.sleep(0);
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  const secondStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(secondStarted, "dirty replay reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(5);
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+});
+
+test("private reconcile re-arms dirty requests queued in the finalizer window", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  adapter.fetchOpenOrdersCalls = 0;
+  orderConsumer.reconciles = 0;
+  adapter.blockOpenOrders = true;
+
+  type CoordinatorDrainHook = {
+    drainPrivateReconcileRequests(record: unknown): Promise<void>;
+  };
+  const coordinatorDrainHook = coordinator as unknown as CoordinatorDrainHook;
+  const originalDrain =
+    coordinatorDrainHook.drainPrivateReconcileRequests.bind(coordinator);
+  let queuedFinalizerWindowRequest = false;
+  coordinatorDrainHook.drainPrivateReconcileRequests = async (
+    record: unknown,
+  ): Promise<void> => {
+    await originalDrain(record);
+    if (queuedFinalizerWindowRequest) {
+      return;
+    }
+
+    queuedFinalizerWindowRequest = true;
+    queueMicrotask(() => {
+      adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+    });
+  };
+
+  const firstStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(firstStarted, "first immediate reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  const secondStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(secondStarted, "finalizer-window re-armed reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(5);
+  expect(orderConsumer.reconciles).toBe(2);
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+});
+
+test("periodic private reconcile shares the immediate coalescer and keeps polling", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const accountConsumer = new StubAccountConsumer();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    orderConsumer,
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 10,
+    }),
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  expect(adapter.callbacks?.onReconnected).toBeDefined();
+
+  adapter.reconcileCalls = 0;
+  adapter.fetchOpenOrdersCalls = 0;
+  accountConsumer.pendingCalls = 0;
+  accountConsumer.reconcilePreserveStatus = [];
+  orderConsumer.pendingCalls = 0;
+  orderConsumer.reconciles = 0;
+  orderConsumer.reconcilePreserveStatus = [];
+  adapter.blockOpenOrders = true;
+
+  const firstStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  await waitFor(firstStarted, "first periodic reconcile");
+  expect(adapter.reconcileCalls).toBe(1);
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  adapter.callbacks?.onReconnected?.();
+  await Bun.sleep(0);
+  expect(adapter.reconcileCalls).toBe(1);
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  const secondStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(secondStarted, "dirty replay reconcile");
+  expect(adapter.reconcileCalls).toBe(2);
+  expect(adapter.fetchOpenOrdersCalls).toBe(2);
+
+  const thirdStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.releaseOpenOrders.shift()?.();
+  await waitFor(thirdStarted, "rescheduled periodic reconcile");
+  expect(adapter.reconcileCalls).toBe(3);
+  expect(adapter.fetchOpenOrdersCalls).toBe(3);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(0);
+  coordinator.unsubscribeOrderFeed("main-binance");
+  coordinator.unsubscribeAccountFeed("main-binance");
+
+  expect(accountConsumer.reconcilePreserveStatus).toEqual([true, false, true]);
+  expect(orderConsumer.reconcilePreserveStatus).toEqual([true, false, true]);
+  expect(accountConsumer.pendingCalls).toBe(1);
+  expect(orderConsumer.pendingCalls).toBe(1);
+});
+
+test("in-flight private reconcile ignores stale generation after client stop", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  adapter.fetchOpenOrdersCalls = 0;
+  orderConsumer.reconciles = 0;
+  adapter.blockOpenOrders = true;
+
+  const reconcileStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(reconcileStarted, "manual reconcile");
+  coordinator.onClientStopping();
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(0);
+
+  expect(orderConsumer.reconciles).toBe(0);
+  expect(context.errors).toHaveLength(0);
+});
+
 test("private reconcile polling uses bootstrapAccount fallback when reconcileAccount is absent", async () => {
   const context = new StubContext();
   const adapter = new StubBootstrapReconcileBinanceAdapter();
@@ -677,12 +1084,10 @@ test("private reconcile polling uses bootstrapAccount fallback when reconcileAcc
     [adapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 60_000,
-        privateReconcileIntervalMs: 5,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 5,
+    }),
   );
 
   await coordinator.subscribeAccountFeed("main-binance");
@@ -700,12 +1105,10 @@ test("private reconcile polling stops after unsubscribe cleanup", async () => {
     [adapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 60_000,
-        privateReconcileIntervalMs: 5,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 5,
+    }),
   );
 
   await coordinator.subscribeAccountFeed("main-binance");
@@ -736,12 +1139,10 @@ test("expired pending order claims are retained when fetchOrder is absent", asyn
     [adapter],
     new StubAccountConsumer(),
     orderConsumer,
-    {
-      binance: {
-        riskPollIntervalMs: 60_000,
-        privateReconcileIntervalMs: 5,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 5,
+    }),
     {
       pendingClaimTtlMs: 1,
     },
@@ -790,11 +1191,9 @@ test("terminal backfill checks reconcile generation before each REST request", a
     [adapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(disappeared),
-    {
-      binance: {
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const subscribePromise = coordinator
@@ -827,12 +1226,10 @@ test("account bootstrap ignores stale generation after client stop", async () =>
     [adapter],
     accountConsumer,
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const { scheduled } = await withSetTimeoutCounter(async () => {
@@ -861,11 +1258,9 @@ test("order bootstrap ignores stale generation after client stop", async () => {
     [adapter],
     new StubAccountConsumer(),
     orderConsumer,
-    {
-      binance: {
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const subscribePromise = coordinator.subscribeOrderFeed("main-binance");
@@ -891,11 +1286,9 @@ test("unsubscribing account does not cancel an in-flight order bootstrap", async
     [adapter],
     new StubAccountConsumer(),
     orderConsumer,
-    {
-      binance: {
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   await coordinator.subscribeAccountFeed("main-binance");
@@ -923,12 +1316,10 @@ test("unsubscribing orders does not cancel an in-flight account bootstrap", asyn
     [adapter],
     accountConsumer,
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 60_000,
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 60_000,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const subscribeAccountPromise =
@@ -953,12 +1344,10 @@ test("polling-like account subscriptions bootstrap before stream startup and do 
     [adapter],
     new StubAccountConsumer(trace),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const { scheduled } = await withSetTimeoutCounter(() =>
@@ -982,12 +1371,10 @@ test("websocket-like adapters without refreshAccount do not schedule refresh pol
     [adapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-        privateReconcileIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
   const { scheduled } = await withSetTimeoutCounter(() =>
@@ -1009,11 +1396,9 @@ test("account subscribe failures close unused streams, leave no refresh polling,
     [adapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+    }),
   );
 
   adapter.bootstrapAccountError = new Error("bootstrap failed");
@@ -1050,11 +1435,9 @@ test("resumeRecord preserves websocket-like stream-first account ordering", asyn
     [adapter],
     new StubAccountConsumer(trace),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 50,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 50,
+    }),
   );
 
   await coordinator.subscribeAccountFeed("main-binance");
@@ -1104,11 +1487,9 @@ test("Binance risk polling ignores missing accounts when a pending timer fires",
     [adapter],
     accountConsumer,
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 5,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 5,
+    }),
   );
 
   await coordinator.subscribeAccountFeed("main-binance");
@@ -1129,17 +1510,18 @@ test("invalid Binance risk poll interval falls back to the default interval", as
     [adapter],
     new StubAccountConsumer(),
     new StubOrderConsumer(),
-    {
-      binance: {
-        riskPollIntervalMs: 0,
-      },
-    },
+    binanceRuntimeOptions({
+      riskPollIntervalMs: 0,
+      privateReconcileIntervalMs: 0,
+    }),
   );
 
-  await coordinator.subscribeAccountFeed("main-binance");
-  await Bun.sleep(20);
+  const { delays } = await withSetTimeoutCounter(() =>
+    coordinator.subscribeAccountFeed("main-binance"),
+  );
   coordinator.unsubscribeAccountFeed("main-binance");
 
+  expect(delays).toEqual([5_000]);
   expect(adapter.refreshCalls).toBe(0);
 });
 

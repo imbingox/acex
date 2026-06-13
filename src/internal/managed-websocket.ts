@@ -32,6 +32,15 @@ export interface ManagedWebSocketReconnectOptions {
   reconnectWithoutMessages?: boolean;
 }
 
+export interface ManagedWebSocketHeartbeatOptions {
+  intervalMs: number;
+  mode?: "fixed-interval" | "idle-timeout";
+  pongTimeoutMs?: number;
+  frame(): string;
+  isPong(raw: string): boolean;
+  countAnyInboundAsActivity?: boolean;
+}
+
 export interface ManagedWebSocketOptions<TMessage> {
   url: string;
   initialMessageTimeoutMs: number;
@@ -43,6 +52,7 @@ export interface ManagedWebSocketOptions<TMessage> {
   onError?(event: Event): void;
   messageWatchdog?: ManagedWebSocketWatchdogOptions;
   reconnect?: ManagedWebSocketReconnectOptions;
+  heartbeat?: ManagedWebSocketHeartbeatOptions;
   now?: () => number;
   createWebSocket?: WebSocketFactory;
   setTimer?: typeof setTimeout;
@@ -78,14 +88,22 @@ export function createManagedWebSocket<TMessage>(
     reconnect?.jitterRatio ?? DEFAULT_RECONNECT_JITTER_RATIO;
   const reconnectRandom = reconnect?.random ?? Math.random;
   const readyWhen = options.readyWhen ?? "message";
+  const heartbeat = options.heartbeat;
+  const heartbeatMode = heartbeat?.mode ?? "idle-timeout";
+  const heartbeatCountsAnyInbound =
+    heartbeat?.countAnyInboundAsActivity ?? true;
 
   let closed = false;
   let staleNotified = false;
   let hasMessage = false;
   let lastMessageAt = now();
+  let lastHeartbeatActivityAt = lastMessageAt;
   let initialTimeout: TimerHandle | undefined;
   let staleTimeout: TimerHandle | undefined;
   let reconnectTimeout: TimerHandle | undefined;
+  let heartbeatTimeout: TimerHandle | undefined;
+  let pongTimeout: TimerHandle | undefined;
+  let pendingPong = false;
   let reconnectAttempts = 0;
   let resolveReady: (() => void) | undefined;
   let rejectReady: ((error: Error) => void) | undefined;
@@ -106,6 +124,18 @@ export function createManagedWebSocket<TMessage>(
       clearTimer(staleTimeout);
       staleTimeout = undefined;
     }
+
+    if (heartbeatTimeout) {
+      clearTimer(heartbeatTimeout);
+      heartbeatTimeout = undefined;
+    }
+
+    if (pongTimeout) {
+      clearTimer(pongTimeout);
+      pongTimeout = undefined;
+    }
+
+    pendingPong = false;
   };
 
   const clearReconnectTimer = () => {
@@ -137,7 +167,7 @@ export function createManagedWebSocket<TMessage>(
     resolve();
   };
 
-  const scheduleStaleTimeout = () => {
+  const scheduleStaleTimeout = (socket: WebSocket) => {
     if (closed || !messageWatchdog) {
       return;
     }
@@ -147,7 +177,7 @@ export function createManagedWebSocket<TMessage>(
     }
 
     staleTimeout = setTimer(() => {
-      if (closed || staleNotified) {
+      if (closed || staleNotified || activeSocket !== socket) {
         return;
       }
 
@@ -183,11 +213,143 @@ export function createManagedWebSocket<TMessage>(
     }, delay);
   };
 
+  const clearHeartbeatTimeout = () => {
+    if (!heartbeatTimeout) {
+      return;
+    }
+
+    clearTimer(heartbeatTimeout);
+    heartbeatTimeout = undefined;
+  };
+
+  const clearPongTimeout = () => {
+    if (!pongTimeout) {
+      return;
+    }
+
+    clearTimer(pongTimeout);
+    pongTimeout = undefined;
+  };
+
+  const schedulePongTimeout = (socket: WebSocket) => {
+    if (!heartbeat || heartbeat.pongTimeoutMs === undefined) {
+      return;
+    }
+
+    clearPongTimeout();
+    pongTimeout = setTimer(() => {
+      pongTimeout = undefined;
+      if (closed || activeSocket !== socket || !pendingPong) {
+        return;
+      }
+
+      socket.close(1000, "heartbeat pong timeout");
+    }, heartbeat.pongTimeoutMs);
+  };
+
+  const scheduleHeartbeat = (socket: WebSocket) => {
+    if (
+      closed ||
+      !heartbeat ||
+      activeSocket !== socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+
+    clearHeartbeatTimeout();
+    const delay =
+      heartbeatMode === "fixed-interval"
+        ? heartbeat.intervalMs
+        : Math.max(0, heartbeat.intervalMs - (now() - lastHeartbeatActivityAt));
+
+    heartbeatTimeout = setTimer(() => {
+      heartbeatTimeout = undefined;
+      if (closed || activeSocket !== socket) {
+        return;
+      }
+
+      // Lazy idle check: inbound activity only updates the timestamp, so the
+      // timer re-sleeps for the remaining idle window instead of being
+      // rescheduled on every message.
+      if (
+        heartbeatMode === "idle-timeout" &&
+        now() - lastHeartbeatActivityAt < heartbeat.intervalMs
+      ) {
+        scheduleHeartbeat(socket);
+        return;
+      }
+
+      sendHeartbeat(socket);
+    }, delay);
+  };
+
+  const noteHeartbeatActivity = (socket: WebSocket, activityAt: number) => {
+    if (!heartbeat || activeSocket !== socket) {
+      return;
+    }
+
+    lastHeartbeatActivityAt = activityAt;
+  };
+
+  const noteConnectionActivity = (
+    socket: WebSocket,
+    activityAt: number,
+    options: { countsAsMessage: boolean; clearInitial: boolean },
+  ) => {
+    if (activeSocket !== socket) {
+      return;
+    }
+
+    if (options.countsAsMessage) {
+      hasMessage = true;
+    }
+    staleNotified = false;
+    lastMessageAt = activityAt;
+    reconnectAttempts = 0;
+
+    if (options.clearInitial && initialTimeout) {
+      clearTimer(initialTimeout);
+      initialTimeout = undefined;
+    }
+
+    if (messageWatchdog) {
+      scheduleStaleTimeout(socket);
+    }
+  };
+
+  const sendHeartbeat = (socket: WebSocket) => {
+    if (
+      closed ||
+      !heartbeat ||
+      activeSocket !== socket ||
+      socket.readyState !== WebSocket.OPEN
+    ) {
+      return;
+    }
+
+    if (pendingPong) {
+      scheduleHeartbeat(socket);
+      return;
+    }
+
+    socket.send(heartbeat.frame());
+    lastHeartbeatActivityAt = now();
+
+    if (heartbeat.pongTimeoutMs !== undefined) {
+      pendingPong = true;
+      schedulePongTimeout(socket);
+    }
+
+    scheduleHeartbeat(socket);
+  };
+
   const connect = () => {
     if (closed) {
       return;
     }
 
+    clearTimers();
     const socket = createWebSocket(options.url);
     activeSocket = socket;
 
@@ -205,7 +367,7 @@ export function createManagedWebSocket<TMessage>(
     }
 
     if (messageWatchdog) {
-      scheduleStaleTimeout();
+      scheduleStaleTimeout(socket);
     }
 
     socket.addEventListener("open", () => {
@@ -213,10 +375,12 @@ export function createManagedWebSocket<TMessage>(
         return;
       }
 
+      lastHeartbeatActivityAt = now();
       options.onOpen?.();
       if (readyWhen === "open") {
         resolveIfPending();
       }
+      scheduleHeartbeat(socket);
     });
 
     socket.addEventListener("message", (event) => {
@@ -224,9 +388,26 @@ export function createManagedWebSocket<TMessage>(
         return;
       }
 
+      const raw = event.data;
+      const receivedAt = now();
+      if (heartbeat?.isPong(raw)) {
+        pendingPong = false;
+        clearPongTimeout();
+        noteHeartbeatActivity(socket, receivedAt);
+        noteConnectionActivity(socket, receivedAt, {
+          countsAsMessage: false,
+          clearInitial: false,
+        });
+        return;
+      }
+
+      if (heartbeat && heartbeatCountsAnyInbound) {
+        noteHeartbeatActivity(socket, receivedAt);
+      }
+
       let parsed: TMessage | undefined;
       try {
-        parsed = options.parseMessage(event.data);
+        parsed = options.parseMessage(raw);
       } catch (error) {
         options.onError?.(
           new ErrorEvent("error", {
@@ -240,19 +421,10 @@ export function createManagedWebSocket<TMessage>(
         return;
       }
 
-      hasMessage = true;
-      staleNotified = false;
-      lastMessageAt = now();
-      reconnectAttempts = 0;
-
-      if (initialTimeout) {
-        clearTimer(initialTimeout);
-        initialTimeout = undefined;
-      }
-
-      if (messageWatchdog) {
-        scheduleStaleTimeout();
-      }
+      noteConnectionActivity(socket, receivedAt, {
+        countsAsMessage: true,
+        clearInitial: true,
+      });
       options.onMessage(parsed, lastMessageAt);
       if (readyWhen === "message") {
         resolveIfPending();

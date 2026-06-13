@@ -91,15 +91,15 @@ interface LendingRiskFacet {
 - `options.positionId`: 在 `walletAddress` 模式下可选，用于只纳入匹配 `nftId === positionId` 的仓位；在 direct read 模式下必填。
 - Dynamic data: `@jup-ag/lend-read` 的 `Client.vault.getAllUserPositions(walletAddress)` 或 `Client.vault.getPositionByVaultId(vaultId, positionId)`。
 - Vault metadata / price / symbol: 优先使用 Jup 官方 `Tokens V2 + Price V3` 补 token symbol / price；`GET https://lite-api.jup.ag/lend/v1/borrow/vaults` 仅作 vault fallback 信息。缓存 TTL 1h。
-- RPC config: `AccountRuntimeOptions.juplend.rpcUrl` 可选；未显式配置时默认读取环境变量 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。
-- Jup API config: `AccountRuntimeOptions.juplend.jupApiKey` 可选；未显式配置时默认读取环境变量 `JUP_API`，用于请求 Jup 官方 `Tokens V2 + Price V3`。
+- RPC config: `AccountRuntimeOptions.venues.juplend.rpcUrl` 可选；未显式配置时默认读取环境变量 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。
+- Jup API config: `AccountRuntimeOptions.venues.juplend.jupApiKey` 可选；未显式配置时默认读取环境变量 `JUP_API`，用于请求 Jup 官方 `Tokens V2 + Price V3`。
 - Balance aggregation: 多个 matching positions 按 `asset` 聚合成 `AccountSnapshot.balances: Record<asset, BalanceSnapshot>`。
 - Public decimal contract: 所有公开数量 / 金额 / 比率字段都必须是 canonical decimal string；adapter 和 manager 内部可用 BigNumber 计算，但不得把 BigNumber 对象暴露到 `BalanceSnapshot`、`RiskSnapshot` 或 lending facets。
 - Quantity mapping: `lend-read` 返回的是 exchange-price-adjusted amount，不是 mint atomic amount。当前 ACEX 按固定 `1e9` scale 还原用户可见数量：`supplied = supply / 1e9`；`borrowed = borrow / 1e9`。`dustBorrow` 作为单独字段保留在 SDK 原始语义里，不重复并入公开 debt 数量。
 - Risk aggregation: `netEquity = totalCollateralUsd - totalDebtUsd`；`riskEquity = Σ(collateralUsd × liquidationThreshold) - totalDebtUsd`；`riskRatio = totalDebtUsd / Σ(collateralUsd × liquidationThreshold)`，分母为 0 时返回 `undefined`。
 - Threshold normalization: `liquidationThreshold = 850` 解释为 `0.85`；小于等于 1 的值按小数原样使用。
 - APY normalization: `supplyRate = 554` / `borrowRate = 513` 解释为 `0.0554` / `0.0513`。
-- Polling: 默认 30s，可通过 `AccountRuntimeOptions.juplend.pollIntervalMs` 覆盖。
+- Polling: 默认 30s，可通过 `AccountRuntimeOptions.venues.juplend.pollIntervalMs` 覆盖。
 - Polling result is a full account snapshot, not a partial update; each successful poll must replace balances/positions/risk so closed positions and vanished assets are cleared.
 - Polling must be serialized; schedule the next poll only after the previous poll settles to avoid overlapping requests and stale out-of-order responses.
 
@@ -131,7 +131,7 @@ interface LendingRiskFacet {
 - Integration direct read: 传 `options.vaultId + options.positionId`，断言走 `getPositionByVaultId()`，不触发全钱包扫描。
 - Integration replacement: 先返回非空 positions，再返回空 positions，断言 stale balances / risk 被清空。
 - Integration polling scheduler: 设置 `pollIntervalMs` 小于 fake position read 延迟，断言最大并发请求数为 1。
-- Integration RPC config: 覆盖 `account.juplend.rpcUrl` 和 `SOL_HELIUS_RPC` 默认值。
+- Integration RPC config: 覆盖 `account.venues.juplend.rpcUrl` 和 `SOL_HELIUS_RPC` 默认值。
 - Integration error: 缺 walletAddress、RPC/HTTP 失败分别映射到稳定错误 / status。
 - Live smoke: `scripts/live-juplend-account-smoke.ts` 支持 `--wallet-address`、`--position-id`、`--rpc-url`、`--show-amounts`。
 

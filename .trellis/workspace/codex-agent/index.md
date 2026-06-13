@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
+- **Total Sessions**: 41
 - **Last Active**: 2026-06-12
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1434 | Active |
+| `journal-1.md` | ~1471 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-06-12 | P1-C2/C3/C4 多交易所内置扩展基建 | `bd014d5`, `ae76e37`, `6dc95fa`, `93cbd6d`, `3e43e73` | `codex/p1-c2-c3-c4-venue-extensibility` |
 | 40 | 2026-06-12 | P1-B6/B7/B8 流层打磨（hot-path 分配 / stale 语义 / 重连 jitter） | `74507eb`, `a9cd0ef` | `codex/p1-b6-b7-b8-stream-layer-polish` |
 | 39 | 2026-06-12 | P1-B5 成交明细字段：独立 order.trade 逐笔事件 | `d3bcffa` | `codex/p1-b5-fee-realized-pnl` |
 | 38 | 2026-06-12 | P1-B4 签名时钟自动同步回路 | `8cf0a72`, `7beac9d` | `codex/p1-b4-clock-resync` |

@@ -1,4 +1,5 @@
 import { BinanceMarketAdapter } from "../adapters/binance/adapter.ts";
+import { BinanceMarketCatalog } from "../adapters/binance/market-catalog.ts";
 import { BinancePrivateAdapter } from "../adapters/binance/private-adapter.ts";
 import { fetchBinanceServerTime } from "../adapters/binance/server-time.ts";
 import { JuplendPrivateAdapter } from "../adapters/juplend/private-adapter.ts";
@@ -27,6 +28,7 @@ import { OrderManagerImpl } from "../managers/order-manager.ts";
 import type {
   AccountCredentials,
   AccountManager,
+  AccountRuntimeOptions,
   AcexClient,
   AcexInternalError,
   BufferedEventStreamOptions,
@@ -40,11 +42,14 @@ import type {
   CreateOrderInput,
   HealthEvent,
   HealthEventFilter,
+  JuplendAccountRuntimeOptions,
   MarketManager,
   OrderManager,
+  RateLimiter,
   RegisterAccountInput,
   RegisterAccountResult,
   StopOptions,
+  TimeProvider,
   Venue,
   VenueCapabilities,
   VenueOrderCapabilities,
@@ -65,12 +70,118 @@ import {
 
 const activeClients = new Set<AcexClientImpl>();
 
+interface VenueAdapterLifecycle {
+  start(): Promise<void> | void;
+  stop(): void;
+}
+
+type AccountVenueRuntimeOptionsMap = NonNullable<
+  AccountRuntimeOptions["venues"]
+>;
+
+interface VenueAdapterFactoryDeps {
+  readonly rateLimiter: RateLimiter;
+  readonly signingClock?: TimeProvider;
+  readonly publishRuntimeError: (
+    source: AcexInternalError["source"],
+    error: Error,
+    metadata?: Omit<AcexInternalError, "error" | "source" | "ts">,
+  ) => void;
+}
+
+interface VenueAdapterFactoryResult {
+  readonly marketAdapter?: MarketAdapter;
+  readonly privateAdapter?: PrivateUserDataAdapter;
+  readonly lifecycle?: VenueAdapterLifecycle;
+}
+
+// Per-venue factories receive their own statically typed options slice, so a
+// renamed venue option fails type-check here instead of silently reading a
+// dead key at runtime. Adding a venue = one factory + one entry in
+// createVenueAdapterGroups.
+function createVenueAdapterGroups(
+  deps: VenueAdapterFactoryDeps,
+  venueOptions: AccountVenueRuntimeOptionsMap | undefined,
+): VenueAdapterFactoryResult[] {
+  return [
+    createBinanceAdapterGroup(deps),
+    createJuplendAdapterGroup(deps, venueOptions?.juplend),
+  ];
+}
+
 function toError(value: unknown, fallback: string): Error {
   if (value instanceof Error) {
     return value;
   }
 
   return new Error(fallback, { cause: value });
+}
+
+function createBinanceAdapterGroup(
+  deps: VenueAdapterFactoryDeps,
+): VenueAdapterFactoryResult {
+  const marketCatalog = new BinanceMarketCatalog({
+    rateLimiter: deps.rateLimiter,
+    publishRuntimeError: deps.publishRuntimeError,
+  });
+  const signingTimeProvider = deps.signingClock
+    ? undefined
+    : new SyncingTimeProvider({
+        sample: () => fetchBinanceServerTime({ rateLimiter: deps.rateLimiter }),
+        onSampleFailed: (event) => {
+          deps.publishRuntimeError(
+            "runtime",
+            toError(
+              event.error,
+              `Binance signing clock ${event.reason} sample failed`,
+            ),
+            { venue: "binance" },
+          );
+        },
+        onDriftWarning: (event) => {
+          deps.publishRuntimeError(
+            "runtime",
+            new Error(
+              `Binance signing clock drift exceeded threshold: drift=${event.driftMs}ms threshold=${event.thresholdMs}ms`,
+            ),
+            { venue: "binance" },
+          );
+        },
+      });
+  const signingClock = deps.signingClock ?? signingTimeProvider;
+
+  return {
+    marketAdapter: new BinanceMarketAdapter({
+      rateLimiter: deps.rateLimiter,
+      marketCatalog,
+    }),
+    privateAdapter: new BinancePrivateAdapter({
+      signingClock,
+      rateLimiter: deps.rateLimiter,
+      marketCatalog,
+    }),
+    lifecycle: signingTimeProvider
+      ? {
+          start: () => signingTimeProvider.start(),
+          stop: () => signingTimeProvider.stop(),
+        }
+      : undefined,
+  };
+}
+
+function createJuplendAdapterGroup(
+  _deps: VenueAdapterFactoryDeps,
+  venueOptions: JuplendAccountRuntimeOptions | undefined,
+): VenueAdapterFactoryResult {
+  return {
+    privateAdapter: new JuplendPrivateAdapter(
+      venueOptions?.rpcUrl,
+      venueOptions?.jupApiKey,
+      {
+        pollIntervalMs: venueOptions?.pollIntervalMs,
+      },
+    ),
+  };
 }
 
 export function stopAllClientsForTests(): void {
@@ -133,7 +244,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketAdapters: Map<Venue, MarketAdapter>;
   private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
-  private readonly signingTimeProvider: SyncingTimeProvider | undefined;
+  private readonly adapterLifecycles: VenueAdapterLifecycle[];
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
@@ -143,46 +254,27 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       new ReactiveRateLimiter({
         utilizationTarget: options.rateLimit?.utilizationTarget,
       });
-    this.signingTimeProvider = options.clock
-      ? undefined
-      : new SyncingTimeProvider({
-          sample: () => fetchBinanceServerTime({ rateLimiter }),
-          onSampleFailed: (event) => {
-            this.publishRuntimeError(
-              "runtime",
-              toError(
-                event.error,
-                `Binance signing clock ${event.reason} sample failed`,
-              ),
-              { venue: "binance" },
-            );
-          },
-          onDriftWarning: (event) => {
-            this.publishRuntimeError(
-              "runtime",
-              new Error(
-                `Binance signing clock drift exceeded threshold: drift=${event.driftMs}ms threshold=${event.thresholdMs}ms`,
-              ),
-              { venue: "binance" },
-            );
-          },
-        });
-    const signingClock = options.clock ?? this.signingTimeProvider;
-    const marketAdapter = new BinanceMarketAdapter({ rateLimiter });
-    this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
-    const privateAdapters = [
-      new BinancePrivateAdapter({
-        signingClock,
+    const adapterGroups = createVenueAdapterGroups(
+      {
         rateLimiter,
-      }),
-      new JuplendPrivateAdapter(
-        options.account?.juplend?.rpcUrl,
-        options.account?.juplend?.jupApiKey,
-        {
-          pollIntervalMs: options.account?.juplend?.pollIntervalMs,
-        },
+        signingClock: options.clock,
+        publishRuntimeError: this.publishRuntimeError.bind(this),
+      },
+      options.account?.venues,
+    );
+    this.adapterLifecycles = adapterGroups.flatMap((group) =>
+      group.lifecycle ? [group.lifecycle] : [],
+    );
+    this.marketAdapters = new Map(
+      adapterGroups.flatMap((group) =>
+        group.marketAdapter
+          ? [[group.marketAdapter.venue, group.marketAdapter]]
+          : [],
       ),
-    ];
+    );
+    const privateAdapters = adapterGroups.flatMap((group) =>
+      group.privateAdapter ? [group.privateAdapter] : [],
+    );
     this.privateAdapters = new Map(
       privateAdapters.map((adapter) => [adapter.venue, adapter]),
     );
@@ -315,7 +407,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     this.setClientStatus("starting");
-    void this.signingTimeProvider?.start();
+    for (const lifecycle of this.adapterLifecycles) {
+      void lifecycle.start();
+    }
     this.setClientStatus("running");
 
     this.marketManager.onClientStarted();
@@ -335,7 +429,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.setClientStatus("stopping");
 
     const now = this.now();
-    this.signingTimeProvider?.stop();
+    for (const lifecycle of this.adapterLifecycles) {
+      lifecycle.stop();
+    }
     this.privateCoordinator.onClientStopping();
     this.marketManager.onClientStopping(now);
     this.accountManager.onClientStopping(now);

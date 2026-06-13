@@ -3,6 +3,7 @@ import {
   type MultiplexedStreamCallbacks,
   type MultiplexerSubscriptionHandle,
   SubscriptionMultiplexer,
+  type VenueHeartbeat,
   type VenueStreamProtocol,
 } from "../../src/internal/subscription-multiplexer.ts";
 import {
@@ -79,6 +80,10 @@ class FakeClock {
   readonly clearTimer = (handle: Parameters<typeof clearTimeout>[0]): void => {
     this.timers.delete(handle as unknown as number);
   };
+
+  get timerCount(): number {
+    return this.timers.size;
+  }
 
   advance(ms: number): void {
     const target = this.current + ms;
@@ -193,12 +198,13 @@ function descriptor(key: string, connection = "alpha"): FakeDescriptor {
   return { key, connection };
 }
 
-function createMultiplexer(
+function createMultiplexerWithProtocol(
   clock: FakeClock,
+  testProtocol: VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload>,
   controlFrameMaxPerSec = 5,
   maxSubscriptionsPerConnection?: number,
 ): SubscriptionMultiplexer<FakeMessage, FakeDescriptor, FakePayload> {
-  return new SubscriptionMultiplexer(protocol, {
+  return new SubscriptionMultiplexer(testProtocol, {
     initialMessageTimeoutMs: 5_000,
     staleAfterMs: 100,
     reconnectDelayMs: 10,
@@ -214,10 +220,40 @@ function createMultiplexer(
   });
 }
 
+function createMultiplexer(
+  clock: FakeClock,
+  controlFrameMaxPerSec = 5,
+  maxSubscriptionsPerConnection?: number,
+): SubscriptionMultiplexer<FakeMessage, FakeDescriptor, FakePayload> {
+  return createMultiplexerWithProtocol(
+    clock,
+    protocol,
+    controlFrameMaxPerSec,
+    maxSubscriptionsPerConnection,
+  );
+}
+
+function createHeartbeatProtocol(
+  heartbeat: VenueHeartbeat,
+  overrides: Partial<
+    VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload>
+  > = {},
+): VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload> {
+  return {
+    ...protocol,
+    ...overrides,
+    heartbeat,
+  };
+}
+
 async function openSocket(url: string): Promise<FakeWebSocket> {
   const socket = await waitForSocket(url);
   await Promise.resolve();
   return socket;
+}
+
+function emitRaw(socket: FakeWebSocket, data: string): void {
+  socket.dispatchEvent(new MessageEvent("message", { data }));
 }
 
 function sentFrame(socket: FakeWebSocket, index: number): FakeControlFrame {
@@ -805,4 +841,222 @@ test("ack frames do not trigger payload callbacks", async () => {
 
   expect(log.payloads).toHaveLength(0);
   await expectPending(handle.ready);
+});
+
+test("heartbeat idle-timeout sends ping only after inbound idle interval", async () => {
+  const clock = new FakeClock();
+  const heartbeatProtocol = createHeartbeatProtocol({
+    intervalMs: 50,
+    mode: "idle-timeout",
+    frame: () => "ping",
+    isPong: (raw) => raw === "pong",
+  });
+  const multiplexer = createMultiplexerWithProtocol(clock, heartbeatProtocol);
+
+  multiplexer.subscribe(descriptor("a"), createCallbacks().callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  expect(socket.sentFrames).toEqual([
+    JSON.stringify({ op: "sub", keys: ["a"] } satisfies FakeControlFrame),
+  ]);
+
+  clock.advance(49);
+  expect(socket.sentFrames).toHaveLength(1);
+
+  clock.advance(1);
+  expect(socket.sentFrames).toHaveLength(2);
+  expect(socket.sentFrames[1]).toBe("ping");
+});
+
+test("heartbeat fixed-interval sends ping every interval", async () => {
+  const clock = new FakeClock();
+  const heartbeatProtocol = createHeartbeatProtocol({
+    intervalMs: 25,
+    mode: "fixed-interval",
+    frame: () => "ping",
+    isPong: (raw) => raw === "pong",
+  });
+  const multiplexer = createMultiplexerWithProtocol(clock, heartbeatProtocol);
+
+  multiplexer.subscribe(descriptor("a"), createCallbacks().callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  clock.advance(25);
+  clock.advance(25);
+
+  expect(socket.sentFrames).toEqual([
+    JSON.stringify({ op: "sub", keys: ["a"] } satisfies FakeControlFrame),
+    "ping",
+    "ping",
+  ]);
+});
+
+test("heartbeat countAnyInboundAsActivity resets idle timer", async () => {
+  const clock = new FakeClock();
+  const heartbeatProtocol = createHeartbeatProtocol({
+    intervalMs: 50,
+    mode: "idle-timeout",
+    frame: () => "ping",
+    isPong: (raw) => raw === "pong",
+  });
+  const multiplexer = createMultiplexerWithProtocol(clock, heartbeatProtocol);
+
+  multiplexer.subscribe(descriptor("a"), createCallbacks().callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  clock.advance(30);
+  socket.emitJson({ ack: true });
+  clock.advance(49);
+
+  expect(socket.sentFrames).toHaveLength(1);
+
+  clock.advance(1);
+  expect(socket.sentFrames).toHaveLength(2);
+  expect(socket.sentFrames[1]).toBe("ping");
+});
+
+test("heartbeat pong is consumed before parse and clears pending pong", async () => {
+  const clock = new FakeClock();
+  let parseCalls = 0;
+  const heartbeatProtocol = createHeartbeatProtocol(
+    {
+      intervalMs: 10,
+      mode: "fixed-interval",
+      pongTimeoutMs: 20,
+      frame: () => "ping",
+      isPong: (raw) => raw === "pong",
+    },
+    {
+      parseMessage(data): FakeMessage | undefined {
+        parseCalls += 1;
+        return protocol.parseMessage(data);
+      },
+    },
+  );
+  const multiplexer = createMultiplexerWithProtocol(clock, heartbeatProtocol);
+  const { callbacks, log } = createCallbacks();
+
+  multiplexer.subscribe(descriptor("a"), callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  clock.advance(10);
+
+  expect(socket.sentFrames.at(-1)).toBe("ping");
+
+  emitRaw(socket, "pong");
+  clock.advance(20);
+
+  expect(parseCalls).toBe(0);
+  expect(log.payloads).toHaveLength(0);
+  expect(log.errors).toHaveLength(0);
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(1);
+});
+
+test("heartbeat pong timeout reconnects and replays shared subscriptions", async () => {
+  const clock = new FakeClock();
+  const heartbeatProtocol = createHeartbeatProtocol({
+    intervalMs: 10,
+    mode: "fixed-interval",
+    pongTimeoutMs: 25,
+    frame: () => "ping",
+    isPong: (raw) => raw === "pong",
+  });
+  const multiplexer = createMultiplexerWithProtocol(clock, heartbeatProtocol);
+  const first = createCallbacks();
+  const second = createCallbacks();
+
+  const firstHandle = multiplexer.subscribe(descriptor("a"), first.callbacks);
+  const secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  clock.advance(10);
+  const oldFrameCount = socket.sentFrames.length;
+
+  clock.advance(10);
+  expect(socket.sentFrames).toHaveLength(oldFrameCount);
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+
+  clock.advance(15);
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(first.log.disconnected).toBe(1);
+  expect(second.log.disconnected).toBe(1);
+
+  clock.advance(10);
+  const reconnectSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+
+  expect(sentFrame(reconnectSocket, 0)).toEqual({
+    op: "sub",
+    keys: ["a"],
+  });
+
+  reconnectSocket.emitJson({ key: "a", value: "after-reconnect" });
+  await Promise.all([firstHandle.ready, secondHandle.ready]);
+
+  expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "after-reconnect",
+  ]);
+  expect(second.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "after-reconnect",
+  ]);
+
+  clock.advance(10);
+  expect(socket.sentFrames).toHaveLength(oldFrameCount);
+  expect(reconnectSocket.sentFrames.at(-1)).toBe("ping");
+});
+
+test("heartbeat timers are cleared when the connection closes", async () => {
+  const clock = new FakeClock();
+  const heartbeatProtocol = createHeartbeatProtocol({
+    intervalMs: 10,
+    mode: "fixed-interval",
+    pongTimeoutMs: 30,
+    frame: () => "ping",
+    isPong: (raw) => raw === "pong",
+  });
+  const multiplexer = createMultiplexerWithProtocol(clock, heartbeatProtocol);
+  const handle = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  clock.advance(10);
+  expect(socket.sentFrames.at(-1)).toBe("ping");
+
+  handle.close();
+  clock.advance(200);
+
+  const frameCountAfterClose = socket.sentFrames.length;
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(clock.timerCount).toBe(0);
+
+  clock.advance(1_000);
+  expect(socket.sentFrames).toHaveLength(frameCountAfterClose);
+  expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(1);
+});
+
+test("connections without heartbeat do not send application pings when idle", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+
+  multiplexer.subscribe(descriptor("a"), createCallbacks().callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  clock.advance(1_000);
+
+  expect(socket.sentFrames).toEqual([
+    JSON.stringify({ op: "sub", keys: ["a"] } satisfies FakeControlFrame),
+  ]);
+  expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(1);
 });

@@ -91,6 +91,17 @@ DELETE /papi/v1/um/allOpenOrders
 - 如果终态回补返回 filled/canceled/expired/rejected，必须应用真实终态。若 `fetchOrder` 明确返回 `undefined`（例如 Binance -2011/-2013，交易所确认不存在），不得伪造成 filled/canceled/expired；由 OrderManager 按 `CreateClientOptions.order.missingOrderEvictionThreshold`（默认 3）记录连续确认缺失次数，达到阈值后将订单置为 `status: "unknown"`、移入 closed、发布终态订单事件和一次明确 runtime error。网络/超时/限流等 transport 错误不计数，继续按 reconcile 错误路径标记 degraded。
 - 初始 order bootstrap、周期性 reconcile、WS reconnect reconcile 都必须走同一套 open-set + lifecycle backfill 语义，不能再用 openOrders 全量替换直接丢弃已有终态订单。
 
+#### 3.3.1 symbol-miss 与 catalog 刷新契约
+
+- 命令侧 `toVenueId` miss 必须视为 pre-flight 失败：adapter 抛 typed `SymbolMappingError`，OrderManager 对外失败结果必须保持 `orderState: "not_placed"`。如果本地已登记 pending claim（例如生成 `newClientOrderId` 后才发现 catalog 预热失败），必须在失败路径清掉该 claim，不能让后续 reconcile 误认为存在未知 ack。
+- 命令侧 catalog 预热失败同样属于 pre-flight：不得发 REST 下单 / 撤单请求，不得写入订单缓存；错误按命令失败包装，但 `orderState` 仍为 `"not_placed"`，pending claim 必须清理。
+- 入站 `toUnified` miss（WS raw 帧 / REST openOrders / fetchOrder / account position）不得把 venue raw symbol 写入主状态。订单存储按 unified `symbol` 建 location key，写 raw id 会分裂 openOrders、pending claim 与 reconcile 身份。
+- WS raw 帧的 order / position miss 必须进入有界 raw quarantine，然后触发 catalog refresh（按 family single-flight）。refresh 成功后 replay 原始帧；order replay 必须保留原始 `trade` / `fee` / `realizedPnl` 字段，不能降级为 REST 回查结果。
+- WS replay 后仍 miss 时才 drop，并发布去重 runtime error（按 venue/family/raw symbol/reason 去重）。drop 同时触发一次 immediate private reconcile，用 REST account/open orders 把可恢复状态收敛回来；但该 reconcile 不能替代 replay，因为 REST `fetchOrder` 补不回逐笔成交、手续费和 realized PnL。反向约束：replay 全部成功（无 drop）时**不得**触发该 reconcile，也不得把 account/order runtimeStatus 翻成 pending——新上币的正常事件流不应产生状态闪断。
+- miss-refresh cooldown 只约束"refresh 成功但 symbol 仍不存在"的重复刷新；catalog refresh 本身失败（网络 / 5xx）不得消耗整个 cooldown，必须按更短的 failure backoff 重试（默认 `min(cooldown, 5s)`），否则一次瞬时 exchangeInfo 故障会把被隔离的成交 replay 拖满 30s。
+- symbol-miss runtime error 的去重 key 在该 symbol 重新可映射（出现在新 catalog 快照中）后必须重置：之后再次 miss 要重新上报，不允许进程级永久抑制。
+- REST 路径（bootstrap / refresh / reconcileAccount / openOrders / fetchOrder）已持有响应数据，不进入 raw quarantine；catalog refresh 后必须对同一响应 inline 重映射，仍 miss 才 drop 该条记录并 report runtime error，且不得写入 raw symbol。
+
 #### 3.4 精度与最小名义金额
 
 - SDK 第一版只做字段透传，不自动帮调用方修正 `price` / `amount`。

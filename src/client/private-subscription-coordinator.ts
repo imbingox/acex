@@ -12,6 +12,7 @@ import {
 import { isTransportError } from "../internal/http-client.ts";
 import type {
   AccountRuntimeOptions,
+  BinanceAccountRuntimeOptions,
   OrderRuntimeOptions,
   OrderSnapshot,
   PrivateRuntimeReason,
@@ -39,10 +40,20 @@ interface PrivateSubscriptionRecord {
   accountSubscriptionGeneration: number;
   orderSubscriptionGeneration: number;
   privateReconcileTimer?: ReturnType<typeof setTimeout>;
-  privateReconcileInFlight?: Promise<void>;
+  privateReconcilePromise?: Promise<void>;
   privateReconcileGeneration: number;
+  privateReconcileDirty: boolean;
+  privateReconcilePendingPreserveStatus: boolean;
+  privateReconcilePollRequested: boolean;
+  privateReconcilePollGeneration?: number;
   startPromise?: Promise<void>;
-  reconcilePromise?: Promise<void>;
+}
+
+interface BinanceCoordinatorOptionsSnapshot {
+  riskPollIntervalMs: number;
+  privateReconcileIntervalMs: number | undefined;
+  privateStreamStaleAfterMs: number;
+  listenKeyKeepAliveMs: number;
 }
 
 const DEFAULT_STREAM_OPEN_TIMEOUT_MS = 15_000;
@@ -76,6 +87,29 @@ function normalizeReconcileInterval(
   return normalizePositiveInterval(value, fallback);
 }
 
+function normalizeBinanceCoordinatorOptions(
+  options: BinanceAccountRuntimeOptions | undefined,
+): BinanceCoordinatorOptionsSnapshot {
+  return {
+    riskPollIntervalMs: normalizePositiveInterval(
+      options?.riskPollIntervalMs,
+      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
+    ),
+    privateReconcileIntervalMs: normalizeReconcileInterval(
+      options?.privateReconcileIntervalMs,
+      DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS,
+    ),
+    privateStreamStaleAfterMs: normalizePositiveInterval(
+      options?.privateStreamStaleAfterMs,
+      DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS,
+    ),
+    listenKeyKeepAliveMs: normalizePositiveInterval(
+      options?.listenKeyKeepAliveMs,
+      DEFAULT_LISTEN_KEY_KEEPALIVE_MS,
+    ),
+  };
+}
+
 function transportReason(
   error: unknown,
   fallback: PrivateRuntimeReason,
@@ -93,10 +127,7 @@ export class PrivateSubscriptionCoordinator {
   private readonly streamOpenTimeoutMs: number;
   private readonly streamReconnectDelayMs: number;
   private readonly streamReconnectMaxDelayMs: number;
-  private readonly listenKeyKeepAliveMs: number;
-  private readonly binancePrivateStreamStaleAfterMs: number;
-  private readonly binanceRiskPollIntervalMs: number;
-  private readonly binancePrivateReconcileIntervalMs: number | undefined;
+  private readonly binanceOptions: BinanceCoordinatorOptionsSnapshot;
   private readonly pendingClaimTtlMs: number;
   private readonly records = new Map<string, PrivateSubscriptionRecord>();
 
@@ -109,6 +140,9 @@ export class PrivateSubscriptionCoordinator {
     orderOptions: OrderRuntimeOptions = {},
   ) {
     this.context = context;
+    this.binanceOptions = normalizeBinanceCoordinatorOptions(
+      options.venues?.binance,
+    );
     this.adapters = new Map(
       adapters.map((adapter) => [adapter.venue, adapter]),
     );
@@ -121,20 +155,6 @@ export class PrivateSubscriptionCoordinator {
     this.streamReconnectMaxDelayMs =
       options.streamReconnectMaxDelayMs ??
       DEFAULT_STREAM_RECONNECT_MAX_DELAY_MS;
-    this.listenKeyKeepAliveMs =
-      options.listenKeyKeepAliveMs ?? DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
-    this.binancePrivateStreamStaleAfterMs = normalizePositiveInterval(
-      options.binance?.privateStreamStaleAfterMs,
-      DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS,
-    );
-    this.binanceRiskPollIntervalMs = normalizePositiveInterval(
-      options.binance?.riskPollIntervalMs,
-      DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS,
-    );
-    this.binancePrivateReconcileIntervalMs = normalizeReconcileInterval(
-      options.binance?.privateReconcileIntervalMs,
-      DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS,
-    );
     this.pendingClaimTtlMs = normalizePositiveInterval(
       orderOptions.pendingClaimTtlMs,
       DEFAULT_PENDING_CLAIM_TTL_MS,
@@ -445,6 +465,44 @@ export class PrivateSubscriptionCoordinator {
     return adapter;
   }
 
+  private getAccountRefreshIntervalMs(
+    record: PrivateSubscriptionRecord,
+  ): number | undefined {
+    if (record.venue !== "binance") {
+      return undefined;
+    }
+
+    return this.binanceOptions.riskPollIntervalMs;
+  }
+
+  private getPrivateReconcileIntervalMs(
+    record: PrivateSubscriptionRecord,
+  ): number | undefined {
+    if (record.venue !== "binance") {
+      return undefined;
+    }
+
+    return this.binanceOptions.privateReconcileIntervalMs;
+  }
+
+  private getPrivateStreamStaleAfterMs(
+    record: PrivateSubscriptionRecord,
+  ): number {
+    if (record.venue !== "binance") {
+      return DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS;
+    }
+
+    return this.binanceOptions.privateStreamStaleAfterMs;
+  }
+
+  private getListenKeyKeepAliveMs(record: PrivateSubscriptionRecord): number {
+    if (record.venue !== "binance") {
+      return DEFAULT_LISTEN_KEY_KEEPALIVE_MS;
+    }
+
+    return this.binanceOptions.listenKeyKeepAliveMs;
+  }
+
   private getOrCreateRecord(
     account: RegisteredAccountRecord,
   ): PrivateSubscriptionRecord {
@@ -464,6 +522,9 @@ export class PrivateSubscriptionCoordinator {
       accountSubscriptionGeneration: 0,
       orderSubscriptionGeneration: 0,
       privateReconcileGeneration: 0,
+      privateReconcileDirty: false,
+      privateReconcilePendingPreserveStatus: true,
+      privateReconcilePollRequested: false,
     };
 
     this.records.set(account.accountId, record);
@@ -515,7 +576,9 @@ export class PrivateSubscriptionCoordinator {
   }
 
   private ensureAccountRefreshPolling(record: PrivateSubscriptionRecord): void {
+    const intervalMs = this.getAccountRefreshIntervalMs(record);
     if (
+      intervalMs === undefined ||
       typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
       !record.accountSubscribed ||
       record.accountRefreshTimer ||
@@ -537,7 +600,9 @@ export class PrivateSubscriptionCoordinator {
   }
 
   private scheduleAccountRefreshPoll(record: PrivateSubscriptionRecord): void {
+    const intervalMs = this.getAccountRefreshIntervalMs(record);
     if (
+      intervalMs === undefined ||
       typeof this.getAdapter(record.venue).refreshAccount !== "function" ||
       !record.accountSubscribed
     ) {
@@ -582,7 +647,7 @@ export class PrivateSubscriptionCoordinator {
             this.scheduleAccountRefreshPoll(record);
           }
         });
-    }, this.binanceRiskPollIntervalMs);
+    }, intervalMs);
   }
 
   private hasPrivateReconcileCapability(
@@ -600,12 +665,12 @@ export class PrivateSubscriptionCoordinator {
   private ensurePrivateReconcilePolling(
     record: PrivateSubscriptionRecord,
   ): void {
+    const intervalMs = this.getPrivateReconcileIntervalMs(record);
     if (
-      this.binancePrivateReconcileIntervalMs === undefined ||
+      intervalMs === undefined ||
       !this.isActive(record) ||
       !this.hasPrivateReconcileCapability(record) ||
-      record.privateReconcileTimer ||
-      record.privateReconcileInFlight
+      record.privateReconcileTimer
     ) {
       return;
     }
@@ -629,14 +694,18 @@ export class PrivateSubscriptionCoordinator {
       clearTimeout(record.privateReconcileTimer);
       record.privateReconcileTimer = undefined;
     }
-    record.privateReconcileInFlight = undefined;
+    record.privateReconcileDirty = false;
+    record.privateReconcilePendingPreserveStatus = true;
+    record.privateReconcilePollRequested = false;
+    record.privateReconcilePollGeneration = undefined;
   }
 
   private schedulePrivateReconcilePoll(
     record: PrivateSubscriptionRecord,
   ): void {
+    const intervalMs = this.getPrivateReconcileIntervalMs(record);
     if (
-      this.binancePrivateReconcileIntervalMs === undefined ||
+      intervalMs === undefined ||
       !this.isActive(record) ||
       !this.hasPrivateReconcileCapability(record)
     ) {
@@ -648,43 +717,26 @@ export class PrivateSubscriptionCoordinator {
       record.privateReconcileTimer = undefined;
       if (
         generation !== record.privateReconcileGeneration ||
-        this.binancePrivateReconcileIntervalMs === undefined ||
+        this.getPrivateReconcileIntervalMs(record) === undefined ||
         !this.isActive(record) ||
         !this.hasPrivateReconcileCapability(record)
       ) {
         return;
       }
 
-      let latestAccount: RegisteredAccountRecord;
       try {
-        latestAccount = this.getAccount(record.accountId);
+        this.getAccount(record.accountId);
       } catch (error) {
         this.handlePrivateReconcileLookupError(record, error);
         return;
       }
 
-      record.privateReconcileInFlight = this.reconcilePrivateData(
-        record,
-        latestAccount,
+      this.requestPrivateReconcile(record, {
+        preserveStatus: true,
+        source: "poll",
         generation,
-        true,
-      )
-        .catch(() => {})
-        .finally(() => {
-          if (generation !== record.privateReconcileGeneration) {
-            return;
-          }
-
-          record.privateReconcileInFlight = undefined;
-          if (
-            this.binancePrivateReconcileIntervalMs !== undefined &&
-            this.isActive(record) &&
-            this.hasPrivateReconcileCapability(record)
-          ) {
-            this.schedulePrivateReconcilePoll(record);
-          }
-        });
-    }, this.binancePrivateReconcileIntervalMs);
+      });
+    }, intervalMs);
   }
 
   private handlePrivateReconcileLookupError(
@@ -1343,13 +1395,10 @@ export class PrivateSubscriptionCoordinator {
           }
         },
         onReconnected: () => {
-          if (!record.reconcilePromise) {
-            record.reconcilePromise = this.reconcileRecord(record)
-              .catch(() => {})
-              .finally(() => {
-                record.reconcilePromise = undefined;
-              });
-          }
+          this.requestImmediateReconcile(record);
+        },
+        requestReconcile: () => {
+          this.requestImmediateReconcile(record);
         },
         onError: (error) => {
           this.context.publishRuntimeError("adapter", error, {
@@ -1373,8 +1422,8 @@ export class PrivateSubscriptionCoordinator {
         openTimeoutMs: this.streamOpenTimeoutMs,
         reconnectDelayMs: this.streamReconnectDelayMs,
         reconnectMaxDelayMs: this.streamReconnectMaxDelayMs,
-        listenKeyKeepAliveMs: this.listenKeyKeepAliveMs,
-        staleAfterMs: this.binancePrivateStreamStaleAfterMs,
+        listenKeyKeepAliveMs: this.getListenKeyKeepAliveMs(record),
+        staleAfterMs: this.getPrivateStreamStaleAfterMs(record),
         now: () => this.context.now(),
       },
       { ...account.options, accountId: account.accountId },
@@ -1424,35 +1473,124 @@ export class PrivateSubscriptionCoordinator {
 
   private async reconcileRecord(
     record: PrivateSubscriptionRecord,
+    preserveStatus: boolean,
   ): Promise<void> {
     const account = this.getAccount(record.accountId);
     const generation = record.privateReconcileGeneration;
-    const accountGeneration = record.accountSubscriptionGeneration;
-    const orderGeneration = record.orderSubscriptionGeneration;
 
-    if (record.accountSubscribed) {
+    if (!preserveStatus && record.accountSubscribed) {
       this.accountConsumer.onPrivateAccountPending(
         record.accountId,
         record.venue,
       );
-      await this.reconcileAccount(
-        record,
-        account,
-        generation,
-        accountGeneration,
-        false,
-      );
     }
 
-    if (record.ordersSubscribed) {
+    if (!preserveStatus && record.ordersSubscribed) {
       this.orderConsumer.onPrivateOrderPending(record.accountId, record.venue);
-      await this.reconcileOrders(
-        record,
-        account,
-        generation,
-        orderGeneration,
-        false,
-      );
+    }
+
+    await this.reconcilePrivateData(
+      record,
+      account,
+      generation,
+      preserveStatus,
+    );
+  }
+
+  private requestImmediateReconcile(record: PrivateSubscriptionRecord): void {
+    this.requestPrivateReconcile(record, {
+      preserveStatus: false,
+      source: "immediate",
+    });
+  }
+
+  private requestPrivateReconcile(
+    record: PrivateSubscriptionRecord,
+    request: {
+      preserveStatus: boolean;
+      source: "immediate" | "poll";
+      generation?: number;
+    },
+  ): void {
+    if (!this.isActive(record) || !this.hasPrivateReconcileCapability(record)) {
+      return;
+    }
+
+    if (
+      request.source === "poll" &&
+      (request.generation !== record.privateReconcileGeneration ||
+        this.getPrivateReconcileIntervalMs(record) === undefined)
+    ) {
+      return;
+    }
+
+    if (record.privateReconcileDirty) {
+      record.privateReconcilePendingPreserveStatus =
+        record.privateReconcilePendingPreserveStatus && request.preserveStatus;
+    } else {
+      record.privateReconcileDirty = true;
+      record.privateReconcilePendingPreserveStatus = request.preserveStatus;
+    }
+
+    if (request.source === "poll") {
+      record.privateReconcilePollRequested = true;
+      record.privateReconcilePollGeneration = record.privateReconcileGeneration;
+    }
+
+    if (record.privateReconcilePromise) {
+      return;
+    }
+
+    this.startPrivateReconcileDrain(record);
+  }
+
+  private startPrivateReconcileDrain(record: PrivateSubscriptionRecord): void {
+    const promise = Promise.resolve().then(() =>
+      this.drainPrivateReconcileRequests(record),
+    );
+    record.privateReconcilePromise = promise.finally(() =>
+      this.finalizePrivateReconcileDrain(record),
+    );
+  }
+
+  private finalizePrivateReconcileDrain(
+    record: PrivateSubscriptionRecord,
+  ): void {
+    record.privateReconcilePromise = undefined;
+
+    if (record.privateReconcileDirty && this.isActive(record)) {
+      this.startPrivateReconcileDrain(record);
+      return;
+    }
+
+    const shouldSchedulePoll =
+      record.privateReconcilePollRequested &&
+      record.privateReconcilePollGeneration ===
+        record.privateReconcileGeneration;
+
+    record.privateReconcileDirty = false;
+    record.privateReconcilePendingPreserveStatus = true;
+    record.privateReconcilePollRequested = false;
+    record.privateReconcilePollGeneration = undefined;
+
+    if (shouldSchedulePoll) {
+      this.ensurePrivateReconcilePolling(record);
+    }
+  }
+
+  private async drainPrivateReconcileRequests(
+    record: PrivateSubscriptionRecord,
+  ): Promise<void> {
+    while (record.privateReconcileDirty && this.isActive(record)) {
+      const preserveStatus = record.privateReconcilePendingPreserveStatus;
+      record.privateReconcileDirty = false;
+      record.privateReconcilePendingPreserveStatus = true;
+
+      try {
+        await this.reconcileRecord(record, preserveStatus);
+      } catch (error) {
+        this.handlePrivateReconcileLookupError(record, error);
+      }
     }
   }
 

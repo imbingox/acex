@@ -310,7 +310,11 @@ test("Binance private stream rebuilds listenKey after keepalive failure", async 
       streamOpenTimeoutMs: 500,
       streamReconnectDelayMs: 5,
       streamReconnectMaxDelayMs: 5,
-      listenKeyKeepAliveMs: 5,
+      venues: {
+        binance: {
+          listenKeyKeepAliveMs: 5,
+        },
+      },
     },
   });
 
@@ -362,8 +366,10 @@ test("Binance private stream watchdog marks heartbeat timeout and rebuilds liste
       streamOpenTimeoutMs: 500,
       streamReconnectDelayMs: 5,
       streamReconnectMaxDelayMs: 5,
-      binance: {
-        privateStreamStaleAfterMs: 50,
+      venues: {
+        binance: {
+          privateStreamStaleAfterMs: 50,
+        },
       },
     },
   });
@@ -623,8 +629,10 @@ test("Binance account polling refreshes risk and mark-to-market positions", asyn
       streamOpenTimeoutMs: 50,
       streamReconnectDelayMs: 5,
       streamReconnectMaxDelayMs: 5,
-      binance: {
-        riskPollIntervalMs: 5,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 5,
+        },
       },
     },
   });
@@ -757,8 +765,10 @@ test("Binance account polling does not mask websocket disconnect status", async 
       streamOpenTimeoutMs: 50,
       streamReconnectDelayMs: 50,
       streamReconnectMaxDelayMs: 50,
-      binance: {
-        riskPollIntervalMs: 5,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 5,
+        },
       },
     },
   });
@@ -920,9 +930,11 @@ test("Binance full private reconcile removes stale balances and positions", asyn
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        riskPollIntervalMs: 60_000,
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 60_000,
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
   });
@@ -1020,8 +1032,10 @@ test("successful account reconcile clears previous HTTP degraded status", async 
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        privateReconcileIntervalMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 5,
+        },
       },
     },
   });
@@ -1092,9 +1106,11 @@ test("account reconnect reconcile does not overwrite newer websocket updates", a
       streamOpenTimeoutMs: 50,
       streamReconnectDelayMs: 5,
       streamReconnectMaxDelayMs: 5,
-      binance: {
-        privateReconcileIntervalMs: 0,
-        riskPollIntervalMs: 60_000,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+          riskPollIntervalMs: 60_000,
+        },
       },
     },
   });
@@ -1175,9 +1191,11 @@ test("Binance private reconcile can be disabled without disabling risk polling",
   const client = createClient({
     account: {
       streamOpenTimeoutMs: 50,
-      binance: {
-        riskPollIntervalMs: 5,
-        privateReconcileIntervalMs: 0,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 5,
+          privateReconcileIntervalMs: 0,
+        },
       },
     },
   });
@@ -1521,9 +1539,11 @@ test("account subscribe bootstraps Juplend lending balances and account risk", a
   const requests = installJuplendInfra();
   const client = createClient({
     account: {
-      juplend: {
-        pollIntervalMs: 60_000,
-        jupApiKey: "test-key",
+      venues: {
+        juplend: {
+          pollIntervalMs: 60_000,
+          jupApiKey: "test-key",
+        },
       },
     },
   });
@@ -1846,8 +1866,10 @@ test("Juplend polling replaces snapshots when positions disappear", async () => 
   const requests = installJuplendInfra();
   const client = createClient({
     account: {
-      juplend: {
-        pollIntervalMs: 5,
+      venues: {
+        juplend: {
+          pollIntervalMs: 5,
+        },
       },
     },
   });
@@ -1882,8 +1904,10 @@ test("Juplend polling does not overlap slow position reads", async () => {
   const requests = installJuplendInfra({ positionsDelayMs: 30 });
   const client = createClient({
     account: {
-      juplend: {
-        pollIntervalMs: 5,
+      venues: {
+        juplend: {
+          pollIntervalMs: 5,
+        },
       },
     },
   });
@@ -1906,8 +1930,10 @@ test("Juplend account subscribe forwards explicit rpcUrl to lend-read", async ()
   const requests = installJuplendInfra();
   const client = createClient({
     account: {
-      juplend: {
-        rpcUrl: "https://rpc.example",
+      venues: {
+        juplend: {
+          rpcUrl: "https://rpc.example",
+        },
       },
     },
   });
@@ -1982,8 +2008,10 @@ test("Juplend account subscribe falls back to lite vault metadata when Jup API f
   });
   const client = createClient({
     account: {
-      juplend: {
-        jupApiKey: "test-key",
+      venues: {
+        juplend: {
+          jupApiKey: "test-key",
+        },
       },
     },
   });
@@ -2054,8 +2082,10 @@ test("Juplend retries Jup enrichment after an earlier degraded fallback", async 
   });
   const firstClient = createClient({
     account: {
-      juplend: {
-        jupApiKey: "key-a",
+      venues: {
+        juplend: {
+          jupApiKey: "key-a",
+        },
       },
     },
   });
@@ -2079,8 +2109,10 @@ test("Juplend retries Jup enrichment after an earlier degraded fallback", async 
 
   const secondClient = createClient({
     account: {
-      juplend: {
-        jupApiKey: "key-a",
+      venues: {
+        juplend: {
+          jupApiKey: "key-a",
+        },
       },
     },
   });

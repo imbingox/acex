@@ -13,6 +13,102 @@ import type {
   VenueServerTime,
 } from "../types/index.ts";
 
+export type SymbolMappingDirection = "to_unified" | "to_venue";
+
+export class SymbolMappingError extends Error {
+  readonly isAcexOrderPreflightError = true;
+  readonly venue: Venue;
+  readonly family: string;
+  readonly symbol: string;
+  readonly direction: SymbolMappingDirection;
+
+  constructor(input: {
+    readonly venue: Venue;
+    readonly family: string;
+    readonly symbol: string;
+    readonly direction: SymbolMappingDirection;
+  }) {
+    super(
+      `Unable to map ${input.venue} ${input.family} symbol (${input.direction}): ${input.symbol}`,
+    );
+    this.name = "SymbolMappingError";
+    this.venue = input.venue;
+    this.family = input.family;
+    this.symbol = input.symbol;
+    this.direction = input.direction;
+  }
+}
+
+export class CatalogUnavailableError extends Error {
+  readonly isAcexOrderPreflightError = true;
+  readonly venue: Venue;
+  readonly family: string;
+  readonly symbol?: string;
+  override readonly cause?: unknown;
+
+  constructor(input: {
+    readonly venue: Venue;
+    readonly family: string;
+    readonly symbol?: string;
+    readonly cause?: unknown;
+  }) {
+    super(
+      `Unable to load ${input.venue} ${input.family} market catalog${
+        input.symbol ? ` for symbol: ${input.symbol}` : ""
+      }`,
+      { cause: input.cause },
+    );
+    this.name = "CatalogUnavailableError";
+    this.venue = input.venue;
+    this.family = input.family;
+    this.symbol = input.symbol;
+    this.cause = input.cause;
+  }
+}
+
+export function isSymbolMappingError(
+  error: unknown,
+): error is SymbolMappingError {
+  return (
+    error instanceof SymbolMappingError ||
+    (isRecord(error) &&
+      error.name === "SymbolMappingError" &&
+      error.isAcexOrderPreflightError === true)
+  );
+}
+
+export function isCatalogUnavailableError(
+  error: unknown,
+): error is CatalogUnavailableError {
+  return (
+    error instanceof CatalogUnavailableError ||
+    (isRecord(error) &&
+      error.name === "CatalogUnavailableError" &&
+      error.isAcexOrderPreflightError === true)
+  );
+}
+
+export function isOrderPreflightError(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (isSymbolMappingError(current) || isCatalogUnavailableError(current)) {
+      return true;
+    }
+
+    if (!isRecord(current) || !("cause" in current)) {
+      return false;
+    }
+
+    current = current.cause;
+  }
+
+  return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
+}
+
 export interface StreamHandle {
   readonly ready: Promise<void>;
   close(): void;
@@ -230,6 +326,7 @@ export interface PrivateStreamCallbacks {
   onFreshnessChange(freshness: "stale", reason: "heartbeat_timeout"): void;
   onDisconnected(): void;
   onReconnected(): void;
+  requestReconcile?(reason: "symbol_mapping_miss"): void;
   onError(error: Error): void;
 }
 

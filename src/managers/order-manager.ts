@@ -3,6 +3,7 @@ import type {
   RawOrderTrade,
   RawOrderUpdate,
 } from "../adapters/types.ts";
+import { isOrderPreflightError } from "../adapters/types.ts";
 import type {
   AccountAwareManager,
   ClientContext,
@@ -1180,7 +1181,14 @@ export class OrderManagerImpl
   }
 
   private shouldRetainPendingClaimAfterCreateError(error: unknown): boolean {
-    return isTransportError(error) && error.kind === "timeout";
+    if (isOrderPreflightError(error)) {
+      return false;
+    }
+
+    return (
+      isTransportError(error) &&
+      (error.kind === "timeout" || error.kind === "network")
+    );
   }
 
   private validateCreateOrderInput(
@@ -1351,7 +1359,7 @@ export class OrderManagerImpl
     const detailsWithReason = this.addVenueErrorReason(metadata.venue, details);
     return {
       ...detailsWithReason,
-      orderState: getOrderState(code, detailsWithReason),
+      orderState: getOrderState(code, detailsWithReason, error),
     };
   }
 
@@ -1408,8 +1416,12 @@ function isOrderErrorCode(
 function getOrderState(
   code: OrderErrorCode,
   details: AcexErrorDetails,
+  error?: unknown,
 ): OrderCommandOrderState {
   if (code === "ORDER_INPUT_INVALID") {
+    return "not_placed";
+  }
+  if (isOrderPreflightError(error)) {
     return "not_placed";
   }
 

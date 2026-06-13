@@ -60,19 +60,21 @@ await client.stop();
 
 ### 同一个 client 同时使用 Binance + Juplend
 
-`createClient({ account: { binance: { riskPollIntervalMs, privateReconcileIntervalMs }, juplend: { pollIntervalMs, rpcUrl, jupApiKey } } })` 只是分别配置 Binance 风险/仓位校准、Binance private REST 对账和 Juplend 账户 polling / RPC / Jup API，不代表这个 client 只能注册某个 venue。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。`account.binance.privateReconcileIntervalMs` 省略时默认 60s，显式传 `0` 可关闭 private reconcile（详细行为见 [API 文档](docs/api.md#41-createclientoptions)）。
+`createClient({ account: { venues: { binance: { riskPollIntervalMs, privateReconcileIntervalMs }, juplend: { pollIntervalMs, rpcUrl, jupApiKey } } } })` 只是分别配置 Binance 风险/仓位校准、Binance private REST 对账和 Juplend 账户 polling / RPC / Jup API，不代表这个 client 只能注册某个 venue。一个 `AcexClient` 可以同时注册 Binance 交易账户和 Juplend 借贷只读账户，用同一个 `AccountManager` 对比风险值。`account.venues.binance.privateReconcileIntervalMs` 省略时默认 60s，显式传 `0` 可关闭 private reconcile（详细行为见 [API 文档](docs/api.md#41-createclientoptions)）。
 
 ```ts
 const client = createClient({
   account: {
-    binance: {
-      riskPollIntervalMs: 5_000,
-      privateReconcileIntervalMs: 60_000, // 默认值；传 0 可关闭 private reconcile
-    },
-    juplend: {
-      pollIntervalMs: 30_000,
-      rpcUrl: process.env.SOL_HELIUS_RPC,
-      jupApiKey: process.env.JUP_API,
+    venues: {
+      binance: {
+        riskPollIntervalMs: 5_000,
+        privateReconcileIntervalMs: 60_000, // 默认值；传 0 可关闭 private reconcile
+      },
+      juplend: {
+        pollIntervalMs: 30_000,
+        rpcUrl: process.env.SOL_HELIUS_RPC,
+        jupApiKey: process.env.JUP_API,
+      },
     },
   },
 });
@@ -124,7 +126,7 @@ console.log({
 await client.stop();
 ```
 
-Juplend 使用 `@jup-ag/lend-read` 通过 Solana RPC 读取原生借贷仓位，不需要私钥，也不支持 supply / borrow / repay / withdraw 等写操作。`accountId` 是你自定义的 SDK 账户名。聚合钱包全部仓位时传 `options.walletAddress`；只想观察单个仓位时，可直接传 `options.vaultId + options.positionId`，这样不会先扫整个钱包。`account.juplend.rpcUrl` 可显式指定 RPC；未指定时默认读取 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。token metadata / price 优先走 Jup 官方 `Tokens V2 + Price V3`，可通过 `account.juplend.jupApiKey` 或环境变量 `JUP_API` 注入；拿不到时退回 lite vault metadata。
+Juplend 使用 `@jup-ag/lend-read` 通过 Solana RPC 读取原生借贷仓位，不需要私钥，也不支持 supply / borrow / repay / withdraw 等写操作。`accountId` 是你自定义的 SDK 账户名。聚合钱包全部仓位时传 `options.walletAddress`；只想观察单个仓位时，可直接传 `options.vaultId + options.positionId`，这样不会先扫整个钱包。`account.venues.juplend.rpcUrl` 可显式指定 RPC；未指定时默认读取 `SOL_HELIUS_RPC`，再 fallback 到 SDK 默认 RPC。token metadata / price 优先走 Jup 官方 `Tokens V2 + Price V3`，可通过 `account.venues.juplend.jupApiKey` 或环境变量 `JUP_API` 注入；拿不到时退回 lite vault metadata。
 
 ### 查询 venue 能力
 

@@ -839,7 +839,11 @@ async function main(): Promise<void> {
       streamOpenTimeoutMs: 15_000,
       streamReconnectDelayMs: 1_000,
       streamReconnectMaxDelayMs: 3_000,
-      listenKeyKeepAliveMs,
+      venues: {
+        binance: {
+          listenKeyKeepAliveMs,
+        },
+      },
     },
   });
   const errors: ErrorSummary[] = [];

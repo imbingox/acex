@@ -25,34 +25,37 @@ import { SyncingTimeProvider } from "../internal/syncing-time-provider.ts";
 import { AccountManagerImpl } from "../managers/account-manager.ts";
 import { MarketManagerImpl } from "../managers/market-manager.ts";
 import { OrderManagerImpl } from "../managers/order-manager.ts";
-import type {
-  AccountCredentials,
-  AccountManager,
-  AccountRuntimeOptions,
-  AcexClient,
-  AcexInternalError,
-  BufferedEventStreamOptions,
-  CancelAllOrdersInput,
-  CancelOrderInput,
-  ClientEventStreams,
-  ClientHealthSnapshot,
-  ClientStatus,
-  ClientStatusChangedEvent,
-  CreateClientOptions,
-  CreateOrderInput,
-  HealthEvent,
-  HealthEventFilter,
-  JuplendAccountRuntimeOptions,
-  MarketManager,
-  OrderManager,
-  RateLimiter,
-  RegisterAccountInput,
-  RegisterAccountResult,
-  StopOptions,
-  TimeProvider,
-  Venue,
-  VenueCapabilities,
-  VenueOrderCapabilities,
+import {
+  type AccountCredentials,
+  type AccountManager,
+  type AccountRuntimeOptions,
+  type AcexClient,
+  type AcexInternalError,
+  type BufferedEventStreamOptions,
+  type CancelAllOrdersInput,
+  type CancelOrderInput,
+  type ClientEventStreams,
+  type ClientHealthSnapshot,
+  type ClientStatus,
+  type ClientStatusChangedEvent,
+  type CreateClientOptions,
+  type CreateOrderInput,
+  type HealthEvent,
+  type HealthEventFilter,
+  type JuplendAccountRuntimeOptions,
+  type MarketManager,
+  METRIC_NAMES,
+  type MetricType,
+  type OnMetric,
+  type OrderManager,
+  type RateLimiter,
+  type RegisterAccountInput,
+  type RegisterAccountResult,
+  type StopOptions,
+  type TimeProvider,
+  type Venue,
+  type VenueCapabilities,
+  type VenueOrderCapabilities,
 } from "../types/index.ts";
 import {
   type ClientContext,
@@ -82,6 +85,12 @@ type AccountVenueRuntimeOptionsMap = NonNullable<
 interface VenueAdapterFactoryDeps {
   readonly rateLimiter: RateLimiter;
   readonly signingClock?: TimeProvider;
+  readonly emitMetric: (
+    name: string,
+    value: number,
+    type: MetricType,
+    tags?: Record<string, string>,
+  ) => void;
   readonly publishRuntimeError: (
     source: AcexInternalError["source"],
     error: Error,
@@ -177,6 +186,7 @@ function createBinanceAdapterGroup(
     marketAdapter: new BinanceMarketAdapter({
       rateLimiter: deps.rateLimiter,
       marketCatalog,
+      emitMetric: deps.emitMetric,
     }),
     privateAdapter: new BinancePrivateAdapter({
       signingClock,
@@ -267,9 +277,11 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
   private readonly adapterLifecycles: VenueAdapterLifecycle[];
   private readonly inFlightOrderCommands = new Set<Promise<unknown>>();
+  private readonly onMetric: OnMetric | undefined;
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
+    this.onMetric = options.onMetric;
 
     const rateLimiter =
       options.rateLimiter ??
@@ -280,6 +292,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       {
         rateLimiter,
         signingClock: options.clock,
+        emitMetric: this.emitMetric.bind(this),
         publishRuntimeError: this.publishRuntimeError.bind(this),
       },
       options.account?.venues,
@@ -473,6 +486,10 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
   // --- ClientContext ---
 
+  get metricsEnabled(): boolean {
+    return this.onMetric !== undefined;
+  }
+
   now(): number {
     return Date.now();
   }
@@ -621,10 +638,31 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.healthBus.publish(event);
   }
 
+  emitMetric(
+    name: string,
+    value: number,
+    type: MetricType,
+    tags?: Record<string, string>,
+  ): void {
+    const onMetric = this.onMetric;
+    if (!onMetric) {
+      return;
+    }
+
+    try {
+      onMetric(name, value, type, tags);
+    } catch {
+      // Observability callbacks must not break client workflows.
+    }
+  }
+
   private createOverflowHandler(
     stream: string,
   ): (info: AsyncEventBusOverflowInfo) => void {
     return ({ maxBuffer }) => {
+      this.emitMetric(METRIC_NAMES.eventBufferOverflow, 1, "counter", {
+        stream,
+      });
       const error = new AcexError(
         "EVENT_BUFFER_OVERFLOW",
         `Event stream buffer overflow: ${stream}`,

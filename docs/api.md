@@ -230,6 +230,9 @@ const client = createClient({
   clock: {
     now: () => Date.now(),
   },
+  onMetric(name, value, type, tags) {
+    metrics.record(name, value, type, tags);
+  },
   market: {
     l1InitialMessageTimeoutMs: 15_000,
     l1StaleAfterMs: 15_000,
@@ -257,7 +260,26 @@ const client = createClient({
 });
 ```
 
-`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `account.venues.binance.riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`account.venues.binance.privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。Juplend 只使用 `account.venues.juplend.pollIntervalMs` 驱动 adapter polling，不继承 Binance 的 reconcile/risk polling 默认。`sandbox`、`logger`、`logLevel` 目前是预留位。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `account.venues.binance.riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`account.venues.binance.privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。Juplend 只使用 `account.venues.juplend.pollIntervalMs` 驱动 adapter polling，不继承 Binance 的 reconcile/risk polling 默认。`onMetric` 是同步可观测性钩子；callback 抛错会被 SDK 吞掉，不会打断下单、订阅或事件发布流程。未传 `onMetric` 时，热路径不会计算 latency 或构造 tags。`sandbox`、`logger`、`logLevel` 目前是预留位。
+
+### 4.1.1 Metrics
+
+```ts
+import { METRIC_NAMES, type MetricType, type OnMetric } from "@imbingox/acex";
+
+const onMetric: OnMetric = (name, value, type, tags) => {
+  metrics.record(name, value, type, tags);
+};
+
+const client = createClient({ onMetric });
+```
+
+| name | type | tags | 触发时机 |
+|---|---|---|---|
+| `order.command.rtt` | `timing` | `venue`, `op` (`create` / `cancel` / `cancelAll`), `accountId`, `outcome` (`success` / `error`) | `order.createOrder()` / `cancelOrder()` / `cancelAllOrders()` 的 private command await 完成或失败后；value 为单调时钟 RTT 毫秒 |
+| `ws.message.latency` | `timing` | L1: `venue`, `channel=l1book`, `symbol`; private: `venue`, `channel=account|order`, `accountId` | WebSocket update 带 `exchangeTs` 时；value 为 `receivedAt - exchangeTs` 毫秒 |
+| `ws.reconnect` | `counter` | `venue`, `channel` (`private`, `l1book`, `fundingRate`) | 已建立过的 private 或 market WebSocket 再次 open 时 |
+| `event.buffer.overflow` | `counter` | `stream` | `AsyncEventBus` buffer 模式慢消费者超过 `maxBuffer` 并丢弃最旧事件时 |
 
 ### 4.2 `start()` / `stop()`
 
@@ -642,6 +664,7 @@ interface CreateClientOptions {
   rateLimit?: {
     utilizationTarget?: number;
   };
+  onMetric?: OnMetric;
   logger?: Logger;
   logLevel?: "debug" | "info" | "warn" | "error";
   market?: {
@@ -689,6 +712,21 @@ interface RateLimitUsage {
 type RateLimitPriority = "normal" | "cancel" | "risk" | (string & {});
 type RateLimitBucketKind = "request_weight" | "orders" | (string & {});
 type RateLimitScopeDimension = "venue" | "account" | "endpoint";
+type MetricType = "counter" | "gauge" | "timing";
+
+type OnMetric = (
+  name: string,
+  value: number,
+  type: MetricType,
+  tags?: Record<string, string>,
+) => void;
+
+const METRIC_NAMES = {
+  orderCommandRtt: "order.command.rtt",
+  wsMessageLatency: "ws.message.latency",
+  wsReconnect: "ws.reconnect",
+  eventBufferOverflow: "event.buffer.overflow",
+} as const;
 
 interface RateLimitBucketReserve {
   priority: RateLimitPriority;

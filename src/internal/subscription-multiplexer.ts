@@ -46,7 +46,7 @@ export interface VenueStreamProtocol<TMessage, TDescriptor, TPayload> {
     | { kind: "ignore" };
 }
 
-export interface SubscriptionMultiplexerOptions {
+export interface SubscriptionMultiplexerOptions<TDescriptor = unknown> {
   initialMessageTimeoutMs: number;
   staleAfterMs: number;
   reconnectDelayMs: number;
@@ -57,6 +57,10 @@ export interface SubscriptionMultiplexerOptions {
   createWebSocket?: WebSocketFactory;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
+  onReconnect?: (info: {
+    connectionKey: string;
+    descriptors: readonly TDescriptor[];
+  }) => void;
 }
 
 interface Deferred {
@@ -144,7 +148,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       TDescriptor,
       TPayload
     >,
-    private readonly options: SubscriptionMultiplexerOptions,
+    private readonly options: SubscriptionMultiplexerOptions<TDescriptor>,
   ) {
     this.now = options.now ?? Date.now;
     this.createWebSocket = options.createWebSocket;
@@ -378,6 +382,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     connection.lastControlSentAt = undefined;
 
     if (connection.hasOpened) {
+      this.notifyReconnect(connection);
       this.markAllStale(connection, "heartbeat_timeout");
     }
     connection.hasOpened = true;
@@ -390,6 +395,19 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
         sub.descriptor,
       ]),
     );
+  }
+
+  private notifyReconnect(
+    connection: ConnectionState<TDescriptor, TPayload>,
+  ): void {
+    try {
+      this.options.onReconnect?.({
+        connectionKey: connection.key,
+        descriptors: [...connection.subs.values()].map((sub) => sub.descriptor),
+      });
+    } catch {
+      // Observability callbacks must not break stream recovery.
+    }
   }
 
   private handleUnexpectedClose(

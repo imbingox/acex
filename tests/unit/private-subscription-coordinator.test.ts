@@ -30,11 +30,20 @@ import type {
   CancelOrderInput,
   CreateOrderInput,
   HealthEvent,
+  MetricType,
   OrderSnapshot,
   Venue,
   VenueAccountCapabilities,
   VenueOrderCapabilities,
 } from "../../src/types/index.ts";
+import { METRIC_NAMES } from "../../src/types/index.ts";
+
+interface MetricCall {
+  name: string;
+  value: number;
+  type: MetricType;
+  tags?: Record<string, string>;
+}
 
 function binanceRuntimeOptions(
   binance: NonNullable<AccountRuntimeOptions["venues"]>["binance"],
@@ -52,6 +61,8 @@ class StubContext implements ClientContext {
     },
   };
   errors: AcexInternalError[] = [];
+  metrics: MetricCall[] = [];
+  metricsEnabled = false;
 
   now(): number {
     return Date.now();
@@ -123,6 +134,15 @@ class StubContext implements ClientContext {
   }
 
   publishHealthEvent(_event: HealthEvent): void {}
+
+  emitMetric(
+    name: string,
+    value: number,
+    type: MetricType,
+    tags?: Record<string, string>,
+  ): void {
+    this.metrics.push({ name, value, type, tags });
+  }
 }
 
 class StubAccountConsumer implements PrivateAccountDataConsumer {
@@ -964,6 +984,79 @@ test("risk level changes are forwarded only when account data is subscribed", as
 
   coordinator.unsubscribeOrderFeed("main-binance");
   coordinator.unsubscribeAccountFeed("main-binance");
+});
+
+test("private stream callbacks emit latency and reconnect metrics", async () => {
+  const context = new StubContext();
+  context.metricsEnabled = true;
+  const adapter = new ManualReconcileBinanceAdapter();
+  const accountConsumer = new StubAccountConsumer();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    accountConsumer,
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeAccountFeed("main-binance");
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks).toBeDefined();
+
+  adapter.callbacks?.onAccountUpdate({
+    balances: [],
+    exchangeTs: 1710000000100,
+    receivedAt: 1710000000115,
+  });
+  adapter.callbacks?.onOrderUpdate({
+    orderId: "1001",
+    symbol: "BTC/USDT:USDT",
+    side: "buy",
+    type: "limit",
+    status: "open",
+    amount: "1",
+    filled: "0",
+    exchangeTs: 1710000000200,
+    receivedAt: 1710000000230,
+  });
+  adapter.callbacks?.onReconnected?.();
+
+  expect(accountConsumer.updates).toHaveLength(1);
+  expect(orderConsumer.updates).toHaveLength(1);
+  expect(context.metrics.slice(0, 3)).toEqual([
+    {
+      name: METRIC_NAMES.wsMessageLatency,
+      value: 15,
+      type: "timing",
+      tags: {
+        venue: "binance",
+        channel: "account",
+        accountId: "main-binance",
+      },
+    },
+    {
+      name: METRIC_NAMES.wsMessageLatency,
+      value: 30,
+      type: "timing",
+      tags: {
+        venue: "binance",
+        channel: "order",
+        accountId: "main-binance",
+      },
+    },
+    {
+      name: METRIC_NAMES.wsReconnect,
+      value: 1,
+      type: "counter",
+      tags: {
+        venue: "binance",
+        channel: "private",
+      },
+    },
+  ]);
 });
 
 test("private reconcile re-arms dirty requests queued in the finalizer window", async () => {

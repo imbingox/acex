@@ -46,6 +46,7 @@ import type {
   UnsubscribeOrdersInput,
   Venue,
 } from "../types/index.ts";
+import { METRIC_NAMES } from "../types/index.ts";
 import {
   cloneOrderStatus,
   createOrderDataStatus,
@@ -227,6 +228,9 @@ export class OrderManagerImpl
       localOrderId,
     );
 
+    const metricStartedAt = performance.now();
+    let metricDurationMs: number | undefined;
+    let outcome: "success" | "error" = "error";
     try {
       const commandInput: CreateOrderInput = {
         ...input,
@@ -234,6 +238,7 @@ export class OrderManagerImpl
       };
       const requestStartedAt = this.context.now();
       const update = await this.context.createOrder(commandInput);
+      metricDurationMs = performance.now() - metricStartedAt;
       const snapshot = this.applyCommandUpdate(
         input.accountId,
         account.venue,
@@ -256,8 +261,10 @@ export class OrderManagerImpl
         venueClientOrderId,
         localOrderId,
       );
+      outcome = "success";
       return snapshot;
     } catch (error) {
+      metricDurationMs ??= performance.now() - metricStartedAt;
       if (!this.shouldRetainPendingClaimAfterCreateError(error)) {
         this.clearPendingClientOrderClaim(
           record,
@@ -275,6 +282,14 @@ export class OrderManagerImpl
           symbol: input.symbol,
         },
       );
+    } finally {
+      this.emitOrderCommandRtt(
+        "create",
+        input.accountId,
+        account.venue,
+        metricDurationMs ?? performance.now() - metricStartedAt,
+        outcome,
+      );
     }
   }
 
@@ -284,9 +299,13 @@ export class OrderManagerImpl
     this.context.ensurePrivateCredentials(input.accountId);
     this.validateCancelOrderInput(input, account.venue);
 
+    const metricStartedAt = performance.now();
+    let metricDurationMs: number | undefined;
+    let outcome: "success" | "error" = "error";
     try {
       const requestStartedAt = this.context.now();
       const update = await this.context.cancelOrder(input);
+      metricDurationMs = performance.now() - metricStartedAt;
       const snapshot = this.applyCommandUpdate(
         input.accountId,
         account.venue,
@@ -307,8 +326,10 @@ export class OrderManagerImpl
         );
       }
 
+      outcome = "success";
       return snapshot;
     } catch (error) {
+      metricDurationMs ??= performance.now() - metricStartedAt;
       throw this.wrapCommandError(
         "ORDER_CANCEL_FAILED",
         `Failed to cancel order for ${input.accountId}: ${input.symbol}`,
@@ -319,6 +340,14 @@ export class OrderManagerImpl
           symbol: input.symbol,
         },
       );
+    } finally {
+      this.emitOrderCommandRtt(
+        "cancel",
+        input.accountId,
+        account.venue,
+        metricDurationMs ?? performance.now() - metricStartedAt,
+        outcome,
+      );
     }
   }
 
@@ -327,9 +356,13 @@ export class OrderManagerImpl
     const account = this.context.getRegisteredAccount(input.accountId);
     this.context.ensurePrivateCredentials(input.accountId);
 
+    const metricStartedAt = performance.now();
+    let metricDurationMs: number | undefined;
+    let outcome: "success" | "error" = "error";
     try {
       const requestStartedAt = this.context.now();
       const updates = await this.context.cancelAllOrders(input);
+      metricDurationMs = performance.now() - metricStartedAt;
       const snapshots = this.applyCommandUpdates(
         input.accountId,
         account.venue,
@@ -350,8 +383,10 @@ export class OrderManagerImpl
         );
       }
 
+      outcome = "success";
       return snapshots;
     } catch (error) {
+      metricDurationMs ??= performance.now() - metricStartedAt;
       throw this.wrapCommandError(
         "ORDER_CANCEL_ALL_FAILED",
         `Failed to cancel all orders for ${input.accountId}: ${input.symbol}`,
@@ -361,6 +396,14 @@ export class OrderManagerImpl
           venue: account.venue,
           symbol: input.symbol,
         },
+      );
+    } finally {
+      this.emitOrderCommandRtt(
+        "cancelAll",
+        input.accountId,
+        account.venue,
+        metricDurationMs ?? performance.now() - metricStartedAt,
+        outcome,
       );
     }
   }
@@ -1388,10 +1431,37 @@ export class OrderManagerImpl
     };
   }
 
+  private emitOrderCommandRtt(
+    op: "create" | "cancel" | "cancelAll",
+    accountId: string,
+    venue: Venue,
+    durationMs: number,
+    outcome: "success" | "error",
+  ): void {
+    if (!this.context.metricsEnabled) {
+      return;
+    }
+
+    this.context.emitMetric(
+      METRIC_NAMES.orderCommandRtt,
+      durationMs,
+      "timing",
+      {
+        venue,
+        op,
+        accountId,
+        outcome,
+      },
+    );
+  }
+
   private createOverflowHandler(
     stream: string,
   ): (info: AsyncEventBusOverflowInfo) => void {
     return ({ maxBuffer }) => {
+      this.context.emitMetric(METRIC_NAMES.eventBufferOverflow, 1, "counter", {
+        stream,
+      });
       const error = new AcexError(
         "EVENT_BUFFER_OVERFLOW",
         `Event stream buffer overflow: ${stream}`,

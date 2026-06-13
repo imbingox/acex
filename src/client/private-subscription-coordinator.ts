@@ -18,6 +18,7 @@ import type {
   PrivateRuntimeReason,
   Venue,
 } from "../types/index.ts";
+import { METRIC_NAMES } from "../types/index.ts";
 import type {
   ClientContext,
   ExpiredPendingOrderClaim,
@@ -1344,6 +1345,19 @@ export class PrivateSubscriptionCoordinator {
             return;
           }
 
+          if (this.context.metricsEnabled && update.exchangeTs !== undefined) {
+            this.context.emitMetric(
+              METRIC_NAMES.wsMessageLatency,
+              update.receivedAt - update.exchangeTs,
+              "timing",
+              {
+                venue: record.venue,
+                channel: "account",
+                accountId: record.accountId,
+              },
+            );
+          }
+
           record.accountReady = true;
           this.accountConsumer.onPrivateAccountUpdate(
             record.accountId,
@@ -1366,6 +1380,19 @@ export class PrivateSubscriptionCoordinator {
         onOrderUpdate: (update) => {
           if (!record.ordersSubscribed) {
             return;
+          }
+
+          if (this.context.metricsEnabled && update.exchangeTs !== undefined) {
+            this.context.emitMetric(
+              METRIC_NAMES.wsMessageLatency,
+              update.receivedAt - update.exchangeTs,
+              "timing",
+              {
+                venue: record.venue,
+                channel: "order",
+                accountId: record.accountId,
+              },
+            );
           }
 
           record.orderReady = true;
@@ -1424,6 +1451,10 @@ export class PrivateSubscriptionCoordinator {
           }
         },
         onReconnected: () => {
+          this.context.emitMetric(METRIC_NAMES.wsReconnect, 1, "counter", {
+            venue: record.venue,
+            channel: "private",
+          });
           this.requestImmediateReconcile(record);
         },
         requestReconcile: () => {

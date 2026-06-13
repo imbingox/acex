@@ -269,6 +269,18 @@ interface VenueHeartbeat {
 - 未声明 `heartbeat` 的 protocol 行为必须保持完全不变。当前 Binance 行情流不配置应用层 heartbeat。
 - WebSocket 协议层 ping/pong（opcode 9/10）不通过此接口建模；假设 Bun/WebSocket 客户端会按 RFC6455 自动回复服务端 ping。Gate futures 与 Binance 这类依赖协议层 pong 的 venue 不应为了协议层 pong 配置 `heartbeat`。若未来替换 WebSocket runtime 或发现自动 pong 行为变化，必须先补 Bun client 自动 pong 回归探针，再调整该假设。
 
+#### 3.10.2 observability metric 注入契约
+
+- Public 注入点固定为 `CreateClientOptions.onMetric(name, value, type, tags?)`；`MetricType = "counter" | "gauge" | "timing"`，SDK 自带 metric name 必须从 `METRIC_NAMES` 常量导出并在 `docs/api.md` 列表说明。
+- Runtime 持有 `onMetric`，通过 `ClientContext.emitMetric()` 暴露给 manager / coordinator；`emitMetric()` 第一行必须在无 hook 时直接 return，并用 `try/catch` 吞掉 callback 异常。observability callback 不得打断下单、订阅、reconnect 或事件发布主流程。
+- 热路径必须先判 `context.metricsEnabled`，再计算 latency 和构造 tags。当前热路径包括 L1 book `onUpdate`、private account/order update。未配置 `onMetric` 时，不得为这些路径构造 `{ venue, symbol }` / `{ accountId }` tags。
+- Adapter 层需要 metric 时，必须经 runtime factory deps 注入 `emitMetric`，与 `publishRuntimeError` 的注入方向一致；adapter 不得直接读取 `CreateClientOptions` 或 import runtime。当前 market reconnect 由 `SubscriptionMultiplexer.onReconnect` 通知 adapter，再由 adapter 发 `METRIC_NAMES.wsReconnect`。
+- 当前四类 SDK metric 的位置固定：
+  - `order.command.rtt`：`OrderManagerImpl.createOrder()` / `cancelOrder()` / `cancelAllOrders()`，用 `performance.now()` 包住 `await context.*`，tags 为 `venue`、`op`、`accountId`、`outcome`。
+  - `ws.message.latency`：L1 tick 在 `MarketManagerImpl` 的 L1 `onUpdate`；private account/order 在 `PrivateSubscriptionCoordinator` 的 `onAccountUpdate` / `onOrderUpdate`。只有 `exchangeTs` 存在时发，value 为 `receivedAt - exchangeTs`。
+  - `ws.reconnect`：private 在 coordinator `onReconnected`；market 在 multiplexer 识别已建立连接再次 open 后，经 Binance market adapter 发出。tags 至少包含 `venue` 与 `channel`。
+  - `event.buffer.overflow`：所有 `AsyncEventBus` buffer overflow handler 发 counter，tags 为 `stream`。runtime / manager 的 overflow handler 仍必须继续发布 `EVENT_BUFFER_OVERFLOW` runtime error。
+
 ### 4. Validation & Error Matrix
 
 | 场景 | 正确做法 | 禁止做法 |

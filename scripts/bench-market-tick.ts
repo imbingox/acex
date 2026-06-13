@@ -92,6 +92,7 @@ function notUsed(name: string): never {
 
 function createContext(nowRef: { value: number }): ClientContext {
   return {
+    metricsEnabled: false,
     now(): number {
       return nowRef.value;
     },
@@ -146,6 +147,7 @@ function createContext(nowRef: { value: number }): ClientContext {
     publishHealthEvent(event: HealthEvent): void {
       void event;
     },
+    emitMetric(): void {},
   };
 }
 

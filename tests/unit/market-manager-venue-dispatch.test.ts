@@ -46,6 +46,7 @@ import {
 class StubMarketContext implements ClientContext {
   readonly errors: AcexInternalError[] = [];
   readonly healthEvents: HealthEvent[] = [];
+  readonly metricsEnabled = false;
 
   now(): number {
     return Date.now();
@@ -112,6 +113,8 @@ class StubMarketContext implements ClientContext {
   publishHealthEvent(event: HealthEvent): void {
     this.healthEvents.push(event);
   }
+
+  emitMetric(): void {}
 }
 
 class NotStartedMarketContext extends StubMarketContext {

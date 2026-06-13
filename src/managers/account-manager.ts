@@ -41,6 +41,7 @@ import type {
   UnsubscribeAccountInput,
   Venue,
 } from "../types/index.ts";
+import { METRIC_NAMES } from "../types/index.ts";
 
 interface AccountRecord {
   accountId: string;
@@ -996,6 +997,9 @@ export class AccountManagerImpl
     stream: string,
   ): (info: AsyncEventBusOverflowInfo) => void {
     return ({ maxBuffer }) => {
+      this.context.emitMetric(METRIC_NAMES.eventBufferOverflow, 1, "counter", {
+        stream,
+      });
       const error = new AcexError(
         "EVENT_BUFFER_OVERFLOW",
         `Event stream buffer overflow: ${stream}`,

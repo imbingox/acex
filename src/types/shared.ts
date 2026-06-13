@@ -24,6 +24,22 @@ export interface Logger {
   error(msg: string, context?: Record<string, unknown>): void;
 }
 
+export type MetricType = "counter" | "gauge" | "timing";
+
+export type OnMetric = (
+  name: string,
+  value: number,
+  type: MetricType,
+  tags?: Record<string, string>,
+) => void;
+
+export const METRIC_NAMES = {
+  orderCommandRtt: "order.command.rtt",
+  wsMessageLatency: "ws.message.latency",
+  wsReconnect: "ws.reconnect",
+  eventBufferOverflow: "event.buffer.overflow",
+} as const;
+
 export interface TimeProvider {
   /** Millisecond timestamp used for outbound request/signing timestamps. */
   now(): number;
@@ -319,6 +335,7 @@ export interface CreateClientOptions {
   clock?: TimeProvider;
   rateLimiter?: RateLimiter;
   rateLimit?: RateLimitOptions;
+  onMetric?: OnMetric;
   logger?: Logger;
   logLevel?: LogLevel;
   market?: MarketRuntimeOptions;

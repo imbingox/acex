@@ -1469,3 +1469,41 @@ AsyncEventBus 新增 conflate/buffer 背压（latest-wins + drop-oldest + 每 ep
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: P2 批① 工程清理 + PAPI riskLevelChange 风控事件
+
+**Date**: 2026-06-13
+**Task**: P2 批① 工程清理 + PAPI riskLevelChange 风控事件
+**Branch**: `codex/p2-batch1-engineering-cleanup`
+
+### Summary
+
+P2 批①：事件总线并发 next 改 FIFO + resumeStreams 并发恢复、cid 进程熵、OrderType 归一+rawType（P2-12）；account 冻结共享快照（P2-9）；stop graceful drain + activeClients 修复 + assertStarted 门控（P2-10）；透传 PAPI riskLevelChange 三态风控为 account.risk_level_change + 回填 RiskSnapshot.riskLevel（P2-7，首版误用 USDM MARGIN_CALL 形状致 live 死代码，经独立二审+官方文档核实后 reset 重做）；P2-8 分发产物裁掉（Bun-only 自用）。二审另发现 bootstrap-vs-stream 既有竞态，记为 P2-13 暂不修。codex 实现+两轮独立二审，lint/type-check/311 test 全绿，1 patch+1 minor changeset。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `86fa011` | (see git log) |
+| `c2f07a3` | (see git log) |
+| `7e95c58` | (see git log) |
+| `8f060c2` | (see git log) |
+| `716185b` | (see git log) |
+| `549546d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

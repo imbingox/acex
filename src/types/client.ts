@@ -3,11 +3,11 @@ import type {
   AccountManager,
   AccountStatusChangedEvent,
 } from "./account.ts";
+import type { FeeManager } from "./fee.ts";
 import type {
   MarketDataStatus,
   MarketManager,
   MarketStatusChangedEvent,
-  MarketType,
 } from "./market.ts";
 import type {
   CreateOrderType,
@@ -21,6 +21,7 @@ import type {
   BufferedEventStreamOptions,
   ClientStatus,
   CreateClientOptions,
+  MarketType,
   RegisterAccountInput,
   RegisterAccountResult,
   StopOptions,
@@ -137,6 +138,7 @@ export interface AcexClient {
   readonly market: MarketManager;
   readonly account: AccountManager;
   readonly order: OrderManager;
+  readonly fee: FeeManager;
   readonly events: ClientEventStreams;
 
   getStatus(): ClientStatus;

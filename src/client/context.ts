@@ -15,6 +15,7 @@ import type {
   CreateOrderInput,
   GetSymbolFeeRateInput,
   HealthEvent,
+  MarketDefinition,
   MetricType,
   OrderSnapshot,
   PrivateRuntimeReason,
@@ -35,6 +36,10 @@ export interface ClientContext {
   now(): number;
   assertStarted(): void;
   getRegisteredAccount(accountId: string): RegisteredAccountRecord;
+  getMarketDefinition(
+    venue: Venue,
+    symbol: string,
+  ): MarketDefinition | undefined;
   getPrivateOrderCapabilities(venue: Venue): VenueOrderCapabilities | undefined;
   normalizeVenueErrorCode(
     venue: Venue,

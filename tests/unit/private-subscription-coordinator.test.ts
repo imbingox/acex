@@ -32,6 +32,7 @@ import type {
   CreateOrderInput,
   GetSymbolFeeRateInput,
   HealthEvent,
+  MarketDefinition,
   MetricType,
   OrderSnapshot,
   Venue,
@@ -81,6 +82,13 @@ class StubContext implements ClientContext {
     }
 
     return this.account;
+  }
+
+  getMarketDefinition(
+    _venue: Venue,
+    _symbol: string,
+  ): MarketDefinition | undefined {
+    return undefined;
   }
 
   getPrivateOrderCapabilities(

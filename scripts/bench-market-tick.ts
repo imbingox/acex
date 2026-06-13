@@ -102,6 +102,14 @@ function createContext(nowRef: { value: number }): ClientContext {
     getRegisteredAccount() {
       return notUsed("getRegisteredAccount");
     },
+    getMarketDefinition(
+      venue: Venue,
+      symbol: string,
+    ): MarketDefinition | undefined {
+      void venue;
+      void symbol;
+      return undefined;
+    },
     getPrivateOrderCapabilities(
       venue: Venue,
     ): VenueOrderCapabilities | undefined {

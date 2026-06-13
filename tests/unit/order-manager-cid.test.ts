@@ -17,6 +17,7 @@ import type {
   CreateOrderInput,
   GetSymbolFeeRateInput,
   HealthEvent,
+  MarketDefinition,
   Venue,
   VenueOrderCapabilities,
 } from "../../src/types/index.ts";
@@ -40,6 +41,13 @@ class StubOrderContext implements ClientContext {
         secret: "secret",
       },
     };
+  }
+
+  getMarketDefinition(
+    _venue: Venue,
+    _symbol: string,
+  ): MarketDefinition | undefined {
+    return undefined;
   }
 
   getPrivateOrderCapabilities(

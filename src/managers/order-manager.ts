@@ -33,7 +33,6 @@ import type {
   CancelOrderInput,
   CreateOrderInput,
   GetOrderInput,
-  GetSymbolFeeRateInput,
   OrderDataStatus,
   OrderEvent,
   OrderEventStreams,
@@ -44,7 +43,6 @@ import type {
   OrderTrade,
   OrderTradeEvent,
   SubscribeOrdersInput,
-  SymbolFeeRate,
   UnsubscribeOrdersInput,
   Venue,
 } from "../types/index.ts";
@@ -94,8 +92,6 @@ type OrderCommandErrorCode =
   | "ORDER_CREATE_FAILED";
 
 type OrderErrorCode = OrderCommandErrorCode | "ORDER_INPUT_INVALID";
-
-type OrderReadErrorCode = "ORDER_FEE_RATE_FETCH_FAILED";
 
 type OrderCommandOrderState = NonNullable<AcexErrorDetails["orderState"]>;
 
@@ -408,35 +404,6 @@ export class OrderManagerImpl
         account.venue,
         metricDurationMs ?? performance.now() - metricStartedAt,
         outcome,
-      );
-    }
-  }
-
-  async getSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<SymbolFeeRate> {
-    this.context.assertStarted();
-    const account = this.context.getRegisteredAccount(input.accountId);
-    this.context.ensurePrivateCredentials(input.accountId);
-
-    try {
-      const feeRate = await this.context.fetchSymbolFeeRate(input);
-      return {
-        accountId: input.accountId,
-        venue: account.venue,
-        symbol: feeRate.symbol,
-        maker: toCanonical(feeRate.maker),
-        taker: toCanonical(feeRate.taker),
-        receivedAt: feeRate.receivedAt,
-      };
-    } catch (error) {
-      throw this.wrapError(
-        "ORDER_FEE_RATE_FETCH_FAILED",
-        `Failed to fetch symbol fee rate for ${input.accountId}: ${input.symbol}`,
-        error,
-        {
-          accountId: input.accountId,
-          venue: account.venue,
-          symbol: input.symbol,
-        },
       );
     }
   }
@@ -1414,35 +1381,6 @@ export class OrderManagerImpl
       metadata,
     );
     const details = this.buildOrderErrorDetails(code, metadata, error);
-    return new AcexError(code, formatAcexErrorMessage(message, details), {
-      cause: error,
-      details,
-    });
-  }
-
-  private wrapError(
-    code: OrderReadErrorCode,
-    message: string,
-    error: unknown,
-    metadata: {
-      accountId: string;
-      venue: Venue;
-      symbol: string;
-    },
-  ): AcexError {
-    if (error instanceof AcexError) {
-      return error;
-    }
-
-    this.context.publishRuntimeError(
-      "adapter",
-      error instanceof Error ? error : new Error(message),
-      metadata,
-    );
-    const details = this.addVenueErrorReason(
-      metadata.venue,
-      buildAcexErrorDetails(metadata, error) ?? metadata,
-    );
     return new AcexError(code, formatAcexErrorMessage(message, details), {
       cause: error,
       details,

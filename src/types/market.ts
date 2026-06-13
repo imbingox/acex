@@ -3,11 +3,12 @@ import type { AcexError } from "../errors.ts";
 import type {
   EventStreamOptions,
   MarketFreshness,
+  MarketType,
   SubscriptionActivity,
   Venue,
 } from "./shared.ts";
 
-export type MarketType = "spot" | "swap" | "future";
+export type { MarketType } from "./shared.ts";
 
 export interface MarketDefinition {
   venue: Venue;

@@ -60,6 +60,13 @@ class StubMarketContext implements ClientContext {
     throw new AcexError("ACCOUNT_NOT_FOUND", "Account not found");
   }
 
+  getMarketDefinition(
+    _venue: Venue,
+    _symbol: string,
+  ): MarketDefinition | undefined {
+    return undefined;
+  }
+
   getPrivateOrderCapabilities(
     _venue: Venue,
   ): VenueOrderCapabilities | undefined {

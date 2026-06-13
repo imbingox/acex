@@ -483,7 +483,7 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
   await iterator.return?.();
 });
 
-test("getSymbolFeeRate fetches Binance PAPI UM maker and taker rates", async () => {
+test("fee manager fetches Binance PAPI UM maker and taker rates", async () => {
   let now = 1710000001000;
   const requests = installBinancePrivateAccountInfra({
     commissionRate: {
@@ -515,7 +515,7 @@ test("getSymbolFeeRate fetches Binance PAPI UM maker and taker rates", async () 
     const originalDateNow = Date.now;
     Date.now = () => now;
     try {
-      return await client.order.getSymbolFeeRate({
+      return await client.fee.fetchSymbolFeeRate({
         accountId: "main-binance",
         symbol: "BTC/USDT:USDT",
       });
@@ -530,10 +530,22 @@ test("getSymbolFeeRate fetches Binance PAPI UM maker and taker rates", async () 
     accountId: "main-binance",
     venue: "binance",
     symbol: "BTC/USDT:USDT",
+    marketType: "swap",
     maker: "0.0002",
     taker: "0.0005",
+    source: "venue",
   });
   expect(feeRate.receivedAt).toBe(1710000002000);
+  expect(
+    client.fee.getSymbolFeeRate({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    maker: "0.0002",
+    taker: "0.0005",
+    source: "venue",
+  });
 
   const request = requests.find(
     (entry) =>
@@ -548,7 +560,7 @@ test("getSymbolFeeRate fetches Binance PAPI UM maker and taker rates", async () 
   expect(request?.url.searchParams.get("signature")).toBeTruthy();
 });
 
-test("getSymbolFeeRate wraps Binance fee rate failures with public error details", async () => {
+test("fee manager wraps Binance fee rate failures with public error details", async () => {
   installBinancePrivateAccountInfra({ failCommissionRate: true });
   const client = createClient();
 
@@ -562,15 +574,15 @@ test("getSymbolFeeRate wraps Binance fee rate failures with public error details
   });
   await client.start();
 
-  const failure = await client.order
-    .getSymbolFeeRate({
+  const failure = await client.fee
+    .fetchSymbolFeeRate({
       accountId: "main-binance",
       symbol: "BTC/USDT:USDT",
     })
     .catch((error) => error);
 
   expect(failure).toMatchObject({
-    code: "ORDER_FEE_RATE_FETCH_FAILED",
+    code: "FEE_RATE_FETCH_FAILED",
     details: {
       accountId: "main-binance",
       venue: "binance",
@@ -4539,13 +4551,28 @@ test("Juplend order commands are rejected before adapter command methods", async
     message: "Venue does not support private order commands: juplend",
   });
 
+  expect(
+    client.fee.getSymbolFeeRate({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+    }),
+  ).toMatchObject({
+    accountId: "jup-loop-a",
+    venue: "juplend",
+    symbol: "SOL/USDC",
+    marketType: "swap",
+    maker: "0.0002",
+    taker: "0.0005",
+    source: "default",
+  });
+
   await expect(
-    client.order.getSymbolFeeRate({
+    client.fee.fetchSymbolFeeRate({
       accountId: "jup-loop-a",
       symbol: "SOL/USDC",
     }),
   ).rejects.toMatchObject({
     code: "VENUE_NOT_SUPPORTED",
-    message: "Venue does not support symbol fee rate queries: juplend",
+    message: "Venue does not support symbol fee rate queries for swap: juplend",
   });
 });

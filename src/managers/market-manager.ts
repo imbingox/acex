@@ -1296,6 +1296,8 @@ export class MarketManagerImpl
   }
 
   private async resumeStreams(): Promise<void> {
+    const tasks: Array<() => Promise<void>> = [];
+
     for (const record of this.records.values()) {
       const market = record.market;
       if (!market) {
@@ -1303,29 +1305,43 @@ export class MarketManagerImpl
       }
 
       if (record.l1BookSubscribed && !record.l1BookStream) {
-        try {
+        tasks.push(async () => {
+          if (!record.l1BookSubscribed || record.l1BookStream) {
+            return;
+          }
+
           record.l1Freshness = record.l1Book ? "stale" : undefined;
           record.l1Reason = undefined;
           this.recomputeAndPublishStatus(record);
           await this.ensureL1BookStream(record, market);
-        } catch {
-          // Errors are already published through the runtime error bus.
-        }
+        });
       }
 
       if (record.fundingRateSubscribed && !record.fundingRateStream) {
-        try {
+        tasks.push(async () => {
+          if (!record.fundingRateSubscribed || record.fundingRateStream) {
+            return;
+          }
+
           record.fundingRateFreshness = record.fundingRate
             ? "stale"
             : undefined;
           record.fundingRateReason = undefined;
           this.recomputeAndPublishStatus(record);
           await this.ensureFundingRateStream(record, market);
+        });
+      }
+    }
+
+    await Promise.allSettled(
+      tasks.map(async (task) => {
+        try {
+          await task();
         } catch {
           // Errors are already published through the runtime error bus.
         }
-      }
-    }
+      }),
+    );
   }
 
   private createError(

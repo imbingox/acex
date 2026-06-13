@@ -44,7 +44,7 @@ export class AsyncEventBus<T> {
     const conflateQueue =
       mode === "conflate" ? new Map<string, U>() : undefined;
     let overflowNotified = false;
-    let pendingResolve: ((result: IteratorResult<U>) => void) | undefined;
+    const pendingResolves: Array<(result: IteratorResult<U>) => void> = [];
 
     if (mode === "conflate" && !options.conflateKey) {
       throw new Error("AsyncEventBus conflate mode requires conflateKey");
@@ -104,9 +104,8 @@ export class AsyncEventBus<T> {
       closed = true;
       this.listeners.delete(listener);
 
-      if (pendingResolve) {
-        const resolve = pendingResolve;
-        pendingResolve = undefined;
+      const pending = pendingResolves.splice(0);
+      for (const resolve of pending) {
         resolve(doneResult<U>());
       }
     };
@@ -119,9 +118,8 @@ export class AsyncEventBus<T> {
         }
 
         const typedEvent = event as U;
-        if (pendingResolve) {
-          const resolve = pendingResolve;
-          pendingResolve = undefined;
+        const resolve = pendingResolves.shift();
+        if (resolve) {
           resolve({ done: false, value: typedEvent });
           return;
         }
@@ -148,7 +146,7 @@ export class AsyncEventBus<T> {
 
         resetOverflowIfDrained();
         return await new Promise<IteratorResult<U>>((resolve) => {
-          pendingResolve = resolve;
+          pendingResolves.push(resolve);
         });
       },
       return: async () => {

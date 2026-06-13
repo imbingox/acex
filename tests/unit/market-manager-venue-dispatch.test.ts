@@ -348,6 +348,78 @@ test("MarketManager reloadMarkets leaves existing L1 and funding subscriptions r
   ).toMatchObject({ fundingRate: "0.0002", version: 2 });
 });
 
+test("MarketManager resumes market streams concurrently and isolates failures", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+    { initialL1TimeoutMs: 200 },
+  );
+
+  const l1Subscribe = manager.subscribeL1Book({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const initialL1Stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  initialL1Stream.emitUpdate({
+    bidPrice: "101.1",
+    bidSize: "2",
+    askPrice: "101.2",
+    askSize: "3",
+    receivedAt: 1710000000100,
+  });
+  await l1Subscribe;
+
+  const fundingSubscribe = manager.subscribeFundingRate({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const initialFundingStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+  initialFundingStream.emitUpdate({
+    fundingRate: "0.0001",
+    receivedAt: 1710000000200,
+  });
+  await fundingSubscribe;
+
+  manager.onClientStopping(1710000000300);
+  manager.onClientStarted();
+
+  const resumedL1Stream = await waitForValue(() => okxAdapter.l1BookStreams[1]);
+  const resumedFundingStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[1],
+  );
+
+  resumedL1Stream.rejectReady(new Error("resumed l1 ready failed"));
+  resumedFundingStream.emitUpdate({
+    fundingRate: "0.0002",
+    receivedAt: 1710000000400,
+  });
+
+  await waitForValue(() => {
+    const fundingRate = manager.getFundingRate({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    });
+    return fundingRate?.version === 2 ? fundingRate : undefined;
+  });
+
+  expect(resumedL1Stream.closeCalls).toBe(1);
+  expect(context.errors).toContainEqual(
+    expect.objectContaining({
+      source: "runtime",
+      error: expect.objectContaining({ code: "MARKET_STREAM_TIMEOUT" }),
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  );
+  expect(
+    manager.getFundingRate({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ fundingRate: "0.0002", version: 2 });
+});
+
 test("MarketManager closes failed initial market streams before dropping them", async () => {
   const okxAdapter = new FakeOkxMarketAdapter();
   const manager = new MarketManagerImpl(

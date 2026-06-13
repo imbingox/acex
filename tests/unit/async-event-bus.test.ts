@@ -133,6 +133,27 @@ test("pending consumers receive direct hand-off in buffer and conflate modes", a
   }
 });
 
+test("concurrent pending consumers receive events in FIFO order", async () => {
+  const bus = new AsyncEventBus<TestEvent>();
+  const iterator = bus.stream()[Symbol.asyncIterator]();
+
+  const first = iterator.next();
+  const second = iterator.next();
+
+  bus.publish(event("BTC/USDT", 1));
+  bus.publish(event("BTC/USDT", 2));
+
+  await expect(first).resolves.toEqual({
+    done: false,
+    value: event("BTC/USDT", 1),
+  });
+  await expect(second).resolves.toEqual({
+    done: false,
+    value: event("BTC/USDT", 2),
+  });
+  await iterator.return?.();
+});
+
 test("close resolves pending consumers and ends future reads", async () => {
   const bus = new AsyncEventBus<TestEvent>();
   const iterator = bus.stream()[Symbol.asyncIterator]();
@@ -142,6 +163,29 @@ test("close resolves pending consumers and ends future reads", async () => {
   bus.publish(event("BTC/USDT", 1));
 
   await expect(pending).resolves.toEqual({
+    done: true,
+    value: undefined,
+  });
+  await expect(iterator.next()).resolves.toEqual({
+    done: true,
+    value: undefined,
+  });
+});
+
+test("close resolves all pending consumers", async () => {
+  const bus = new AsyncEventBus<TestEvent>();
+  const iterator = bus.stream()[Symbol.asyncIterator]();
+
+  const first = iterator.next();
+  const second = iterator.next();
+
+  bus.close();
+
+  await expect(first).resolves.toEqual({
+    done: true,
+    value: undefined,
+  });
+  await expect(second).resolves.toEqual({
     done: true,
     value: undefined,
   });

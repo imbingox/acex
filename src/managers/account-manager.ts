@@ -4,6 +4,7 @@ import type {
   RawAccountUpdate,
   RawBalanceUpdate,
   RawPositionUpdate,
+  RawRiskLevelChange,
   RawRiskUpdate,
 } from "../adapters/types.ts";
 import type {
@@ -34,6 +35,7 @@ import type {
   BalanceSnapshot,
   PositionKeyInput,
   PositionSnapshot,
+  RiskLevelChangedEvent,
   RiskSnapshot,
   SubscribeAccountInput,
   UnsubscribeAccountInput,
@@ -73,6 +75,37 @@ function isZeroBalance(balance: BalanceSnapshot): boolean {
     isZeroDecimal(balance.used) &&
     isZeroDecimal(balance.total)
   );
+}
+
+function freezeBalance(balance: BalanceSnapshot): BalanceSnapshot {
+  return Object.freeze({
+    ...balance,
+    lending: balance.lending
+      ? Object.freeze({ ...balance.lending })
+      : undefined,
+  });
+}
+
+function freezePosition(position: PositionSnapshot): PositionSnapshot {
+  return Object.freeze({ ...position });
+}
+
+function freezeRisk(risk: RiskSnapshot): RiskSnapshot {
+  return Object.freeze({
+    ...risk,
+    lending: risk.lending ? Object.freeze({ ...risk.lending }) : undefined,
+  });
+}
+
+function freezeAccountSnapshot(snapshot: AccountSnapshot): AccountSnapshot {
+  return Object.freeze({
+    ...snapshot,
+    balances: Object.freeze({ ...snapshot.balances }) as Record<
+      string,
+      BalanceSnapshot
+    >,
+    positions: Object.freeze([...snapshot.positions]) as PositionSnapshot[],
+  });
 }
 
 function successfulStatus(
@@ -442,7 +475,7 @@ export class AccountManagerImpl
       return;
     }
 
-    record.snapshot = {
+    record.snapshot = freezeAccountSnapshot({
       accountId,
       venue,
       balances,
@@ -454,11 +487,83 @@ export class AccountManagerImpl
           : update.exchangeTs,
       receivedAt: latestAppliedAt,
       updatedAt: latestAppliedAt,
-    };
+    });
     record.status = successfulStatus(record.status, {
       preserveStatus: options.preserveStatus,
       lastReceivedAt: latestAppliedAt,
       lastReadyAt: latestAppliedAt,
+    });
+    this.publishStatus(record);
+  }
+
+  onPrivateRiskLevelChange(
+    accountId: string,
+    venue: Venue,
+    event: RawRiskLevelChange,
+  ): void {
+    const record = this.getOrCreateRecord(accountId, venue);
+    if (!record.subscribed) {
+      return;
+    }
+
+    const riskEvent: RiskLevelChangedEvent = {
+      type: "account.risk_level_change",
+      accountId,
+      venue,
+      riskLevel: event.riskLevel,
+      riskRatio: event.riskRatio,
+      netEquity: event.netEquity,
+      riskEquity: event.riskEquity,
+      maintenanceMargin: event.maintenanceMargin,
+      exchangeTs: event.exchangeTs,
+      receivedAt: event.receivedAt,
+      ts: this.context.now(),
+    };
+    this.accountBus.publish(riskEvent);
+
+    const previous =
+      record.snapshot ?? this.createEmptySnapshot(accountId, venue);
+    const riskUpdate: RawRiskUpdate = {
+      riskLevel: event.riskLevel,
+      riskRatio: event.riskRatio,
+      netEquity: event.netEquity,
+      riskEquity: event.riskEquity,
+      maintenanceMargin: event.maintenanceMargin,
+      exchangeTs: event.exchangeTs,
+      receivedAt: event.receivedAt,
+    };
+
+    if (
+      shouldApplyWatermarkedUpdate(previous.risk, riskUpdate, {
+        source: "stream",
+      })
+    ) {
+      const risk = this.createRisk(accountId, venue, riskUpdate, previous.risk);
+      record.snapshot = freezeAccountSnapshot({
+        accountId,
+        venue,
+        balances: previous.balances,
+        positions: previous.positions,
+        risk,
+        exchangeTs:
+          event.exchangeTs === undefined
+            ? previous.exchangeTs
+            : event.exchangeTs,
+        receivedAt: event.receivedAt,
+        updatedAt: event.receivedAt,
+      });
+      this.accountBus.publish({
+        type: "risk.updated",
+        accountId,
+        venue,
+        snapshot: risk,
+        ts: this.context.now(),
+      });
+    }
+
+    record.status = successfulStatus(record.status, {
+      lastReceivedAt: event.receivedAt,
+      lastReadyAt: event.receivedAt,
     });
     this.publishStatus(record);
   }
@@ -570,7 +675,7 @@ export class AccountManagerImpl
       risk = this.createRisk(accountId, venue, snapshot.risk, previous.risk);
     }
 
-    record.snapshot = {
+    record.snapshot = freezeAccountSnapshot({
       accountId,
       venue,
       balances,
@@ -582,7 +687,7 @@ export class AccountManagerImpl
           : snapshot.exchangeTs,
       receivedAt: snapshot.receivedAt,
       updatedAt: snapshot.receivedAt,
-    };
+    });
     record.status = successfulStatus(record.status, {
       preserveStatus: options.preserveStatus,
       lastReceivedAt: snapshot.receivedAt,
@@ -687,7 +792,7 @@ export class AccountManagerImpl
       ? this.createRisk(accountId, venue, bootstrap.risk)
       : undefined;
 
-    return {
+    return freezeAccountSnapshot({
       accountId,
       venue,
       balances,
@@ -696,7 +801,7 @@ export class AccountManagerImpl
       exchangeTs: bootstrap.exchangeTs,
       receivedAt: bootstrap.receivedAt,
       updatedAt: bootstrap.receivedAt,
-    };
+    });
   }
 
   private createEmptySnapshot(
@@ -704,14 +809,14 @@ export class AccountManagerImpl
     venue: Venue,
   ): AccountSnapshot {
     const now = this.context.now();
-    return {
+    return freezeAccountSnapshot({
       accountId,
       venue,
       balances: {},
       positions: [],
       receivedAt: now,
       updatedAt: now,
-    };
+    });
   }
 
   private createBalance(
@@ -735,7 +840,7 @@ export class AccountManagerImpl
           ? total.minus(free)
           : previousUsed;
 
-    return {
+    return freezeBalance({
       accountId,
       venue,
       asset: input.asset,
@@ -762,7 +867,7 @@ export class AccountManagerImpl
                 : toCanonical(input.lending.borrowAPY),
           }
         : previous?.lending,
-    };
+    });
   }
 
   private createPosition(
@@ -771,7 +876,7 @@ export class AccountManagerImpl
     input: RawPositionUpdate,
     previous?: PositionSnapshot,
   ): PositionSnapshot {
-    return {
+    return freezePosition({
       accountId,
       venue,
       symbol: input.symbol,
@@ -801,7 +906,7 @@ export class AccountManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       seq: (previous?.seq ?? 0) + 1,
-    };
+    });
   }
 
   private createRisk(
@@ -810,9 +915,11 @@ export class AccountManagerImpl
     input: RawRiskUpdate,
     previous?: RiskSnapshot,
   ): RiskSnapshot {
-    return {
+    return freezeRisk({
       accountId,
       venue,
+      riskLevel:
+        input.riskLevel === undefined ? previous?.riskLevel : input.riskLevel,
       netEquity:
         input.netEquity === undefined
           ? previous?.netEquity
@@ -869,7 +976,7 @@ export class AccountManagerImpl
                 : toCanonical(input.lending.totalDebtUSD),
           }
         : previous?.lending,
-    };
+    });
   }
 
   private publishStatus(record: AccountRecord): void {

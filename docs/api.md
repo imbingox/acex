@@ -266,7 +266,9 @@ await client.start();
 await client.stop();
 ```
 
-状态机是 `idle → starting → running → stopping → stopped`。`start()` 和 `stop()` 幂等。`stop(options?)` 的 `graceful` / `timeoutMs` 当前是预留参数，不要依赖它们提供额外 drain 语义。
+状态机是 `idle → starting → running → stopping → stopped`。`start()` 和 `stop()` 幂等。
+
+`stop()` 默认执行 graceful drain：先把 client 状态切到 `stopping`，拒绝新的订单命令，然后等待已在途的 `createOrder()` / `cancelOrder()` / `cancelAllOrders()` 以及私有账户/订单 refresh、reconcile 完成；`timeoutMs` 默认 5000ms，超时后继续关闭流、timer 和 lifecycle。传 `{ graceful: false }` 会跳过等待并立即执行 teardown。
 
 ### 4.3 Venue capabilities
 
@@ -417,7 +419,7 @@ interface AccountManager {
 
 `AccountSnapshot.balances` 是 `Record<string, BalanceSnapshot>`，数组视图用 `getBalances()`。
 
-Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。WS `ACCOUNT_UPDATE` 会更新发生变化的余额和仓位；`/papi/v1/account` + `/papi/v1/um/positionRisk` refresh 用于校准风险字段和 mark-to-market 仓位字段。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
+Binance account update 是 REST bootstrap + WS 增量 + REST risk refresh + private reconcile 的组合。WS `ACCOUNT_UPDATE` 会更新发生变化的余额和仓位；PAPI 私有流的账户风控告警是 `riskLevelChange`，SDK 会发布 `account.risk_level_change` 并用事件里的 `u/eq/ae/m` 回填 `RiskSnapshot.riskRatio/netEquity/riskEquity/maintenanceMargin` 和 `riskLevel`。`riskLevelChange` 是账户级聚合事件，没有 symbol 或逐仓位数组；USDⓈ-M 独立合约流的 `MARGIN_CALL` 形状不适用于 PAPI。`/papi/v1/account` + `/papi/v1/um/positionRisk` refresh 用于校准风险字段和 mark-to-market 仓位字段，REST `accountStatus` 存在时会映射到 `RiskSnapshot.riskLevel`。risk refresh 是增量语义，不会因 REST 缺失项删除本地 position；private reconcile 是全量校准语义，会清理 REST 全量余额/仓位中缺失或归零的本地记录。Juplend 每次 poll 都是全量快照，成功 poll 会替换 balances / positions / risk，用于清理已关闭或不再匹配的 position。
 
 Account 事件用于消费余额、仓位、风险或全量快照替换：
 
@@ -427,6 +429,9 @@ for await (const event of client.account.events.updates({
 }, { maxBuffer: 20_000 })) {
   if (event.type === "risk.updated") {
     console.log(event.snapshot.riskRatio);
+  }
+  if (event.type === "account.risk_level_change") {
+    console.log(event.riskLevel, event.riskRatio);
   }
   break;
 }
@@ -463,7 +468,7 @@ interface OrderEventStreams {
 
 - `createOrder()` 支持 `limit` / `market`
 - `limit` 可传 `postOnly: true`，Binance PAPI UM 映射为 `timeInForce=GTX`
-- 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-` 前缀，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
+- 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-<entropy>-<ts>-<seq>`，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
 - `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
 - `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
 - hedge mode 下必须显式传 `positionSide: "long" | "short"`
@@ -543,6 +548,14 @@ type ClientStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
 type MarketType = "spot" | "swap" | "future";
 type PositionSide = "long" | "short" | "net";
 type CreateOrderType = "limit" | "market";
+type OrderType =
+  | CreateOrderType
+  | "stop"
+  | "stop_market"
+  | "take_profit"
+  | "take_profit_market"
+  | "trailing_stop_market"
+  | "unknown";
 type OrderSide = "buy" | "sell";
 type OrderStatus =
   | "open"
@@ -927,13 +940,24 @@ interface PositionSnapshot {
   liquidationPrice?: string;
 }
 
+type RiskLevel =
+  | "normal"
+  | "margin_call"
+  | "reduce_only"
+  | "force_liquidation";
+
+type RiskAlertLevel = Exclude<RiskLevel, "normal">;
+
 interface RiskSnapshot {
   accountId: string;
   venue: Venue;
+  riskLevel?: RiskLevel;
   netEquity?: string;
   riskEquity?: string;
   riskRatio?: string;
   riskLeverage?: string;
+  initialMargin?: string;
+  maintenanceMargin?: string;
   lending?: {
     marginLevel?: string;
     healthFactor?: string;
@@ -1006,7 +1030,8 @@ interface OrderSnapshot {
   clientOrderId?: string;
   symbol: string;
   side: OrderSide;
-  type: string;
+  type: OrderType;
+  rawType?: string;
   status: OrderStatus;
   price?: string;
   amount: string;
@@ -1050,6 +1075,7 @@ type AccountEvent =
   | { type: "balance.updated"; accountId: string; venue: Venue; asset: string; snapshot: BalanceSnapshot; ts: number }
   | { type: "position.updated"; accountId: string; venue: Venue; symbol: string; snapshot: PositionSnapshot; ts: number }
   | { type: "risk.updated"; accountId: string; venue: Venue; snapshot: RiskSnapshot; ts: number }
+  | { type: "account.risk_level_change"; accountId: string; venue: Venue; riskLevel: RiskAlertLevel; riskRatio?: string; netEquity?: string; riskEquity?: string; maintenanceMargin?: string; exchangeTs?: number; receivedAt: number; ts: number }
   | { type: "account.snapshot_replaced"; accountId: string; venue: Venue; snapshot: AccountSnapshot; ts: number };
 
 type OrderEvent =

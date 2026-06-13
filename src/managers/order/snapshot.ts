@@ -28,6 +28,7 @@ export function createSnapshot(
     symbol: input.symbol,
     side: input.side,
     type: input.type,
+    rawType: input.rawType,
     status: mergeOrderStatus(input, previous),
     price:
       input.price === undefined ? previous?.price : toCanonical(input.price),

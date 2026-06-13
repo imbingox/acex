@@ -3,6 +3,7 @@ import type {
   RawAccountUpdate,
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
+  RawRiskLevelChange,
 } from "../adapters/types.ts";
 import type { VenueErrorReason } from "../errors.ts";
 import type {
@@ -92,6 +93,11 @@ export interface PrivateAccountDataConsumer {
     venue: Venue,
     update: RawAccountUpdate,
     options?: { preserveStatus?: boolean; requestStartedAt?: number },
+  ): void;
+  onPrivateRiskLevelChange(
+    accountId: string,
+    venue: Venue,
+    event: RawRiskLevelChange,
   ): void;
   onPrivateAccountReconcile(
     accountId: string,

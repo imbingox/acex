@@ -294,6 +294,7 @@ const binanceFixtures = {
       accountInitialMargin: "120.10",
       accountMaintMargin: "45.20",
       uniMMR: "31.0",
+      accountStatus: "NORMAL",
       updateTime: 1710000000100,
     },
     umPositions: [

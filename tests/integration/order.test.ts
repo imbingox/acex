@@ -115,6 +115,7 @@ interface BinanceOrderUpdateInput {
   orderId?: number;
   clientOrderId?: string;
   side?: "BUY" | "SELL";
+  orderType?: string;
   positionSide?: "BOTH" | "LONG" | "SHORT";
   executionType?: string;
   tradeId?: number | string;
@@ -228,7 +229,7 @@ function emitBinanceOrderUpdate(
   const order: Record<string, unknown> = {
     s: input.symbol ?? "BTCUSDT",
     S: input.side ?? "BUY",
-    o: "LIMIT",
+    o: input.orderType ?? "LIMIT",
     X: status,
     p: input.price ?? "100500.00",
     sp: "0",
@@ -415,6 +416,8 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
         clientOrderId: "cid-1001",
         symbol: "BTC/USDT:USDT",
         side: "buy",
+        type: "limit",
+        rawType: "LIMIT",
         status: "open",
       },
     ],
@@ -426,6 +429,8 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
       orderId: "1001",
     }),
   ).toMatchObject({
+    type: "limit",
+    rawType: "LIMIT",
     price: new BigNumber("100500.00").toFixed(),
     amount: new BigNumber("0.020").toFixed(),
     filled: new BigNumber("0.005").toFixed(),
@@ -457,6 +462,8 @@ test("order subscribe bootstraps open orders, applies websocket updates, and reu
     type: "order.updated",
     symbol: "BTC/USDT:USDT",
     snapshot: {
+      type: "limit",
+      rawType: "LIMIT",
       status: "partially_filled",
       filled: new BigNumber("0.010").toFixed(),
       avgFillPrice: new BigNumber("100450.00").toFixed(),
@@ -568,6 +575,64 @@ test("order trades stream publishes Binance per-trade fee, maker flag, realized 
       realizedPnl: new BigNumber("1.2300").toFixed(),
       maker: false,
       positionSide: "short",
+    },
+  });
+
+  await iterator.return?.();
+});
+
+test("order updates expose normalized order type and raw venue type", async () => {
+  const { client, socket } = await createSubscribedOrderClient({});
+  const iterator = client.order.events.updates()[Symbol.asyncIterator]();
+
+  emitBinanceOrderUpdate(socket, {
+    orderId: 9101,
+    clientOrderId: "cid-stop-9101",
+    orderType: "STOP_MARKET",
+    status: "NEW",
+    price: "0",
+    amount: "0.010",
+    filled: "0",
+    updateTime: 1710000000500,
+  });
+  emitBinanceOrderUpdate(socket, {
+    orderId: 9102,
+    clientOrderId: "cid-unknown-9102",
+    orderType: "VENUE_ONLY_TYPE",
+    status: "NEW",
+    price: "0",
+    amount: "0.010",
+    filled: "0",
+    updateTime: 1710000000600,
+  });
+
+  const stopEvent = await nextMatchingEvent(
+    iterator,
+    (event) =>
+      event.type === "order.updated" && event.snapshot.orderId === "9101",
+    100,
+    "Timed out waiting for STOP_MARKET order update",
+  );
+  expect(stopEvent).toMatchObject({
+    type: "order.updated",
+    snapshot: {
+      type: "stop_market",
+      rawType: "STOP_MARKET",
+    },
+  });
+
+  const unknownEvent = await nextMatchingEvent(
+    iterator,
+    (event) =>
+      event.type === "order.updated" && event.snapshot.orderId === "9102",
+    100,
+    "Timed out waiting for unknown order type update",
+  );
+  expect(unknownEvent).toMatchObject({
+    type: "order.updated",
+    snapshot: {
+      type: "unknown",
+      rawType: "VENUE_ONLY_TYPE",
     },
   });
 
@@ -1687,7 +1752,8 @@ test("createOrder sends the expected Binance PAPI request and stores the returne
     clientOrderId: "cid-2001",
     symbol: "BTC/USDT:USDT",
     side: "buy",
-    type: "LIMIT",
+    type: "limit",
+    rawType: "LIMIT",
     status: "open",
     price: new BigNumber("101000.00").toFixed(),
     amount: new BigNumber("0.010").toFixed(),
@@ -1754,7 +1820,7 @@ test("createOrder generates and sends a Binance-safe clientOrderId when omitted"
   if (!generatedCid) {
     throw new Error("generated clientOrderId was not sent");
   }
-  expect(generatedCid).toMatch(/^acex-[.A-Z:/a-z0-9_-]{1,27}$/);
+  expect(generatedCid).toMatch(/^acex-[a-z0-9]{4}-[a-z0-9]+-[a-z0-9]+$/);
   expect(generatedCid.length).toBeLessThanOrEqual(32);
   expect(snapshot.clientOrderId).toBe(generatedCid);
   expect(

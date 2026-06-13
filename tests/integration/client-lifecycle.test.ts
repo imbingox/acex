@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { AcexError, BigNumber, createClient } from "../../index.ts";
+import { stopAllClientsForTests } from "../../src/client/runtime.ts";
 import {
   BINANCE_USDM_MARKET_WS_BASE_URL,
   BINANCE_USDM_WS_BASE_URL,
@@ -13,6 +14,22 @@ import {
   nextEvent,
   waitForSocket,
 } from "../support/test-utils.ts";
+
+async function registerStartedBinanceClient(): Promise<
+  ReturnType<typeof createClient>
+> {
+  const client = createClient();
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  return client;
+}
 
 test("root entry exposes lifecycle snapshot and structured error stream", async () => {
   const client = createClient();
@@ -273,6 +290,103 @@ test("client stop keeps lifecycle and market health semantics observable", async
       freshness: "fresh",
     },
   });
+});
+
+test("client graceful stop waits for in-flight order commands", async () => {
+  installBinancePrivateAccountInfra({ createOrderDelayMs: 40 });
+  const client = await registerStartedBinanceClient();
+  let commandSettled = false;
+
+  const command = client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .finally(() => {
+      commandSettled = true;
+    });
+  await Bun.sleep(0);
+
+  await client.stop({ graceful: true, timeoutMs: 500 });
+
+  expect(commandSettled).toBe(true);
+  expect(client.getStatus()).toBe("stopped");
+  await command;
+});
+
+test("client graceful stop timeout forces teardown with commands still pending", async () => {
+  installBinancePrivateAccountInfra({ createOrderDelayMs: 80 });
+  const client = await registerStartedBinanceClient();
+  let commandSettled = false;
+
+  const command = client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .finally(() => {
+      commandSettled = true;
+    });
+  await Bun.sleep(0);
+
+  await client.stop({ graceful: true, timeoutMs: 5 });
+
+  expect(client.getStatus()).toBe("stopped");
+  expect(commandSettled).toBe(false);
+  await command;
+});
+
+test("client stop graceful false tears down without waiting for commands", async () => {
+  installBinancePrivateAccountInfra({ createOrderDelayMs: 50 });
+  const client = await registerStartedBinanceClient();
+  let commandSettled = false;
+
+  const command = client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "limit",
+      price: "101000.00",
+      amount: "0.010",
+    })
+    .finally(() => {
+      commandSettled = true;
+    });
+  await Bun.sleep(0);
+
+  await client.stop({ graceful: false });
+
+  expect(client.getStatus()).toBe("stopped");
+  expect(commandSettled).toBe(false);
+  await command;
+});
+
+test("stopped clients are removed from test cleanup tracking", async () => {
+  const client = createClient();
+  await client.stop();
+
+  let cleanupStopCalled = false;
+  if (
+    !Reflect.set(client, "stop", () => {
+      cleanupStopCalled = true;
+      return Promise.resolve();
+    })
+  ) {
+    throw new Error("Failed to install stop spy");
+  }
+
+  await stopAllClientsForTests();
+
+  expect(cleanupStopCalled).toBe(false);
 });
 
 test("health venue filters only emit matching market events", async () => {

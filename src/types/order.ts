@@ -40,6 +40,15 @@ export type OrderStatus =
 
 export type CreateOrderType = "limit" | "market";
 
+export type OrderType =
+  | CreateOrderType
+  | "stop"
+  | "stop_market"
+  | "take_profit"
+  | "take_profit_market"
+  | "trailing_stop_market"
+  | "unknown";
+
 export interface SubscribeOrdersInput {
   accountId: string;
 }
@@ -102,7 +111,8 @@ export interface OrderSnapshot {
   clientOrderId?: string;
   symbol: string;
   side: OrderSide;
-  type: string;
+  type: OrderType;
+  rawType?: string;
   status: OrderStatus;
   price?: string;
   triggerPrice?: string;

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "cid 生成与 venue clientOrderId 约束（SDK_CLIENT_ORDER_ID_PREFIX / VENUE_CLIENT_ORDER_ID_PATTERN）契约，确认修改不破坏"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "crypto 随机与字符串处理的类型安全约定"}

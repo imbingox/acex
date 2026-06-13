@@ -325,6 +325,23 @@ export class PrivateSubscriptionCoordinator {
     }
   }
 
+  getInFlightOperations(): Promise<unknown>[] {
+    const operations: Promise<unknown>[] = [];
+    for (const record of this.records.values()) {
+      if (record.startPromise) {
+        operations.push(record.startPromise);
+      }
+      if (record.accountRefreshInFlight) {
+        operations.push(record.accountRefreshInFlight);
+      }
+      if (record.privateReconcilePromise) {
+        operations.push(record.privateReconcilePromise);
+      }
+    }
+
+    return operations;
+  }
+
   onAccountRemoved(accountId: string): void {
     const record = this.records.get(accountId);
     if (!record) {
@@ -1332,6 +1349,18 @@ export class PrivateSubscriptionCoordinator {
             record.accountId,
             record.venue,
             update,
+          );
+        },
+        onRiskLevelChange: (event) => {
+          if (!record.accountSubscribed) {
+            return;
+          }
+
+          record.accountReady = true;
+          this.accountConsumer.onPrivateRiskLevelChange(
+            record.accountId,
+            record.venue,
+            event,
           );
         },
         onOrderUpdate: (update) => {

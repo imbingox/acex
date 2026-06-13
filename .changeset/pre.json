@@ -15,6 +15,7 @@
     "include-package-release-docs",
     "market-catalog-reload",
     "market-ws-connection-multiplexing",
+    "observability-onmetric",
     "open-order-unknown-ttl",
     "order-manager-local-order-id",
     "order-manager-store-tiering",

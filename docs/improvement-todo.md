@@ -215,15 +215,16 @@
 - [ ] **P2-4 可观测性**：logger/logLevel 预留位未实现；无下单 RTT/WS 消息延迟打点、无指标钩子。建议先做最小事件钩子（`onMetric(name, value, tags)`）。
 - [ ] **P2-5 查询面**：closed orders 内部存了 500/symbol（order-manager.ts:75）却无 `getClosedOrders()`；无成交历史/资金费历史 API。
 - [ ] **P2-6 交易操作面**：改单（amend）、条件单、杠杆/持仓模式设置、资金划转均缺失（与 capabilities 声明一致，属 roadmap 性缺口）。
-- [ ] **P2-7 账户配置事件**：`ACCOUNT_CONFIG_UPDATE`（杠杆变更）、`MARGIN_CALL` 被 `parsePrivateMessage` 丢弃（private-adapter.ts:530）；风控视角应至少透传 MARGIN_CALL。
-- [ ] **P2-8 分发产物**：package.json 只发布裸 `.ts`（`exports: "./index.ts"`）——Node 消费者无法直接使用、无 `.d.ts`。若目标用户含非 Bun 环境，需要构建产物（tsup/bun build + types）。
+- [x] **P2-7 账户风控事件**：经核实 PAPI（`wss://fstream.binance.com/pm/ws`）的风控事件是 `riskLevelChange`（账户级聚合、三态 `margin_call`/`reduce_only`/`force_liquidation`），**不是** USDM/CM 独立合约流的 `MARGIN_CALL`。已透传为公开 `account.risk_level_change` 事件 + 回填 `RiskSnapshot.riskLevel`（REST `accountStatus` + WS 双源，走 watermark），`u/eq/ae/m` 实时刷新 riskRatio/netEquity/riskEquity/maintenanceMargin；`ACCOUNT_CONFIG_UPDATE` 仅放 parser 白名单计 watchdog 活性、不转发（等 P2-6 一起设计）。→ .trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12
+- [x] ~~**P2-8 分发产物**~~（**本批裁掉，不做**）：包目前自用、Bun-only，无 Node 兼容需求（2026-06-13 决策）；将来要分发给非 Bun 用户时再立项。
 
 ### 工程小项
 
-- [ ] **P2-9 读取 API 克隆策略不一致**：`getAccountSnapshot`/`getBalances` 返回内部对象引用（account-manager.ts:185-196），market 侧每次克隆——统一为冻结或克隆，防调用方改坏内部状态。
-- [ ] **P2-10 `stop()` 语义**：不等待 in-flight 命令/reconcile，`StopOptions` 被忽略（runtime.ts:262）；`activeClients` 只增不减（runtime.ts:61,109）。明确 graceful stop 语义（排空 vs 立断）并修泄漏。
+- [x] **P2-9 读取 API 克隆策略不一致**：已统一为冻结共享快照——account getter（snapshot/balances/positions/risk）复用 market 侧（PR #79）的 `Object.freeze` 模式，调用方无法改坏内部状态。→ .trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12
+- [x] **P2-10 `stop()` 语义**：已兑现 graceful drain——`graceful` 默认 true 时登记 in-flight 订单命令 + coordinator 在途 reconcile/refresh promise，等其落定，`timeoutMs`（默认 5s）超时强断；`graceful:false` 立断。修复 `activeClients` 泄漏（stop 后 delete），下单命令加 `assertStarted` 门控（非 running 拒绝）。→ .trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12
 - [ ] **P2-11 `order.snapshot_replaced` 事件过重**：每 60s reconcile 发布 open+closed 全量数组（order-manager.ts:608-630）；建议只含 open 或提供增量形态。
-- [ ] **P2-12 杂项**：`resumeStreams` 串行恢复订阅慢（market-manager.ts:1187，可并发）；`AsyncEventBus` 迭代器并发 `next()` 覆盖 `pendingResolve` 悬挂前一个 promise（async-event-bus.ts:78）；本地 cid 双进程同毫秒可碰撞（order-manager.ts:1394，可加进程随机前缀）；`OrderSnapshot.type` 是 venue 原始大写字符串与输入侧 `"limit"` 不一致（types/order.ts:103）。
+- [x] **P2-12 杂项**（四子项全做）：`resumeStreams` 改并发恢复（`Promise.allSettled` + per-stream 错误隔离）；`AsyncEventBus` 并发 `next()` 改 FIFO pending-resolver 队列（`close()` 全量 resolve done），消除悬挂；本地 cid 加进程级随机熵段（`acex-<entropy>-<ts>-<seq>`，≤32 字符），消除跨进程同毫秒碰撞；`OrderSnapshot.type`/`RawOrderUpdate.type` 归一为小写 `OrderType` union + `rawType` 留底原始串。→ .trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12
+- [ ] **P2-13 bootstrap 覆盖先到的 stream 增量（既有竞态，2026-06-13 P2 批①二审发现）**：`onPrivateAccountBootstrap` 无条件全量替换 `record.snapshot`、不走 watermark（account-manager.ts:346）；若 WS 增量（余额/仓位/risk，含 P2-7 的 `riskLevelChange` 回填）先于 bootstrap 响应到达，会被较旧的 REST bootstrap 快照覆盖。**低危**：仅订阅初期窗口、≤`riskPollIntervalMs`（默认 5s）自愈、事件流不丢告警。修复需让 bootstrap 对已有更新快照走 merge/watermark（影响余额/仓位/risk 三者），影响面大，独立任务慎做。
 
 ---
 

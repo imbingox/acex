@@ -1573,3 +1573,36 @@ P2-4：CreateClientOptions.onMetric(name,value,type,tags?) 同步钩子 + METRIC
 ### Next Steps
 
 - None - task complete
+
+
+## Session 45: Symbol fee capability
+
+**Date**: 2026-06-13
+**Task**: Symbol fee capability
+**Branch**: `codex/symbol-fee-capability`
+
+### Summary
+
+完成账号级 symbol 手续费费率能力：新增 client.order.getSymbolFeeRate() public API，Binance PAPI UM commissionRate adapter 实现、fees capability、错误包装、rate-limit semantic plan、文档/spec/changeset 和测试覆盖；修正 fee rate receivedAt 为 REST 响应后采集。质量门已通过：bun run lint、bun run type-check、bun run test（320 pass）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4f2f7db` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

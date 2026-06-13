@@ -6,8 +6,6 @@ export const VENUE_CLIENT_ORDER_ID_PATTERN = /^[.A-Z:/a-z0-9_-]{1,32}$/;
 const SDK_CLIENT_ORDER_ID_ENTROPY_LENGTH = 4;
 const SDK_CLIENT_ORDER_ID_ENTROPY_SPACE =
   36 ** SDK_CLIENT_ORDER_ID_ENTROPY_LENGTH;
-const sdkClientOrderIdEntropies = new Set<string>();
-let sdkClientOrderIdEntropyFallback = 0;
 
 const SYSTEM_CLIENT_ORDER_ID_PATTERNS = [
   /^adl_autoclose$/,
@@ -83,24 +81,6 @@ export function isSystemClientOrderId(clientOrderId: string): boolean {
 }
 
 export function createSdkClientOrderIdEntropy(): string {
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    const entropy = randomBase36Entropy();
-    if (!sdkClientOrderIdEntropies.has(entropy)) {
-      sdkClientOrderIdEntropies.add(entropy);
-      return entropy;
-    }
-  }
-
-  while (sdkClientOrderIdEntropies.size < SDK_CLIENT_ORDER_ID_ENTROPY_SPACE) {
-    const entropy = formatBase36Entropy(sdkClientOrderIdEntropyFallback);
-    sdkClientOrderIdEntropyFallback =
-      (sdkClientOrderIdEntropyFallback + 1) % SDK_CLIENT_ORDER_ID_ENTROPY_SPACE;
-    if (!sdkClientOrderIdEntropies.has(entropy)) {
-      sdkClientOrderIdEntropies.add(entropy);
-      return entropy;
-    }
-  }
-
   return randomBase36Entropy();
 }
 

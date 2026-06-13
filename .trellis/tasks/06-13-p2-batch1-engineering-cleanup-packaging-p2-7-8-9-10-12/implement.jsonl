@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12/research/code-context.md", "reason": "本批 5 个条目的代码现状调研：现行号、确认的 bug 机制、候选通道、约束"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "MARGIN_CALL 透传要新增 raw 类型/callback，须遵守 adapter SPI 契约与 freshness/watchdog 语义"}
+{"file": ".trellis/spec/backend/order-execution.md", "reason": "OrderType 归一与 cid 生成涉及订单契约；stop drain 涉及命令生命周期"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "OrderType union/rawType 公开类型设计须符合类型规范（decimal string、union 命名）"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "stop timeout/drain 失败与 watchdog 上报路径的错误语义"}
+{"file": ".trellis/spec/backend/release-publishing.md", "reason": "changeset patch/minor 拆分规则"}

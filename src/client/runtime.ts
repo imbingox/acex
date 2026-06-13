@@ -117,6 +117,29 @@ function toError(value: unknown, fallback: string): Error {
   return new Error(fallback, { cause: value });
 }
 
+async function raceWithTimeout(
+  operation: Promise<unknown>,
+  timeoutMs: number,
+): Promise<void> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 function createBinanceAdapterGroup(
   deps: VenueAdapterFactoryDeps,
 ): VenueAdapterFactoryResult {
@@ -184,14 +207,12 @@ function createJuplendAdapterGroup(
   };
 }
 
-export function stopAllClientsForTests(): void {
+export async function stopAllClientsForTests(): Promise<void> {
   const clients = [...activeClients];
   activeClients.clear();
-  for (const client of clients) {
-    void client.stop().catch(() => {
-      // Test cleanup should be best-effort and never mask the original failure.
-    });
-  }
+  await Promise.allSettled(
+    clients.map((client) => client.stop({ graceful: false })),
+  );
 }
 
 class ClientEventStreamsImpl implements ClientEventStreams {
@@ -245,6 +266,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
   private readonly adapterLifecycles: VenueAdapterLifecycle[];
+  private readonly inFlightOrderCommands = new Set<Promise<unknown>>();
 
   constructor(options: CreateClientOptions = {}) {
     activeClients.add(this);
@@ -406,6 +428,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       return;
     }
 
+    activeClients.add(this);
     this.setClientStatus("starting");
     for (const lifecycle of this.adapterLifecycles) {
       void lifecycle.start();
@@ -418,26 +441,34 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.privateCoordinator.onClientStarted();
   }
 
-  async stop(_options?: StopOptions): Promise<void> {
-    if (this.status === "stopped" || this.status === "idle") {
-      if (this.status !== "stopped") {
-        this.setClientStatus("stopped");
+  async stop(options: StopOptions = {}): Promise<void> {
+    try {
+      if (this.status === "stopped" || this.status === "idle") {
+        if (this.status !== "stopped") {
+          this.setClientStatus("stopped");
+        }
+        return;
       }
-      return;
+
+      this.setClientStatus("stopping");
+
+      if (options.graceful ?? true) {
+        await this.drainInFlightStop(options.timeoutMs ?? 5_000);
+      }
+
+      const now = this.now();
+      for (const lifecycle of this.adapterLifecycles) {
+        lifecycle.stop();
+      }
+      this.privateCoordinator.onClientStopping();
+      this.marketManager.onClientStopping(now);
+      this.accountManager.onClientStopping(now);
+      this.orderManager.onClientStopping(now);
+
+      this.setClientStatus("stopped");
+    } finally {
+      activeClients.delete(this);
     }
-
-    this.setClientStatus("stopping");
-
-    const now = this.now();
-    for (const lifecycle of this.adapterLifecycles) {
-      lifecycle.stop();
-    }
-    this.privateCoordinator.onClientStopping();
-    this.marketManager.onClientStopping(now);
-    this.accountManager.onClientStopping(now);
-    this.orderManager.onClientStopping(now);
-
-    this.setClientStatus("stopped");
   }
 
   // --- ClientContext ---
@@ -516,6 +547,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   }
 
   createOrder(input: CreateOrderInput): Promise<RawOrderUpdate> {
+    this.assertStarted();
     const account = this.getPrivateCommandAccount(input.accountId);
     const request: CreateOrderRequest = {
       symbol: input.symbol,
@@ -529,14 +561,17 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       positionSide: input.positionSide,
     };
 
-    return this.getPrivateAdapter(account.venue).createOrder(
-      account.credentials ?? {},
-      request,
-      { ...account.options, accountId: account.accountId },
+    return this.trackOrderCommand(
+      this.getPrivateAdapter(account.venue).createOrder(
+        account.credentials ?? {},
+        request,
+        { ...account.options, accountId: account.accountId },
+      ),
     );
   }
 
   cancelOrder(input: CancelOrderInput): Promise<RawOrderUpdate> {
+    this.assertStarted();
     const account = this.getPrivateCommandAccount(input.accountId);
     const request: CancelOrderRequest = {
       symbol: input.symbol,
@@ -544,23 +579,28 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       clientOrderId: input.clientOrderId,
     };
 
-    return this.getPrivateAdapter(account.venue).cancelOrder(
-      account.credentials ?? {},
-      request,
-      { ...account.options, accountId: account.accountId },
+    return this.trackOrderCommand(
+      this.getPrivateAdapter(account.venue).cancelOrder(
+        account.credentials ?? {},
+        request,
+        { ...account.options, accountId: account.accountId },
+      ),
     );
   }
 
   cancelAllOrders(input: CancelAllOrdersInput): Promise<RawOrderUpdate[]> {
+    this.assertStarted();
     const account = this.getPrivateCommandAccount(input.accountId);
     const request: CancelAllOrdersRequest = {
       symbol: input.symbol,
     };
 
-    return this.getPrivateAdapter(account.venue).cancelAllOrders(
-      account.credentials ?? {},
-      request,
-      { ...account.options, accountId: account.accountId },
+    return this.trackOrderCommand(
+      this.getPrivateAdapter(account.venue).cancelAllOrders(
+        account.credentials ?? {},
+        request,
+        { ...account.options, accountId: account.accountId },
+      ),
     );
   }
 
@@ -594,6 +634,26 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         maxBuffer,
       });
     };
+  }
+
+  private trackOrderCommand<T>(promise: Promise<T>): Promise<T> {
+    const tracked = promise.finally(() => {
+      this.inFlightOrderCommands.delete(tracked);
+    });
+    this.inFlightOrderCommands.add(tracked);
+    return tracked;
+  }
+
+  private async drainInFlightStop(timeoutMs: number): Promise<void> {
+    const inFlight = [
+      ...this.inFlightOrderCommands,
+      ...this.privateCoordinator.getInFlightOperations(),
+    ];
+    if (inFlight.length === 0) {
+      return;
+    }
+
+    await raceWithTimeout(Promise.allSettled(inFlight), timeoutMs);
   }
 
   // --- Private ---

@@ -266,7 +266,9 @@ await client.start();
 await client.stop();
 ```
 
-状态机是 `idle → starting → running → stopping → stopped`。`start()` 和 `stop()` 幂等。`stop(options?)` 的 `graceful` / `timeoutMs` 当前是预留参数，不要依赖它们提供额外 drain 语义。
+状态机是 `idle → starting → running → stopping → stopped`。`start()` 和 `stop()` 幂等。
+
+`stop()` 默认执行 graceful drain：先把 client 状态切到 `stopping`，拒绝新的订单命令，然后等待已在途的 `createOrder()` / `cancelOrder()` / `cancelAllOrders()` 以及私有账户/订单 refresh、reconcile 完成；`timeoutMs` 默认 5000ms，超时后继续关闭流、timer 和 lifecycle。传 `{ graceful: false }` 会跳过等待并立即执行 teardown。
 
 ### 4.3 Venue capabilities
 

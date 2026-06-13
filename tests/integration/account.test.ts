@@ -1511,6 +1511,48 @@ test("account public getters expose collections and unsubscribe publishes stoppe
     [],
   );
 
+  const snapshot = client.account.getAccountSnapshot("main-binance");
+  const usdt = client.account.getBalance("main-binance", "USDT");
+  const position = client.account.getPosition({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const risk = client.account.getRiskSnapshot("main-binance");
+
+  expect(snapshot).toBeDefined();
+  expect(usdt).toBeDefined();
+  expect(position).toBeDefined();
+  expect(risk).toBeDefined();
+  if (!snapshot || !usdt || !position || !risk) {
+    throw new Error("Expected account getter snapshots");
+  }
+
+  expect(Object.isFrozen(snapshot)).toBe(true);
+  expect(Object.isFrozen(snapshot.balances)).toBe(true);
+  expect(Object.isFrozen(snapshot.positions)).toBe(true);
+  expect(Object.isFrozen(usdt)).toBe(true);
+  expect(Object.isFrozen(client.account.getBalances("main-binance")[0])).toBe(
+    true,
+  );
+  expect(Object.isFrozen(position)).toBe(true);
+  expect(Object.isFrozen(client.account.getPositions("main-binance")[0])).toBe(
+    true,
+  );
+  expect(Object.isFrozen(risk)).toBe(true);
+
+  const originalFree = usdt.free;
+  try {
+    usdt.free = "999999";
+  } catch {}
+  expect(client.account.getBalance("main-binance", "USDT")?.free).toBe(
+    originalFree,
+  );
+
+  try {
+    snapshot.balances.MUTATED = usdt;
+  } catch {}
+  expect(client.account.getBalance("main-binance", "MUTATED")).toBeUndefined();
+
   await client.account.unsubscribeAccount({
     accountId: "main-binance",
   });

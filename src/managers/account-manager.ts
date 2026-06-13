@@ -75,6 +75,37 @@ function isZeroBalance(balance: BalanceSnapshot): boolean {
   );
 }
 
+function freezeBalance(balance: BalanceSnapshot): BalanceSnapshot {
+  return Object.freeze({
+    ...balance,
+    lending: balance.lending
+      ? Object.freeze({ ...balance.lending })
+      : undefined,
+  });
+}
+
+function freezePosition(position: PositionSnapshot): PositionSnapshot {
+  return Object.freeze({ ...position });
+}
+
+function freezeRisk(risk: RiskSnapshot): RiskSnapshot {
+  return Object.freeze({
+    ...risk,
+    lending: risk.lending ? Object.freeze({ ...risk.lending }) : undefined,
+  });
+}
+
+function freezeAccountSnapshot(snapshot: AccountSnapshot): AccountSnapshot {
+  return Object.freeze({
+    ...snapshot,
+    balances: Object.freeze({ ...snapshot.balances }) as Record<
+      string,
+      BalanceSnapshot
+    >,
+    positions: Object.freeze([...snapshot.positions]) as PositionSnapshot[],
+  });
+}
+
 function successfulStatus(
   status: AccountDataStatus,
   options: {
@@ -442,7 +473,7 @@ export class AccountManagerImpl
       return;
     }
 
-    record.snapshot = {
+    record.snapshot = freezeAccountSnapshot({
       accountId,
       venue,
       balances,
@@ -454,7 +485,7 @@ export class AccountManagerImpl
           : update.exchangeTs,
       receivedAt: latestAppliedAt,
       updatedAt: latestAppliedAt,
-    };
+    });
     record.status = successfulStatus(record.status, {
       preserveStatus: options.preserveStatus,
       lastReceivedAt: latestAppliedAt,
@@ -570,7 +601,7 @@ export class AccountManagerImpl
       risk = this.createRisk(accountId, venue, snapshot.risk, previous.risk);
     }
 
-    record.snapshot = {
+    record.snapshot = freezeAccountSnapshot({
       accountId,
       venue,
       balances,
@@ -582,7 +613,7 @@ export class AccountManagerImpl
           : snapshot.exchangeTs,
       receivedAt: snapshot.receivedAt,
       updatedAt: snapshot.receivedAt,
-    };
+    });
     record.status = successfulStatus(record.status, {
       preserveStatus: options.preserveStatus,
       lastReceivedAt: snapshot.receivedAt,
@@ -687,7 +718,7 @@ export class AccountManagerImpl
       ? this.createRisk(accountId, venue, bootstrap.risk)
       : undefined;
 
-    return {
+    return freezeAccountSnapshot({
       accountId,
       venue,
       balances,
@@ -696,7 +727,7 @@ export class AccountManagerImpl
       exchangeTs: bootstrap.exchangeTs,
       receivedAt: bootstrap.receivedAt,
       updatedAt: bootstrap.receivedAt,
-    };
+    });
   }
 
   private createEmptySnapshot(
@@ -704,14 +735,14 @@ export class AccountManagerImpl
     venue: Venue,
   ): AccountSnapshot {
     const now = this.context.now();
-    return {
+    return freezeAccountSnapshot({
       accountId,
       venue,
       balances: {},
       positions: [],
       receivedAt: now,
       updatedAt: now,
-    };
+    });
   }
 
   private createBalance(
@@ -735,7 +766,7 @@ export class AccountManagerImpl
           ? total.minus(free)
           : previousUsed;
 
-    return {
+    return freezeBalance({
       accountId,
       venue,
       asset: input.asset,
@@ -762,7 +793,7 @@ export class AccountManagerImpl
                 : toCanonical(input.lending.borrowAPY),
           }
         : previous?.lending,
-    };
+    });
   }
 
   private createPosition(
@@ -771,7 +802,7 @@ export class AccountManagerImpl
     input: RawPositionUpdate,
     previous?: PositionSnapshot,
   ): PositionSnapshot {
-    return {
+    return freezePosition({
       accountId,
       venue,
       symbol: input.symbol,
@@ -801,7 +832,7 @@ export class AccountManagerImpl
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
       seq: (previous?.seq ?? 0) + 1,
-    };
+    });
   }
 
   private createRisk(
@@ -810,7 +841,7 @@ export class AccountManagerImpl
     input: RawRiskUpdate,
     previous?: RiskSnapshot,
   ): RiskSnapshot {
-    return {
+    return freezeRisk({
       accountId,
       venue,
       netEquity:
@@ -869,7 +900,7 @@ export class AccountManagerImpl
                 : toCanonical(input.lending.totalDebtUSD),
           }
         : previous?.lending,
-    };
+    });
   }
 
   private publishStatus(record: AccountRecord): void {

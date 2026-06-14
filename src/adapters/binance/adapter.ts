@@ -126,6 +126,16 @@ export class BinanceMarketAdapter implements MarketAdapter {
     });
   }
 
+  assertPublicRawTradesConfigured(): void {
+    if (this.options.marketDataApiKey?.trim()) {
+      return;
+    }
+
+    throw new Error(
+      "Binance public raw trades require a market API key; set CreateClientOptions.market.venues.binance.apiKey or BINANCE_MARKET_API_KEY",
+    );
+  }
+
   async fetchFundingRateHistory(
     market: MarketDefinition,
     request: FetchFundingRateHistoryRequest,

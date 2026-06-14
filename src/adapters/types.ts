@@ -232,6 +232,7 @@ export interface MarketAdapter {
     market: MarketDefinition,
     request: FetchPublicRawTradesRequest,
   ): Promise<RawPublicTradesResult>;
+  assertPublicRawTradesConfigured?(): void;
   fetchFundingRateHistory?(
     market: MarketDefinition,
     request: FetchFundingRateHistoryRequest,

@@ -431,7 +431,7 @@ for (const trade of result.trades) {
 }
 ```
 
-`fetchPublicTrades()` 查询公开市场成交，不是账号成交。当前 Binance 实现走 `aggTrades`，返回的是聚合成交：`PublicTrade.id` 是 aggregate trade id，`raw` 中保留 Binance 原始 `a/f/l/T/m` 等字段。`startTs` 必填，`endTs` 是排他上界；`endTs` 和 `limit` 至少传一个。只传 `limit` 时，从 `startTs` 开始返回最多 N 条；只传 `endTs` 时返回 `[startTs, endTs)` 内成交，adapter 会使用安全上限；两者都传时同时生效，返回时间窗口内最多 `limit` 条。命中上限时 `truncated = true` 并返回 `nextFromId`，该值是下一次 aggregate trade id。
+`fetchPublicTrades()` 查询公开市场成交，不是账号成交。当前 Binance 实现走 `aggTrades`，返回的是聚合成交：`PublicTrade.id` 是 aggregate trade id，`raw` 中保留 Binance 原始 `a/f/l/T/m` 等字段。`startTs` 必填，`endTs` 是排他上界；`endTs` 和 `limit` 至少传一个。只传 `limit` 时，从 `startTs` 开始返回最多 N 条；只传 `endTs` 时返回 `[startTs, endTs)` 内成交，adapter 会使用安全上限；两者都传时同时生效，返回时间窗口内最多 `limit` 条。命中上限时 `truncated = true`。
 
 ```ts
 const raw = await client.market.fetchPublicRawTrades({
@@ -442,7 +442,7 @@ const raw = await client.market.fetchPublicRawTrades({
 });
 ```
 
-`fetchPublicRawTrades()` 查询 Binance 逐笔 raw public trades，内部先用 `aggTrades` 按 `startTs` 定位起始 raw trade id，再带 `X-MBX-APIKEY` 调 `historicalTrades`，并按 raw trade 的 `time` 做 `[startTs, endTs)` 本地过滤。SDK 不会把用户的完整 `endTs` 窗口传给 locator 请求；如果定位到的首条 aggregate trade 已晚于 `endTs`，会返回空结果。该方法需要 Binance market API key；可通过 `createClient({ market: { venues: { binance: { apiKey } } } })` 显式传入，未显式传入时默认读取 `BINANCE_MARKET_API_KEY`。缺少 key 或远端请求失败会包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`。可查询范围仍受 Binance `historicalTrades`/MARKET_DATA 端点自身的数据可用性限制。
+`fetchPublicRawTrades()` 查询 Binance 逐笔 raw public trades，内部先用 `aggTrades` 按 `startTs` 定位起始 raw trade id，再带 `X-MBX-APIKEY` 调 `historicalTrades`，并按 raw trade 的 `time` 做 `[startTs, endTs)` 本地过滤。SDK 不会把用户的完整 `endTs` 窗口传给 locator 请求；如果定位到的首条 aggregate trade 已晚于 `endTs`，会返回空结果。该方法需要 Binance market API key；可通过 `createClient({ market: { venues: { binance: { apiKey } } } })` 显式传入，未显式传入时默认读取 `BINANCE_MARKET_API_KEY`。缺少 key 会在加载 market catalog 前本地失败并包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`。可查询范围同时受 Binance `aggTrades` locator 与 `historicalTrades`/MARKET_DATA 端点自身的数据可用性限制。
 
 ### 5.5 Funding rate history
 
@@ -1066,7 +1066,6 @@ interface FetchPublicTradesResult {
   endTs?: number;
   limit?: number;
   truncated: boolean;
-  nextFromId?: string;
 }
 
 interface FetchPublicRawTradesInput {
@@ -1083,7 +1082,6 @@ interface FetchPublicRawTradesResult {
   endTs?: number;
   limit?: number;
   truncated: boolean;
-  nextFromId?: string;
 }
 
 interface FundingRateHistoryEntry {

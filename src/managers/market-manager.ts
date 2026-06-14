@@ -338,9 +338,6 @@ export class MarketManagerImpl
         truncated: result.truncated,
         ...(input.endTs !== undefined ? { endTs: input.endTs } : {}),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
-        ...(result.nextFromId !== undefined
-          ? { nextFromId: result.nextFromId }
-          : {}),
       };
     } catch (error) {
       throw this.createPublicTradesFetchError(market, error);
@@ -352,16 +349,23 @@ export class MarketManagerImpl
   ): Promise<FetchPublicRawTradesResult> {
     this.validatePublicTradesInput(input);
 
-    const market = await this.resolveMarketDefinition(input);
-    const adapter = this.getMarketAdapter(market.venue);
+    const adapter = this.getMarketAdapter(input.venue);
     if (!adapter.fetchPublicRawTrades) {
       throw this.createError(
         "VENUE_NOT_SUPPORTED",
-        `Venue does not support public raw trade queries: ${market.venue}`,
-        { venue: market.venue, symbol: market.symbol },
+        `Venue does not support public raw trade queries: ${input.venue}`,
+        { venue: input.venue, symbol: input.symbol },
         "client",
       );
     }
+
+    try {
+      adapter.assertPublicRawTradesConfigured?.();
+    } catch (error) {
+      throw this.createPublicTradesFetchError(input, error);
+    }
+
+    const market = await this.resolveMarketDefinition(input);
 
     try {
       const result = await adapter.fetchPublicRawTrades(market, {
@@ -378,9 +382,6 @@ export class MarketManagerImpl
         truncated: result.truncated,
         ...(input.endTs !== undefined ? { endTs: input.endTs } : {}),
         ...(input.limit !== undefined ? { limit: input.limit } : {}),
-        ...(result.nextFromId !== undefined
-          ? { nextFromId: result.nextFromId }
-          : {}),
       };
     } catch (error) {
       throw this.createPublicTradesFetchError(market, error);
@@ -856,7 +857,7 @@ export class MarketManagerImpl
   }
 
   private createPublicTradesFetchError(
-    market: MarketDefinition,
+    market: { venue: Venue; symbol: string },
     error: unknown,
   ): AcexError {
     const details = buildAcexErrorDetails(

@@ -855,7 +855,6 @@ test("MarketManager fetchPublicTrades does not require start and canonicalizes a
     startTs: 1_000,
     limit: 1,
     truncated: true,
-    nextFromId: "11",
   });
 });
 
@@ -1061,7 +1060,7 @@ test("MarketManager fetchPublicRawTrades does not require start and canonicalize
   });
 });
 
-test("MarketManager fetchPublicRawTrades rejects adapters without support", async () => {
+test("MarketManager fetchPublicRawTrades rejects adapters without support before loading catalogs", async () => {
   const context = new StubMarketContext();
   const okxAdapter = new FakeOkxMarketAdapter({ venue: "okx" });
   const manager = new MarketManagerImpl(
@@ -1084,7 +1083,7 @@ test("MarketManager fetchPublicRawTrades rejects adapters without support", asyn
     },
   });
 
-  expect(okxAdapter.loadMarketsCalls).toBe(1);
+  expect(okxAdapter.loadMarketsCalls).toBe(0);
   expect(context.errors).toContainEqual(
     expect.objectContaining({
       source: "client",

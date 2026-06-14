@@ -84,7 +84,6 @@ export interface FetchPublicTradesResult {
   endTs?: number;
   limit?: number;
   truncated: boolean;
-  nextFromId?: string;
 }
 
 export interface FetchPublicRawTradesInput extends MarketKeyInput {
@@ -102,7 +101,6 @@ export interface FetchPublicRawTradesResult {
   endTs?: number;
   limit?: number;
   truncated: boolean;
-  nextFromId?: string;
 }
 
 export interface FundingRateHistoryEntry {

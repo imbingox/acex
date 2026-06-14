@@ -366,7 +366,7 @@ test("fetchBinancePublicRawTrades locates raw ids and sends the market API key",
         if (parsed.pathname === "/fapi/v1/aggTrades") {
           expect(parsed.searchParams.get("symbol")).toBe("BTCUSDT");
           expect(parsed.searchParams.get("startTime")).toBe("1000");
-          expect(parsed.searchParams.get("endTime")).toBe("1999");
+          expect(parsed.searchParams.get("endTime")).toBeNull();
           expect(parsed.searchParams.get("limit")).toBe("1");
           return jsonResponse([
             {
@@ -457,6 +457,45 @@ test("fetchBinancePublicRawTrades locates raw ids and sends the market API key",
         },
       },
     ],
+    truncated: false,
+  });
+});
+
+test("fetchBinancePublicRawTrades avoids historical request when locator is outside the requested window", async () => {
+  const requestedPaths: string[] = [];
+  const result = await fetchBinancePublicRawTrades(
+    binanceUsdmMarket,
+    {
+      startTs: 1_000,
+      endTs: 2_000,
+    },
+    {
+      apiKey: "market-key",
+      fetchFn: async (input) => {
+        const parsed = new URL(input.toString());
+        requestedPaths.push(parsed.pathname);
+
+        if (parsed.pathname === "/fapi/v1/aggTrades") {
+          expect(parsed.searchParams.get("startTime")).toBe("1000");
+          expect(parsed.searchParams.get("endTime")).toBeNull();
+          return jsonResponse([
+            {
+              a: 10,
+              f: 100,
+              l: 102,
+              T: 2_000,
+            },
+          ]);
+        }
+
+        throw new Error(`Unexpected URL: ${parsed.toString()}`);
+      },
+    },
+  );
+
+  expect(requestedPaths).toEqual(["/fapi/v1/aggTrades"]);
+  expect(result).toEqual({
+    trades: [],
     truncated: false,
   });
 });

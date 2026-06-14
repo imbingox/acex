@@ -362,6 +362,74 @@ test("fetchPublicRawTrades returns Binance raw public trades with a market API k
   expect(result.trades.map((trade) => trade.id)).not.toContain("1002");
 });
 
+test("fetchPublicRawTrades reads BINANCE_MARKET_API_KEY when no explicit key is configured", async () => {
+  const previousApiKey = process.env.BINANCE_MARKET_API_KEY;
+  process.env.BINANCE_MARKET_API_KEY = "market-key";
+
+  try {
+    installBinanceMarketInfra();
+    const client = createClient();
+
+    const result = await client.market.fetchPublicRawTrades({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1710000000000,
+      endTs: 1710000000100,
+    });
+
+    expect(result.trades.map((trade) => trade.id)).toEqual(["1000"]);
+    expect(result.truncated).toBe(false);
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.BINANCE_MARKET_API_KEY;
+    } else {
+      process.env.BINANCE_MARKET_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test("fetchFundingRateHistory returns Binance funding history through the client", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  const result = await client.market.fetchFundingRateHistory({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1710000000000,
+    endTs: 1710100000000,
+    limit: 2,
+  });
+
+  expect(result).toMatchObject({
+    startTs: 1710000000000,
+    endTs: 1710100000000,
+    limit: 2,
+    truncated: true,
+  });
+  expect(result.rates).toHaveLength(2);
+  expect(result.rates[0]).toMatchObject({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    fundingRate: new BigNumber("0.00010000").toFixed(),
+    fundingTime: 1710000000000,
+    markPrice: new BigNumber("102000.10").toFixed(),
+    raw: {
+      symbol: "BTCUSDT",
+      fundingRate: "0.00010000",
+      fundingTime: 1710000000000,
+      markPrice: "102000.10",
+    },
+  });
+  expect(result.rates[1]).toMatchObject({
+    fundingRate: new BigNumber("-0.00020000").toFixed(),
+    fundingTime: 1710028800000,
+    markPrice: new BigNumber("101500.00").toFixed(),
+  });
+  expect(result.rates.every((rate) => Number.isFinite(rate.receivedAt))).toBe(
+    true,
+  );
+});
+
 test("market subscribe is a ready barrier and emits standardized l1 book updates", async () => {
   installBinanceMarketInfra();
   const client = createClient({

@@ -235,18 +235,27 @@ async function findFirstRawTradeId(
   request: FetchPublicRawTradesRequest,
   options: FetchBinancePublicTradesOptions & { readonly fetchFn: FetchLike },
 ): Promise<string | undefined> {
-  const endTime =
-    request.endTs === undefined ? undefined : Math.max(0, request.endTs - 1);
+  // Keep the locator query independent from the requested endTs. Binance
+  // documents time-window limits for aggregate-trade lookups, while the first
+  // aggregate at or after startTs is enough to derive the first raw trade id.
   const aggTrades = await requestAggregateTrades(market, {
     fetchFn: options.fetchFn,
     rateLimiter: options.rateLimiter,
     startTime: request.startTs,
-    endTime,
     limit: 1,
   });
 
   const first = aggTrades[0];
   if (!first) {
+    return undefined;
+  }
+
+  const firstTradeTime = readTimestampMs(
+    first,
+    "T",
+    "Binance aggregate trade time",
+  );
+  if (request.endTs !== undefined && firstTradeTime >= request.endTs) {
     return undefined;
   }
 

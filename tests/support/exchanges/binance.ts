@@ -8,6 +8,7 @@ const USDM_SERVER_TIME_URL = "https://fapi.binance.com/fapi/v1/time";
 const USDM_AGG_TRADES_URL = "https://fapi.binance.com/fapi/v1/aggTrades";
 const USDM_HISTORICAL_TRADES_URL =
   "https://fapi.binance.com/fapi/v1/historicalTrades";
+const USDM_FUNDING_RATE_URL = "https://fapi.binance.com/fapi/v1/fundingRate";
 const PAPI_REST_BASE_URL = "https://papi.binance.com";
 
 export const BINANCE_SPOT_WS_BASE_URL = "wss://stream.binance.com:9443/ws";
@@ -377,6 +378,20 @@ const binanceFixtures = {
       },
     ],
   },
+  fundingRateHistory: [
+    {
+      symbol: "BTCUSDT",
+      fundingRate: "0.00010000",
+      fundingTime: 1710000000000,
+      markPrice: "102000.10",
+    },
+    {
+      symbol: "BTCUSDT",
+      fundingRate: "-0.00020000",
+      fundingTime: 1710028800000,
+      markPrice: "101500.00",
+    },
+  ],
 };
 
 function parseControlFrame(frame: string): BinanceControlFrame | undefined {
@@ -467,6 +482,11 @@ export function installBinanceMarketInfra(): void {
             .filter((trade) => trade.id >= fromId)
             .slice(0, limit),
         );
+      }
+
+      if (endpoint === USDM_FUNDING_RATE_URL) {
+        const limit = Number(parsed.searchParams.get("limit") ?? "100");
+        return jsonResponse(binanceFixtures.fundingRateHistory.slice(0, limit));
       }
 
       switch (url) {

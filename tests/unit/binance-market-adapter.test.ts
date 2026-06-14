@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { BinanceMarketAdapter } from "../../src/adapters/binance/adapter.ts";
-import { loadBinanceMarkets } from "../../src/adapters/binance/market-catalog.ts";
+import {
+  type BinanceMarketDefinition,
+  loadBinanceMarkets,
+} from "../../src/adapters/binance/market-catalog.ts";
+import { fetchBinancePublicRawTrades } from "../../src/adapters/binance/public-trades.ts";
 import { fetchBinanceServerTime } from "../../src/adapters/binance/server-time.ts";
 import type { L1BookStreamCallbacks } from "../../src/adapters/types.ts";
 import { isTransportError } from "../../src/internal/http-client.ts";
@@ -13,6 +17,26 @@ const callbacks: L1BookStreamCallbacks = {
   onFreshnessChange(): void {},
   onDisconnected(): void {},
   onError(): void {},
+};
+
+const binanceUsdmMarket: BinanceMarketDefinition = {
+  venue: "binance",
+  family: "usdm",
+  symbol: "BTC/USDT:USDT",
+  id: "BTCUSDT",
+  type: "swap",
+  base: "BTC",
+  quote: "USDT",
+  settle: "USDT",
+  active: true,
+  contract: true,
+  linear: true,
+  contractSize: "1",
+  pricePrecision: 1,
+  amountPrecision: 3,
+  priceStep: "0.1",
+  amountStep: "0.001",
+  raw: {},
 };
 
 test("BinanceMarketAdapter rejects stream timing option changes after multiplexer creation", async () => {
@@ -176,4 +200,192 @@ test("fetchBinanceServerTime samples timestamps after limiter and before HTTP", 
     "monotonicClock",
     "afterResponse",
   ]);
+});
+
+test("fetchBinancePublicRawTrades locates raw ids with aggTrades and filters by raw trade time", async () => {
+  const requestedUrls: string[] = [];
+  const result = await fetchBinancePublicRawTrades(
+    binanceUsdmMarket,
+    {
+      startTs: 1_000,
+      endTs: 2_000,
+    },
+    {
+      now: () => 5_000,
+      fetchFn: async (input) => {
+        const url = input.toString();
+        requestedUrls.push(url);
+        const parsed = new URL(url);
+
+        if (parsed.pathname === "/fapi/v1/aggTrades") {
+          expect(parsed.searchParams.get("symbol")).toBe("BTCUSDT");
+          expect(parsed.searchParams.get("startTime")).toBe("1000");
+          expect(parsed.searchParams.get("endTime")).toBe("1999");
+          expect(parsed.searchParams.get("limit")).toBe("1");
+          return jsonResponse([
+            {
+              a: 10,
+              p: "100.10",
+              q: "0.010",
+              f: 100,
+              l: 102,
+              T: 1_000,
+              m: false,
+            },
+          ]);
+        }
+
+        if (parsed.pathname === "/fapi/v1/historicalTrades") {
+          expect(parsed.searchParams.get("symbol")).toBe("BTCUSDT");
+          expect(parsed.searchParams.get("fromId")).toBe("100");
+          expect(parsed.searchParams.get("limit")).toBe("500");
+          return jsonResponse([
+            {
+              id: 100,
+              price: "100.10",
+              qty: "0.010",
+              quoteQty: "1.001",
+              time: 1_000,
+              isBuyerMaker: false,
+            },
+            {
+              id: 101,
+              price: "100.20",
+              qty: "0.020",
+              quoteQty: "2.004",
+              time: 1_999,
+              isBuyerMaker: true,
+            },
+            {
+              id: 102,
+              price: "100.30",
+              qty: "0.030",
+              quoteQty: "3.009",
+              time: 2_000,
+              isBuyerMaker: false,
+            },
+          ]);
+        }
+
+        throw new Error(`Unexpected URL: ${url}`);
+      },
+    },
+  );
+
+  expect(requestedUrls).toHaveLength(2);
+  expect(result).toEqual({
+    trades: [
+      {
+        id: "100",
+        price: "100.10",
+        amount: "0.010",
+        cost: "1.001",
+        side: "buy",
+        exchangeTs: 1_000,
+        receivedAt: 5_000,
+        raw: {
+          id: 100,
+          price: "100.10",
+          qty: "0.010",
+          quoteQty: "1.001",
+          time: 1_000,
+          isBuyerMaker: false,
+        },
+      },
+      {
+        id: "101",
+        price: "100.20",
+        amount: "0.020",
+        cost: "2.004",
+        side: "sell",
+        exchangeTs: 1_999,
+        receivedAt: 5_000,
+        raw: {
+          id: 101,
+          price: "100.20",
+          qty: "0.020",
+          quoteQty: "2.004",
+          time: 1_999,
+          isBuyerMaker: true,
+        },
+      },
+    ],
+    truncated: false,
+  });
+});
+
+test("fetchBinancePublicRawTrades returns nextFromId when the requested limit is reached", async () => {
+  const historicalFromIds: string[] = [];
+  const result = await fetchBinancePublicRawTrades(
+    binanceUsdmMarket,
+    {
+      startTs: 1_000,
+      limit: 2,
+    },
+    {
+      now: () => 5_000,
+      fetchFn: async (input) => {
+        const parsed = new URL(input.toString());
+
+        if (parsed.pathname === "/fapi/v1/aggTrades") {
+          expect(parsed.searchParams.get("endTime")).toBeNull();
+          return jsonResponse([{ f: "100", l: "102", T: 1_000 }]);
+        }
+
+        if (parsed.pathname === "/fapi/v1/historicalTrades") {
+          historicalFromIds.push(parsed.searchParams.get("fromId") ?? "");
+          expect(parsed.searchParams.get("limit")).toBe("2");
+          return jsonResponse([
+            {
+              id: 100,
+              price: "100.10",
+              qty: "0.010",
+              time: 1_000,
+              isBuyerMaker: false,
+            },
+            {
+              id: 101,
+              price: "100.20",
+              qty: "0.020",
+              time: 1_001,
+              isBuyerMaker: true,
+            },
+          ]);
+        }
+
+        throw new Error(`Unexpected URL: ${parsed.toString()}`);
+      },
+    },
+  );
+
+  expect(historicalFromIds).toEqual(["100"]);
+  expect(result.trades.map((trade) => trade.id)).toEqual(["100", "101"]);
+  expect(result).toMatchObject({
+    truncated: true,
+    nextFromId: "102",
+  });
+});
+
+test("fetchBinancePublicRawTrades returns an empty result when no aggregate trade covers the window", async () => {
+  const requestedPaths: string[] = [];
+  const result = await fetchBinancePublicRawTrades(
+    binanceUsdmMarket,
+    {
+      startTs: 1_000,
+      endTs: 2_000,
+    },
+    {
+      fetchFn: async (input) => {
+        const parsed = new URL(input.toString());
+        requestedPaths.push(parsed.pathname);
+        return jsonResponse([]);
+      },
+    },
+  );
+
+  expect(requestedPaths).toEqual(["/fapi/v1/aggTrades"]);
+  expect(result).toEqual({
+    trades: [],
+    truncated: false,
+  });
 });

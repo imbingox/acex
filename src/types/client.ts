@@ -91,6 +91,7 @@ export type OrderTimeInForceCapability = "gtc" | "post_only";
 export interface VenueMarketCapabilities {
   catalog: VenueCapabilitySupport;
   serverTime: VenueCapabilitySupport;
+  publicRawTrades: VenueCapabilitySupport;
   l1Book: VenueCapabilitySupport;
   fundingRate: FundingRateCapability;
   marketTypes: MarketType[];

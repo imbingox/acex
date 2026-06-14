@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import { BinanceMarketAdapter } from "../../src/adapters/binance/adapter.ts";
 import type {
+  FetchPublicRawTradesRequest,
   FundingRateStreamCallbacks,
   FundingRateStreamOptions,
   L1BookStreamCallbacks,
   L1BookStreamOptions,
   MarketAdapter,
   RawOrderUpdate,
+  RawPublicTradesResult,
   RawSymbolFeeRate,
   StreamHandle,
 } from "../../src/adapters/types.ts";
@@ -139,13 +141,25 @@ class NotStartedMarketContext extends StubMarketContext {
 class CountingMarketAdapter implements MarketAdapter {
   readonly venue: Venue;
   readonly marketCapabilities: VenueMarketCapabilities;
+  readonly fetchPublicRawTrades?: MarketAdapter["fetchPublicRawTrades"];
   loadMarketsCalls = 0;
+  publicRawTradesCalls = 0;
   l1BookStreamCalls = 0;
   fundingRateStreamCalls = 0;
 
   constructor(private readonly inner: MarketAdapter) {
     this.venue = inner.venue;
     this.marketCapabilities = inner.marketCapabilities;
+    if (inner.fetchPublicRawTrades) {
+      const fetchPublicRawTrades = inner.fetchPublicRawTrades.bind(inner);
+      this.fetchPublicRawTrades = async (
+        market: MarketDefinition,
+        request: FetchPublicRawTradesRequest,
+      ): Promise<RawPublicTradesResult> => {
+        this.publicRawTradesCalls += 1;
+        return await fetchPublicRawTrades(market, request);
+      };
+    }
   }
 
   async loadMarkets(): Promise<MarketDefinition[]> {
@@ -745,6 +759,210 @@ test("MarketManager fetchServerTime rejects venues without support", async () =>
   expect(context.errors).toHaveLength(2);
   expect(context.errors.map((event) => event.venue)).toEqual(["okx", "bybit"]);
   expect(context.errors.every((event) => event.source === "client")).toBe(true);
+});
+
+test("MarketManager fetchPublicRawTrades does not require start and canonicalizes adapter output", async () => {
+  const requests: Array<{
+    market: MarketDefinition;
+    request: FetchPublicRawTradesRequest;
+  }> = [];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+  }) as FakeOkxMarketAdapter & {
+    fetchPublicRawTrades(
+      market: MarketDefinition,
+      request: FetchPublicRawTradesRequest,
+    ): Promise<RawPublicTradesResult>;
+  };
+  okxAdapter.fetchPublicRawTrades = async (
+    market,
+    request,
+  ): Promise<RawPublicTradesResult> => {
+    requests.push({ market, request });
+    return {
+      trades: [
+        {
+          id: "10",
+          price: "100.1000",
+          amount: "0.0100",
+          cost: "1.001000",
+          side: "buy",
+          exchangeTs: 1_000,
+          receivedAt: 1_500,
+          raw: {
+            id: 10,
+            price: "100.1000",
+            qty: "0.0100",
+          },
+        },
+      ],
+      truncated: true,
+      nextFromId: "11",
+    };
+  };
+  const manager = new MarketManagerImpl(
+    new NotStartedMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const result = await manager.fetchPublicRawTrades({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1_000,
+    limit: 1,
+  });
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.market.symbol).toBe("BTC/USDT:USDT");
+  expect(requests[0]?.request).toEqual({
+    startTs: 1_000,
+    limit: 1,
+  });
+  expect(result).toEqual({
+    trades: [
+      {
+        venue: "okx",
+        symbol: "BTC/USDT:USDT",
+        id: "10",
+        price: "100.1",
+        amount: "0.01",
+        cost: "1.001",
+        side: "buy",
+        exchangeTs: 1_000,
+        receivedAt: 1_500,
+        raw: {
+          id: 10,
+          price: "100.1000",
+          qty: "0.0100",
+        },
+      },
+    ],
+    startTs: 1_000,
+    limit: 1,
+    truncated: true,
+    nextFromId: "11",
+  });
+});
+
+test("MarketManager fetchPublicRawTrades validates time-window inputs before loading catalogs", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(
+    manager.fetchPublicRawTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+  await expect(
+    manager.fetchPublicRawTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+      endTs: 1_000,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+  await expect(
+    manager.fetchPublicRawTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+      limit: 0,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+
+  expect(okxAdapter.loadMarketsCalls).toBe(0);
+  expect(context.errors).toHaveLength(3);
+  expect(context.errors.every((event) => event.source === "market")).toBe(true);
+});
+
+test("MarketManager fetchPublicRawTrades rejects adapters without support", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter({ venue: "okx" });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(
+    manager.fetchPublicRawTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+      limit: 1,
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]).toMatchObject({
+    source: "client",
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+});
+
+test("MarketManager fetchPublicRawTrades wraps adapter failures", async () => {
+  const context = new StubMarketContext();
+  const cause = new Error("okx raw trades failed");
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+  }) as FakeOkxMarketAdapter & {
+    fetchPublicRawTrades(
+      market: MarketDefinition,
+      request: FetchPublicRawTradesRequest,
+    ): Promise<RawPublicTradesResult>;
+  };
+  okxAdapter.fetchPublicRawTrades = async () => {
+    throw cause;
+  };
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const failure = await manager
+    .fetchPublicRawTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+      limit: 1,
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
+    code: "MARKET_PUBLIC_TRADES_FETCH_FAILED",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+  expect((failure as AcexError).cause).toBe(cause);
+  expect(context.errors).toContainEqual(
+    expect.objectContaining({
+      source: "adapter",
+      error: cause,
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  );
 });
 
 test("MarketManager dispatches L1 subscriptions to the adapter for each venue", async () => {

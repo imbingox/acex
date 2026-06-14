@@ -94,6 +94,7 @@ export class FakeOkxMarketAdapter implements MarketAdapter {
   readonly marketCapabilities: VenueMarketCapabilities = {
     catalog: "supported",
     serverTime: "unsupported",
+    publicRawTrades: "unsupported",
     l1Book: "supported",
     fundingRate: "market_dependent",
     marketTypes: ["spot", "swap"],

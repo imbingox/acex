@@ -1,5 +1,6 @@
 import type BigNumber from "bignumber.js";
 import type { AcexError } from "../errors.ts";
+import type { OrderSide } from "./order.ts";
 import type {
   EventStreamOptions,
   MarketFreshness,
@@ -53,6 +54,37 @@ export interface VenueServerTime {
   roundTripMs: number;
   /** NTP-style offset estimate: serverTime - midpoint(requestSentAt, responseReceivedAt). */
   estimatedOffsetMs: number;
+}
+
+export interface PublicTrade {
+  venue: Venue;
+  symbol: string;
+  id: string;
+  price: string;
+  amount: string;
+  cost?: string;
+  side?: OrderSide;
+  exchangeTs: number;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+export interface FetchPublicRawTradesInput extends MarketKeyInput {
+  /** Inclusive exchange trade-time lower bound, in epoch milliseconds. */
+  startTs: number;
+  /** Exclusive exchange trade-time upper bound, in epoch milliseconds. */
+  endTs?: number;
+  /** Maximum number of raw trades to return. */
+  limit?: number;
+}
+
+export interface FetchPublicRawTradesResult {
+  trades: PublicTrade[];
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
+  nextFromId?: string;
 }
 
 export interface MarketDataStatus {
@@ -200,6 +232,9 @@ export interface MarketManager {
   loadMarkets(): Promise<void>;
   reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
   fetchServerTime(venue: Venue): Promise<VenueServerTime>;
+  fetchPublicRawTrades(
+    input: FetchPublicRawTradesInput,
+  ): Promise<FetchPublicRawTradesResult>;
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;

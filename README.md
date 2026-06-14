@@ -135,6 +135,7 @@ Juplend 使用 `@jup-ag/lend-read` 通过 Solana RPC 读取原生借贷仓位，
 ```ts
 const binance = client.getVenueCapabilities("binance");
 console.log(binance.order.supported); // true
+console.log(binance.market.publicRawTrades); // "supported"
 console.log(binance.market.fundingRate); // "market_dependent"
 
 const juplend = client.getVenueCapabilities("juplend");

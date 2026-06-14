@@ -280,6 +280,44 @@ test("fetchServerTime works before client start and returns latency fields", asy
   );
 });
 
+test("fetchPublicRawTrades returns Binance raw public trades filtered by raw exchange time", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  const result = await client.market.fetchPublicRawTrades({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+  });
+
+  expect(result).toMatchObject({
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+    truncated: false,
+  });
+  expect(result.trades).toHaveLength(2);
+  expect(result.trades[0]).toMatchObject({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    id: "1000",
+    price: new BigNumber("102000.10").toFixed(),
+    amount: new BigNumber("0.010").toFixed(),
+    cost: new BigNumber("1020.001").toFixed(),
+    side: "buy",
+    exchangeTs: 1710000000000,
+  });
+  expect(result.trades[1]).toMatchObject({
+    id: "1001",
+    side: "sell",
+    exchangeTs: 1710000000100,
+  });
+  expect(
+    result.trades.every((trade) => Number.isFinite(trade.receivedAt)),
+  ).toBe(true);
+  expect(result.trades.map((trade) => trade.id)).not.toContain("1002");
+});
+
 test("market subscribe is a ready barrier and emits standardized l1 book updates", async () => {
   installBinanceMarketInfra();
   const client = createClient({

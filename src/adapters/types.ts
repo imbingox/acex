@@ -135,6 +135,29 @@ export interface RawFundingRateUpdate {
   receivedAt: number;
 }
 
+export interface FetchPublicRawTradesRequest {
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+}
+
+export interface RawPublicTrade {
+  id: string;
+  price: string;
+  amount: string;
+  cost?: string;
+  side?: OrderSide;
+  exchangeTs: number;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+export interface RawPublicTradesResult {
+  trades: RawPublicTrade[];
+  truncated: boolean;
+  nextFromId?: string;
+}
+
 export interface L1BookStreamCallbacks {
   onUpdate(update: RawL1BookUpdate): void;
   onFreshnessChange(
@@ -176,6 +199,10 @@ export interface MarketAdapter {
   readonly marketCapabilities: VenueMarketCapabilities;
   loadMarkets(): Promise<MarketDefinition[]>;
   fetchServerTime?(): Promise<VenueServerTime>;
+  fetchPublicRawTrades?(
+    market: MarketDefinition,
+    request: FetchPublicRawTradesRequest,
+  ): Promise<RawPublicTradesResult>;
   createL1BookStream(
     market: MarketDefinition,
     callbacks: L1BookStreamCallbacks,

@@ -24,8 +24,14 @@ export const BINANCE_RATE_LIMIT_BUCKETS = {
 
 export const BINANCE_RATE_LIMIT_PLANS = {
   spotExchangeInfo: "binance:spot:exchange-info",
+  spotAggTrades: "binance:spot:agg-trades",
+  spotHistoricalTrades: "binance:spot:historical-trades",
   fapiExchangeInfo: "binance:fapi:exchange-info",
+  fapiAggTrades: "binance:fapi:agg-trades",
+  fapiHistoricalTrades: "binance:fapi:historical-trades",
   dapiExchangeInfo: "binance:dapi:exchange-info",
+  dapiAggTrades: "binance:dapi:agg-trades",
+  dapiHistoricalTrades: "binance:dapi:historical-trades",
   fapiServerTime: "binance:fapi:server-time",
   papiBalance: "binance:papi:balance",
   papiAccount: "binance:papi:account",
@@ -90,14 +96,44 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       20,
     ),
     requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.spotAggTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.spotRequestWeight1m,
+      4,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.spotHistoricalTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.spotRequestWeight1m,
+      25,
+    ),
+    requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.fapiExchangeInfo,
       BINANCE_RATE_LIMIT_BUCKETS.fapiRequestWeight1m,
       1,
     ),
     requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.fapiAggTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.fapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.fapiHistoricalTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.fapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.dapiExchangeInfo,
       BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
       1,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.dapiAggTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.dapiHistoricalTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
+      20,
     ),
     requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.fapiServerTime,
@@ -196,6 +232,28 @@ export function getBinanceCatalogRateLimitPlanId(
 
 export function getBinanceServerTimeRateLimitPlanId(): string {
   return BINANCE_RATE_LIMIT_PLANS.fapiServerTime;
+}
+
+export function getBinancePublicMarketRateLimitPlanId(
+  method: string,
+  path: string,
+): string | undefined {
+  switch (`${method} ${path}`) {
+    case "GET /api/v3/aggTrades":
+      return BINANCE_RATE_LIMIT_PLANS.spotAggTrades;
+    case "GET /api/v3/historicalTrades":
+      return BINANCE_RATE_LIMIT_PLANS.spotHistoricalTrades;
+    case "GET /fapi/v1/aggTrades":
+      return BINANCE_RATE_LIMIT_PLANS.fapiAggTrades;
+    case "GET /fapi/v1/historicalTrades":
+      return BINANCE_RATE_LIMIT_PLANS.fapiHistoricalTrades;
+    case "GET /dapi/v1/aggTrades":
+      return BINANCE_RATE_LIMIT_PLANS.dapiAggTrades;
+    case "GET /dapi/v1/historicalTrades":
+      return BINANCE_RATE_LIMIT_PLANS.dapiHistoricalTrades;
+    default:
+      return undefined;
+  }
 }
 
 export function getBinancePapiRateLimitPlanId(

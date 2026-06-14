@@ -6,6 +6,7 @@ import {
   BINANCE_RATE_LIMIT_TOPOLOGY,
   getBinanceCatalogRateLimitPlanId,
   getBinancePapiRateLimitPlanId,
+  getBinancePublicMarketRateLimitPlanId,
   getBinanceServerTimeRateLimitPlanId,
   registerBinanceRateLimitTopology,
 } from "../../src/adapters/binance/rate-limit-topology.ts";
@@ -208,6 +209,27 @@ test("registerBinanceRateLimitTopology feature-detects old custom limiters", () 
     planId: BINANCE_RATE_LIMIT_PLANS.papiAccount,
   });
   expect(seen.at(-1)?.planId).toBe(BINANCE_RATE_LIMIT_PLANS.papiAccount);
+});
+
+test("Binance public market trade endpoints map to request-weight plans", () => {
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/api/v3/aggTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.spotAggTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/api/v3/historicalTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.spotHistoricalTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/fapi/v1/aggTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.fapiAggTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/fapi/v1/historicalTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.fapiHistoricalTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/dapi/v1/aggTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.dapiAggTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/dapi/v1/historicalTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.dapiHistoricalTrades);
 });
 
 test("BudgetRateLimiter falls back to endpoint scope for unknown plans", async () => {

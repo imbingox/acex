@@ -7,6 +7,7 @@ import type {
   MarketAdapter,
   RawFundingRateUpdate,
   RawL1BookUpdate,
+  RawPublicTrade,
   StreamHandle,
 } from "../adapters/types.ts";
 import type {
@@ -28,6 +29,8 @@ import { toCanonical } from "../internal/decimal.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
 import type {
   EventStreamOptions,
+  FetchPublicRawTradesInput,
+  FetchPublicRawTradesResult,
   FundingRateSnapshot,
   FundingRateUpdatedEvent,
   L1Book,
@@ -43,6 +46,7 @@ import type {
   MarketStatusChangedEvent,
   NormalizedOrderInput,
   NormalizeOrderInputInput,
+  PublicTrade,
   SubscribeFundingRateInput,
   SubscribeL1BookInput,
   SubscriptionActivity,
@@ -143,6 +147,10 @@ function freezeL1Book(book: L1Book): L1Book {
 
 function freezeFundingRate(snapshot: FundingRateSnapshot): FundingRateSnapshot {
   return Object.freeze(snapshot);
+}
+
+function isTimestampMs(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 function cloneMarketDefinition(definition: MarketDefinition): MarketDefinition {
@@ -289,6 +297,46 @@ export class MarketManagerImpl
       return await adapter.fetchServerTime();
     } catch (error) {
       throw this.createServerTimeFetchError(venue, error);
+    }
+  }
+
+  async fetchPublicRawTrades(
+    input: FetchPublicRawTradesInput,
+  ): Promise<FetchPublicRawTradesResult> {
+    this.validatePublicRawTradesInput(input);
+
+    const market = await this.resolveMarketDefinition(input);
+    const adapter = this.getMarketAdapter(market.venue);
+    if (!adapter.fetchPublicRawTrades) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support public raw trade queries: ${market.venue}`,
+        { venue: market.venue, symbol: market.symbol },
+        "client",
+      );
+    }
+
+    try {
+      const result = await adapter.fetchPublicRawTrades(market, {
+        startTs: input.startTs,
+        endTs: input.endTs,
+        limit: input.limit,
+      });
+
+      return {
+        trades: result.trades.map((trade) =>
+          this.createPublicTrade(market, trade),
+        ),
+        startTs: input.startTs,
+        truncated: result.truncated,
+        ...(input.endTs !== undefined ? { endTs: input.endTs } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(result.nextFromId !== undefined
+          ? { nextFromId: result.nextFromId }
+          : {}),
+      };
+    } catch (error) {
+      throw this.createPublicRawTradesFetchError(market, error);
     }
   }
 
@@ -720,6 +768,107 @@ export class MarketManagerImpl
       { venue },
     );
     return wrapped;
+  }
+
+  private createPublicRawTradesFetchError(
+    market: MarketDefinition,
+    error: unknown,
+  ): AcexError {
+    const details = buildAcexErrorDetails(
+      { venue: market.venue, symbol: market.symbol },
+      error,
+    );
+    const wrapped = new AcexError(
+      "MARKET_PUBLIC_TRADES_FETCH_FAILED",
+      formatAcexErrorMessage(
+        `Failed to fetch public raw trades from ${market.venue}: ${market.symbol}`,
+        details,
+      ),
+      {
+        cause: error,
+        details,
+      },
+    );
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error("Unknown public raw trades fetch failure"),
+      { venue: market.venue, symbol: market.symbol },
+    );
+    return wrapped;
+  }
+
+  private validatePublicRawTradesInput(input: FetchPublicRawTradesInput): void {
+    const metadata = { venue: input.venue, symbol: input.symbol };
+
+    if (!isTimestampMs(input.startTs)) {
+      throw this.createError(
+        "MARKET_INPUT_INVALID",
+        "startTs must be a non-negative integer epoch millisecond timestamp",
+        metadata,
+        "market",
+      );
+    }
+
+    if (input.endTs === undefined && input.limit === undefined) {
+      throw this.createError(
+        "MARKET_INPUT_INVALID",
+        "Either endTs or limit must be provided when fetching public raw trades",
+        metadata,
+        "market",
+      );
+    }
+
+    if (input.endTs !== undefined) {
+      if (!isTimestampMs(input.endTs)) {
+        throw this.createError(
+          "MARKET_INPUT_INVALID",
+          "endTs must be a non-negative integer epoch millisecond timestamp",
+          metadata,
+          "market",
+        );
+      }
+
+      if (input.endTs <= input.startTs) {
+        throw this.createError(
+          "MARKET_INPUT_INVALID",
+          "endTs must be greater than startTs when fetching public raw trades",
+          metadata,
+          "market",
+        );
+      }
+    }
+
+    if (
+      input.limit !== undefined &&
+      (!Number.isSafeInteger(input.limit) || input.limit <= 0)
+    ) {
+      throw this.createError(
+        "MARKET_INPUT_INVALID",
+        "limit must be a positive integer when fetching public raw trades",
+        metadata,
+        "market",
+      );
+    }
+  }
+
+  private createPublicTrade(
+    market: MarketDefinition,
+    input: RawPublicTrade,
+  ): PublicTrade {
+    return {
+      venue: market.venue,
+      symbol: market.symbol,
+      id: input.id,
+      price: toCanonical(input.price),
+      amount: toCanonical(input.amount),
+      cost: input.cost === undefined ? undefined : toCanonical(input.cost),
+      side: input.side,
+      exchangeTs: input.exchangeTs,
+      receivedAt: input.receivedAt,
+      raw: { ...input.raw },
+    };
   }
 
   private async resolveMarketDefinition(input: {
@@ -1363,6 +1512,7 @@ export class MarketManagerImpl
 
   private createError(
     code:
+      | "MARKET_INPUT_INVALID"
       | "MARKET_NOT_FOUND"
       | "MARKET_INACTIVE"
       | "MARKET_FUNDING_RATE_UNSUPPORTED"

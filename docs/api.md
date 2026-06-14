@@ -49,7 +49,7 @@ await client.start();
 await client.stop();
 ```
 
-`createClient()` 不建立网络连接。`start()` 后才能调用订阅类方法；`loadMarkets()`、`reloadMarkets()`、`fetchServerTime()` 和 capability 查询不要求 client 已 start。
+`createClient()` 不建立网络连接。`start()` 后才能调用订阅类方法；`loadMarkets()`、`reloadMarkets()`、`fetchServerTime()`、`fetchPublicRawTrades()` 和 capability 查询不要求 client 已 start。
 
 ### 2.2 订阅 Binance L1 Book
 
@@ -347,6 +347,9 @@ interface MarketManager {
   loadMarkets(): Promise<void>;
   reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
   fetchServerTime(venue: Venue): Promise<VenueServerTime>;
+  fetchPublicRawTrades(
+    input: FetchPublicRawTradesInput,
+  ): Promise<FetchPublicRawTradesResult>;
 
   listMarkets(venue?: Venue): MarketDefinition[];
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
@@ -407,11 +410,30 @@ console.log(time.serverTime, time.roundTripMs, time.estimatedOffsetMs);
 
 当前 Binance server time 测量源固定为 USDⓈ-M REST `/fapi/v1/time`。失败会包装为 `MARKET_SERVER_TIME_FETCH_FAILED`。
 
-### 5.4 Funding rate
+### 5.4 Public raw trades
+
+```ts
+const result = await client.market.fetchPublicRawTrades({
+  venue: "binance",
+  symbol: "BTC/USDT:USDT",
+  startTs: 1710000000000,
+  endTs: 1710000000600,
+});
+
+for (const trade of result.trades) {
+  console.log(trade.id, trade.price, trade.amount, trade.side, trade.exchangeTs);
+}
+```
+
+`fetchPublicRawTrades()` 查询公开市场逐笔成交，不是账号成交。`startTs` 必填，`endTs` 是排他上界；`endTs` 和 `limit` 至少传一个。只传 `limit` 时，从 `startTs` 开始返回最多 N 条；只传 `endTs` 时返回 `[startTs, endTs)` 内成交，adapter 会使用安全上限；两者都传时同时生效，返回时间窗口内最多 `limit` 条。命中上限时 `truncated = true` 并返回 `nextFromId`。
+
+Binance raw historical trades 只能按 `fromId` 查询，SDK 内部会先用 `aggTrades` 定位起始 raw trade id，再用 `historicalTrades` 拉原始逐笔成交并按 raw trade 的 `time` 过滤。返回的 `PublicTrade.exchangeTs` 永远来自 raw trade 的 `time`，不使用 aggregate trade 的 `T` 作为最终成交时间。失败会包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`。
+
+### 5.5 Funding rate
 
 Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`，包括 Binance TradFi Perps）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 
-### 5.5 事件流 options
+### 5.6 事件流 options
 
 Market 事件流支持可选第二参：
 
@@ -668,6 +690,7 @@ interface VenueCapabilities {
   market: {
     catalog: "supported" | "unsupported";
     serverTime: "supported" | "unsupported";
+    publicRawTrades: "supported" | "unsupported";
     l1Book: "supported" | "unsupported";
     fundingRate: "supported" | "unsupported" | "market_dependent";
     marketTypes: MarketType[];
@@ -971,6 +994,36 @@ interface VenueServerTime {
   responseReceivedAt: number;
   roundTripMs: number;
   estimatedOffsetMs: number;
+}
+
+interface PublicTrade {
+  venue: Venue;
+  symbol: string;
+  id: string;
+  price: string;
+  amount: string;
+  cost?: string;
+  side?: "buy" | "sell";
+  exchangeTs: number;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+interface FetchPublicRawTradesInput {
+  venue: Venue;
+  symbol: string;
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+}
+
+interface FetchPublicRawTradesResult {
+  trades: PublicTrade[];
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
+  nextFromId?: string;
 }
 
 interface L1Book {

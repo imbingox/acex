@@ -1,11 +1,8 @@
-import {
-  type HttpClientMessages,
-  httpRequest,
-  isTransportError,
-} from "../../internal/http-client.ts";
-import type { RateLimiter, RateLimitScope } from "../../types/index.ts";
+import type { HttpClientMessages } from "../../internal/http-client.ts";
+import type { RateLimiter } from "../../types/index.ts";
 import type {
   FetchPublicRawTradesRequest,
+  FetchPublicTradesRequest,
   RawPublicTrade,
   RawPublicTradesResult,
 } from "../types.ts";
@@ -13,30 +10,22 @@ import type {
   BinanceMarketDefinition,
   BinanceMarketFamily,
 } from "./market-catalog.ts";
-import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
-import { getBinancePublicMarketRateLimitPlanId } from "./rate-limit-topology.ts";
+import {
+  type BinancePublicMarketEndpoint,
+  type FetchLike,
+  requestBinancePublicMarketJson,
+} from "./public-market-http.ts";
 
-type FetchLike = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
-
-type BinancePublicTradeEndpointKind = "aggTrades" | "historicalTrades";
-
-interface BinancePublicTradeEndpoint {
-  readonly baseUrl: string;
-  readonly path: string;
-  readonly endpointKey: string;
-}
-
-interface FetchBinancePublicRawTradesOptions {
+interface FetchBinancePublicTradesOptions {
+  readonly apiKey?: string;
   readonly rateLimiter?: RateLimiter;
   readonly fetchFn?: FetchLike;
   readonly now?: () => number;
 }
 
-const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
+const DEFAULT_PUBLIC_TRADES_LIMIT = 10_000;
 const DEFAULT_PUBLIC_RAW_TRADES_LIMIT = 10_000;
+const MAX_PUBLIC_TRADE_PAGES = 1_000;
 const MAX_PUBLIC_RAW_TRADE_PAGES = 1_000;
 const BINANCE_AGG_TRADES_PAGE_LIMIT = 1_000;
 const BINANCE_SPOT_RAW_TRADES_PAGE_LIMIT = 1_000;
@@ -46,11 +35,108 @@ const BINANCE_PUBLIC_TRADES_HTTP_MESSAGES: HttpClientMessages = {
     `Binance public trades request failed: ${status} ${statusText ?? ""}`,
 };
 
+type BinancePublicTradeEndpointKind = "aggTrades" | "historicalTrades";
+
+export async function fetchBinancePublicTrades(
+  market: BinanceMarketDefinition,
+  request: FetchPublicTradesRequest,
+  options: FetchBinancePublicTradesOptions = {},
+): Promise<RawPublicTradesResult> {
+  const fetchFn = options.fetchFn ?? fetch;
+  const now = options.now ?? Date.now;
+  const outputLimit = request.limit ?? DEFAULT_PUBLIC_TRADES_LIMIT;
+  const trades: RawPublicTrade[] = [];
+  let fromId: string | undefined;
+  let nextFromId: string | undefined;
+  let endedByTime = false;
+  let stoppedByPageGuard = false;
+
+  for (let pageCount = 0; trades.length < outputLimit; pageCount += 1) {
+    if (pageCount >= MAX_PUBLIC_TRADE_PAGES) {
+      stoppedByPageGuard = true;
+      break;
+    }
+
+    const pageLimit = Math.min(
+      BINANCE_AGG_TRADES_PAGE_LIMIT,
+      outputLimit - trades.length,
+    );
+    const rawPage = await requestAggregateTrades(market, {
+      fetchFn,
+      rateLimiter: options.rateLimiter,
+      startTime: fromId ? undefined : request.startTs,
+      fromId,
+      limit: pageLimit,
+    });
+    const receivedAt = now();
+
+    if (rawPage.length === 0) {
+      nextFromId = undefined;
+      break;
+    }
+
+    let lastTradeId: string | undefined;
+    for (const rawTrade of rawPage) {
+      const trade = normalizeAggregateTrade(rawTrade, receivedAt);
+      lastTradeId = trade.id;
+
+      if (trade.exchangeTs < request.startTs) {
+        continue;
+      }
+
+      if (request.endTs !== undefined && trade.exchangeTs >= request.endTs) {
+        endedByTime = true;
+        break;
+      }
+
+      trades.push(trade);
+      if (trades.length >= outputLimit) {
+        break;
+      }
+    }
+
+    if (!lastTradeId) {
+      nextFromId = undefined;
+      break;
+    }
+
+    nextFromId = incrementNumericId(lastTradeId);
+    if (!nextFromId || endedByTime) {
+      break;
+    }
+
+    fromId = nextFromId;
+
+    if (rawPage.length < pageLimit) {
+      nextFromId = undefined;
+      break;
+    }
+  }
+
+  const hitLimit = trades.length >= outputLimit;
+  const truncated =
+    stoppedByPageGuard ||
+    (hitLimit && !endedByTime && nextFromId !== undefined);
+
+  return {
+    trades,
+    truncated,
+    ...(truncated && nextFromId ? { nextFromId } : {}),
+  };
+}
+
 export async function fetchBinancePublicRawTrades(
   market: BinanceMarketDefinition,
   request: FetchPublicRawTradesRequest,
-  options: FetchBinancePublicRawTradesOptions = {},
+  options: FetchBinancePublicTradesOptions = {},
 ): Promise<RawPublicTradesResult> {
+  const apiKey = options.apiKey?.trim();
+  if (!apiKey) {
+    throw new Error(
+      "Binance public raw trades require a market API key; set CreateClientOptions.market.venues.binance.apiKey or BINANCE_MARKET_API_KEY",
+    );
+  }
+
   const fetchFn = options.fetchFn ?? fetch;
   const now = options.now ?? Date.now;
   const firstRawTradeId = await findFirstRawTradeId(market, request, {
@@ -81,6 +167,7 @@ export async function fetchBinancePublicRawTrades(
 
     const pageLimit = Math.min(rawPageLimit, outputLimit - trades.length);
     const rawPage = await requestHistoricalTrades(market, {
+      apiKey,
       fetchFn,
       rateLimiter: options.rateLimiter,
       fromId,
@@ -146,7 +233,7 @@ export async function fetchBinancePublicRawTrades(
 async function findFirstRawTradeId(
   market: BinanceMarketDefinition,
   request: FetchPublicRawTradesRequest,
-  options: FetchBinancePublicRawTradesOptions & { readonly fetchFn: FetchLike },
+  options: FetchBinancePublicTradesOptions & { readonly fetchFn: FetchLike },
 ): Promise<string | undefined> {
   const endTime =
     request.endTs === undefined ? undefined : Math.max(0, request.endTs - 1);
@@ -171,8 +258,9 @@ async function requestAggregateTrades(
   input: {
     readonly fetchFn: FetchLike;
     readonly rateLimiter?: RateLimiter;
-    readonly startTime: number;
+    readonly startTime?: number;
     readonly endTime?: number;
+    readonly fromId?: string;
     readonly limit: number;
   },
 ): Promise<Record<string, unknown>[]> {
@@ -181,10 +269,12 @@ async function requestAggregateTrades(
     endpoint,
     fetchFn: input.fetchFn,
     rateLimiter: input.rateLimiter,
+    messages: BINANCE_PUBLIC_TRADES_HTTP_MESSAGES,
     query: {
       symbol: market.id,
       startTime: input.startTime,
       endTime: input.endTime,
+      fromId: input.fromId,
       limit: Math.min(input.limit, BINANCE_AGG_TRADES_PAGE_LIMIT),
     },
   });
@@ -195,6 +285,7 @@ async function requestAggregateTrades(
 async function requestHistoricalTrades(
   market: BinanceMarketDefinition,
   input: {
+    readonly apiKey: string;
     readonly fetchFn: FetchLike;
     readonly rateLimiter?: RateLimiter;
     readonly fromId: string;
@@ -206,81 +297,24 @@ async function requestHistoricalTrades(
     endpoint,
     fetchFn: input.fetchFn,
     rateLimiter: input.rateLimiter,
+    messages: BINANCE_PUBLIC_TRADES_HTTP_MESSAGES,
+    headers: {
+      "X-MBX-APIKEY": input.apiKey,
+    },
     query: {
       symbol: market.id,
       fromId: input.fromId,
-      limit: input.limit,
+      limit: Math.min(input.limit, rawTradesPageLimit(market.family)),
     },
   });
 
   return readRecordArray(response, "Binance historical trades response");
 }
 
-async function requestBinancePublicMarketJson(input: {
-  readonly endpoint: BinancePublicTradeEndpoint;
-  readonly fetchFn: FetchLike;
-  readonly rateLimiter?: RateLimiter;
-  readonly query: Record<string, string | number | undefined>;
-}): Promise<unknown> {
-  const url = new URL(`${input.endpoint.baseUrl}${input.endpoint.path}`);
-  for (const [key, value] of Object.entries(input.query)) {
-    if (value !== undefined) {
-      url.searchParams.set(key, String(value));
-    }
-  }
-
-  const scope: RateLimitScope = {
-    venue: "binance",
-    endpointKey: input.endpoint.endpointKey,
-  };
-  const requestContext = {
-    scope,
-    planId: getBinancePublicMarketRateLimitPlanId("GET", input.endpoint.path),
-  };
-  const reservation =
-    (await input.rateLimiter?.beforeRequest(requestContext)) ?? undefined;
-
-  try {
-    const response = await httpRequest<unknown>({
-      fetchFn: input.fetchFn,
-      url,
-      timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
-      parseAs: "json",
-      jsonParseMode: "response",
-      retryPolicy: {
-        idempotent: true,
-        maxAttempts: 1,
-      },
-      messages: BINANCE_PUBLIC_TRADES_HTTP_MESSAGES,
-    });
-
-    await input.rateLimiter?.afterResponse(requestContext, {
-      status: response.status,
-      headers: response.headers,
-      usage: parseBinanceRateLimitUsage(response.headers),
-      reservation,
-    });
-
-    return response.body;
-  } catch (error) {
-    if (isTransportError(error)) {
-      await input.rateLimiter?.onTransportError(requestContext, {
-        status: error.status,
-        headers: error.headers,
-        retryAfterMs: error.retryAfterMs,
-        usage: parseBinanceRateLimitUsage(error.headers),
-        reservation,
-      });
-    }
-
-    throw error;
-  }
-}
-
 function endpointForFamily(
   family: BinanceMarketFamily,
   kind: BinancePublicTradeEndpointKind,
-): BinancePublicTradeEndpoint {
+): BinancePublicMarketEndpoint {
   switch (family) {
     case "spot":
       return {
@@ -325,6 +359,40 @@ function rawTradesPageLimit(family: BinanceMarketFamily): number {
   return family === "spot"
     ? BINANCE_SPOT_RAW_TRADES_PAGE_LIMIT
     : BINANCE_DERIVATIVES_RAW_TRADES_PAGE_LIMIT;
+}
+
+function normalizeAggregateTrade(
+  aggregateTrade: Record<string, unknown>,
+  receivedAt: number,
+): RawPublicTrade {
+  const isBuyerMaker = aggregateTrade.m;
+
+  return {
+    id: readNumericId(aggregateTrade, "a", "Binance aggregate trade id"),
+    price: readDecimalString(
+      aggregateTrade,
+      "p",
+      "Binance aggregate trade price",
+    ),
+    amount: readDecimalString(
+      aggregateTrade,
+      "q",
+      "Binance aggregate trade quantity",
+    ),
+    side:
+      typeof isBuyerMaker === "boolean"
+        ? isBuyerMaker
+          ? "sell"
+          : "buy"
+        : undefined,
+    exchangeTs: readTimestampMs(
+      aggregateTrade,
+      "T",
+      "Binance aggregate trade time",
+    ),
+    receivedAt,
+    raw: { ...aggregateTrade },
+  };
 }
 
 function normalizeRawTrade(
@@ -421,6 +489,13 @@ function readTimestampMs(
   const value = record[key];
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return value;
+  }
+
+  if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) {
+      return parsed;
+    }
   }
 
   throw new Error(`${label} missing epoch millisecond ${key}`);

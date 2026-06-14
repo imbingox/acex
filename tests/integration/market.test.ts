@@ -280,9 +280,53 @@ test("fetchServerTime works before client start and returns latency fields", asy
   );
 });
 
-test("fetchPublicRawTrades returns Binance raw public trades filtered by raw exchange time", async () => {
+test("fetchPublicTrades returns Binance aggregate public trades filtered by exchange time", async () => {
   installBinanceMarketInfra();
   const client = createClient();
+
+  const result = await client.market.fetchPublicTrades({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+  });
+
+  expect(result).toMatchObject({
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+    truncated: false,
+  });
+  expect(result.trades).toHaveLength(1);
+  expect(result.trades[0]).toMatchObject({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    id: "9000",
+    price: new BigNumber("102000.10").toFixed(),
+    amount: new BigNumber("0.010").toFixed(),
+    side: "buy",
+    exchangeTs: 1710000000000,
+  });
+  expect(result.trades[0]?.raw).toMatchObject({
+    a: 9000,
+    f: 1000,
+    l: 1002,
+  });
+  expect(
+    result.trades.every((trade) => Number.isFinite(trade.receivedAt)),
+  ).toBe(true);
+});
+
+test("fetchPublicRawTrades returns Binance raw public trades with a market API key", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      venues: {
+        binance: {
+          apiKey: "market-key",
+        },
+      },
+    },
+  });
 
   const result = await client.market.fetchPublicRawTrades({
     venue: "binance",

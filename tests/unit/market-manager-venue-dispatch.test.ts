@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
 import { BinanceMarketAdapter } from "../../src/adapters/binance/adapter.ts";
 import type {
+  FetchFundingRateHistoryRequest,
   FetchPublicRawTradesRequest,
+  FetchPublicTradesRequest,
   FundingRateStreamCallbacks,
   FundingRateStreamOptions,
   L1BookStreamCallbacks,
   L1BookStreamOptions,
   MarketAdapter,
+  RawFundingRateHistoryResult,
   RawOrderUpdate,
   RawPublicTradesResult,
   RawSymbolFeeRate,
@@ -141,8 +144,10 @@ class NotStartedMarketContext extends StubMarketContext {
 class CountingMarketAdapter implements MarketAdapter {
   readonly venue: Venue;
   readonly marketCapabilities: VenueMarketCapabilities;
+  readonly fetchPublicTrades?: MarketAdapter["fetchPublicTrades"];
   readonly fetchPublicRawTrades?: MarketAdapter["fetchPublicRawTrades"];
   loadMarketsCalls = 0;
+  publicTradesCalls = 0;
   publicRawTradesCalls = 0;
   l1BookStreamCalls = 0;
   fundingRateStreamCalls = 0;
@@ -150,6 +155,16 @@ class CountingMarketAdapter implements MarketAdapter {
   constructor(private readonly inner: MarketAdapter) {
     this.venue = inner.venue;
     this.marketCapabilities = inner.marketCapabilities;
+    if (inner.fetchPublicTrades) {
+      const fetchPublicTrades = inner.fetchPublicTrades.bind(inner);
+      this.fetchPublicTrades = async (
+        market: MarketDefinition,
+        request: FetchPublicTradesRequest,
+      ): Promise<RawPublicTradesResult> => {
+        this.publicTradesCalls += 1;
+        return await fetchPublicTrades(market, request);
+      };
+    }
     if (inner.fetchPublicRawTrades) {
       const fetchPublicRawTrades = inner.fetchPublicRawTrades.bind(inner);
       this.fetchPublicRawTrades = async (
@@ -761,20 +776,20 @@ test("MarketManager fetchServerTime rejects venues without support", async () =>
   expect(context.errors.every((event) => event.source === "client")).toBe(true);
 });
 
-test("MarketManager fetchPublicRawTrades does not require start and canonicalizes adapter output", async () => {
+test("MarketManager fetchPublicTrades does not require start and canonicalizes adapter output", async () => {
   const requests: Array<{
     market: MarketDefinition;
-    request: FetchPublicRawTradesRequest;
+    request: FetchPublicTradesRequest;
   }> = [];
   const okxAdapter = new FakeOkxMarketAdapter({
     venue: "okx",
   }) as FakeOkxMarketAdapter & {
-    fetchPublicRawTrades(
+    fetchPublicTrades(
       market: MarketDefinition,
-      request: FetchPublicRawTradesRequest,
+      request: FetchPublicTradesRequest,
     ): Promise<RawPublicTradesResult>;
   };
-  okxAdapter.fetchPublicRawTrades = async (
+  okxAdapter.fetchPublicTrades = async (
     market,
     request,
   ): Promise<RawPublicTradesResult> => {
@@ -805,7 +820,7 @@ test("MarketManager fetchPublicRawTrades does not require start and canonicalize
     new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
   );
 
-  const result = await manager.fetchPublicRawTrades({
+  const result = await manager.fetchPublicTrades({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
     startTs: 1_000,
@@ -844,7 +859,7 @@ test("MarketManager fetchPublicRawTrades does not require start and canonicalize
   });
 });
 
-test("MarketManager fetchPublicRawTrades validates time-window inputs before loading catalogs", async () => {
+test("MarketManager fetchPublicTrades validates time-window inputs before loading catalogs", async () => {
   const context = new StubMarketContext();
   const okxAdapter = new FakeOkxMarketAdapter();
   const manager = new MarketManagerImpl(
@@ -853,7 +868,7 @@ test("MarketManager fetchPublicRawTrades validates time-window inputs before loa
   );
 
   await expect(
-    manager.fetchPublicRawTrades({
+    manager.fetchPublicTrades({
       venue: "okx",
       symbol: "BTC/USDT:USDT",
       startTs: 1_000,
@@ -862,7 +877,7 @@ test("MarketManager fetchPublicRawTrades validates time-window inputs before loa
     code: "MARKET_INPUT_INVALID",
   });
   await expect(
-    manager.fetchPublicRawTrades({
+    manager.fetchPublicTrades({
       venue: "okx",
       symbol: "BTC/USDT:USDT",
       startTs: 1_000,
@@ -872,7 +887,7 @@ test("MarketManager fetchPublicRawTrades validates time-window inputs before loa
     code: "MARKET_INPUT_INVALID",
   });
   await expect(
-    manager.fetchPublicRawTrades({
+    manager.fetchPublicTrades({
       venue: "okx",
       symbol: "BTC/USDT:USDT",
       startTs: 1_000,
@@ -885,6 +900,165 @@ test("MarketManager fetchPublicRawTrades validates time-window inputs before loa
   expect(okxAdapter.loadMarketsCalls).toBe(0);
   expect(context.errors).toHaveLength(3);
   expect(context.errors.every((event) => event.source === "market")).toBe(true);
+});
+
+test("MarketManager fetchPublicTrades rejects adapters without support", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter({ venue: "okx" });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(
+    manager.fetchPublicTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+      limit: 1,
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]).toMatchObject({
+    source: "client",
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+});
+
+test("MarketManager fetchPublicTrades wraps adapter failures", async () => {
+  const context = new StubMarketContext();
+  const cause = new Error("okx trades failed");
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+  }) as FakeOkxMarketAdapter & {
+    fetchPublicTrades(
+      market: MarketDefinition,
+      request: FetchPublicTradesRequest,
+    ): Promise<RawPublicTradesResult>;
+  };
+  okxAdapter.fetchPublicTrades = async () => {
+    throw cause;
+  };
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const failure = await manager
+    .fetchPublicTrades({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1_000,
+      limit: 1,
+    })
+    .catch((error) => error);
+
+  expect(failure).toBeInstanceOf(AcexError);
+  expect(failure).toMatchObject({
+    code: "MARKET_PUBLIC_TRADES_FETCH_FAILED",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+  expect((failure as AcexError).cause).toBe(cause);
+  expect(context.errors).toContainEqual(
+    expect.objectContaining({
+      source: "adapter",
+      error: cause,
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  );
+});
+
+test("MarketManager fetchPublicRawTrades does not require start and canonicalizes adapter output", async () => {
+  const requests: Array<{
+    market: MarketDefinition;
+    request: FetchPublicRawTradesRequest;
+  }> = [];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+  }) as FakeOkxMarketAdapter & {
+    fetchPublicRawTrades(
+      market: MarketDefinition,
+      request: FetchPublicRawTradesRequest,
+    ): Promise<RawPublicTradesResult>;
+  };
+  okxAdapter.fetchPublicRawTrades = async (
+    market,
+    request,
+  ): Promise<RawPublicTradesResult> => {
+    requests.push({ market, request });
+    return {
+      trades: [
+        {
+          id: "100",
+          price: "100.1000",
+          amount: "0.0100",
+          cost: "1.001000",
+          side: "sell",
+          exchangeTs: 1_000,
+          receivedAt: 1_500,
+          raw: {
+            id: 100,
+            price: "100.1000",
+            qty: "0.0100",
+          },
+        },
+      ],
+      truncated: false,
+    };
+  };
+  const manager = new MarketManagerImpl(
+    new NotStartedMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const result = await manager.fetchPublicRawTrades({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1_000,
+    endTs: 2_000,
+  });
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.market.symbol).toBe("BTC/USDT:USDT");
+  expect(requests[0]?.request).toEqual({
+    startTs: 1_000,
+    endTs: 2_000,
+  });
+  expect(result).toEqual({
+    trades: [
+      {
+        venue: "okx",
+        symbol: "BTC/USDT:USDT",
+        id: "100",
+        price: "100.1",
+        amount: "0.01",
+        cost: "1.001",
+        side: "sell",
+        exchangeTs: 1_000,
+        receivedAt: 1_500,
+        raw: {
+          id: 100,
+          price: "100.1000",
+          qty: "0.0100",
+        },
+      },
+    ],
+    startTs: 1_000,
+    endTs: 2_000,
+    truncated: false,
+  });
 });
 
 test("MarketManager fetchPublicRawTrades rejects adapters without support", async () => {
@@ -910,6 +1084,191 @@ test("MarketManager fetchPublicRawTrades rejects adapters without support", asyn
     },
   });
 
+  expect(okxAdapter.loadMarketsCalls).toBe(1);
+  expect(context.errors).toContainEqual(
+    expect.objectContaining({
+      source: "client",
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  );
+});
+
+test("MarketManager fetchFundingRateHistory does not require start and canonicalizes adapter output", async () => {
+  const requests: Array<{
+    market: MarketDefinition;
+    request: FetchFundingRateHistoryRequest;
+  }> = [];
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+  }) as FakeOkxMarketAdapter & {
+    fetchFundingRateHistory(
+      market: MarketDefinition,
+      request: FetchFundingRateHistoryRequest,
+    ): Promise<RawFundingRateHistoryResult>;
+  };
+  okxAdapter.fetchFundingRateHistory = async (
+    market,
+    request,
+  ): Promise<RawFundingRateHistoryResult> => {
+    requests.push({ market, request });
+    return {
+      rates: [
+        {
+          fundingRate: "0.00010000",
+          fundingTime: 1_700_000_000_000,
+          markPrice: "34287.5461996300",
+          receivedAt: 1_700_000_000_500,
+          raw: {
+            fundingRate: "0.00010000",
+            fundingTime: 1_700_000_000_000,
+            markPrice: "34287.5461996300",
+          },
+        },
+      ],
+      truncated: true,
+    };
+  };
+  const manager = new MarketManagerImpl(
+    new NotStartedMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const result = await manager.fetchFundingRateHistory({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1_000,
+    endTs: 2_000,
+    limit: 1,
+  });
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.market.symbol).toBe("BTC/USDT:USDT");
+  expect(requests[0]?.request).toEqual({
+    startTs: 1_000,
+    endTs: 2_000,
+    limit: 1,
+  });
+  expect(result).toEqual({
+    rates: [
+      {
+        venue: "okx",
+        symbol: "BTC/USDT:USDT",
+        fundingRate: "0.0001",
+        fundingTime: 1_700_000_000_000,
+        markPrice: "34287.54619963",
+        receivedAt: 1_700_000_000_500,
+        raw: {
+          fundingRate: "0.00010000",
+          fundingTime: 1_700_000_000_000,
+          markPrice: "34287.5461996300",
+        },
+      },
+    ],
+    startTs: 1_000,
+    endTs: 2_000,
+    limit: 1,
+    truncated: true,
+  });
+});
+
+test("MarketManager fetchFundingRateHistory validates inputs before loading catalogs", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(
+    manager.fetchFundingRateHistory({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1.5,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+  await expect(
+    manager.fetchFundingRateHistory({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      startTs: 2_000,
+      endTs: 1_000,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+  await expect(
+    manager.fetchFundingRateHistory({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      limit: 0,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+  await expect(
+    manager.fetchFundingRateHistory({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+      limit: 1_001,
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_INPUT_INVALID",
+  });
+
+  expect(okxAdapter.loadMarketsCalls).toBe(0);
+  expect(context.errors).toHaveLength(4);
+  expect(context.errors.every((event) => event.source === "market")).toBe(true);
+});
+
+test("MarketManager fetchFundingRateHistory rejects non-swap markets", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter({
+    venue: "okx",
+    markets: [createFakeOkxSpotMarket("okx")],
+  });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(
+    manager.fetchFundingRateHistory({
+      venue: "okx",
+      symbol: "BTC/USDT",
+    }),
+  ).rejects.toMatchObject({
+    code: "MARKET_FUNDING_RATE_UNSUPPORTED",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT",
+    },
+  });
+});
+
+test("MarketManager fetchFundingRateHistory rejects adapters without support", async () => {
+  const context = new StubMarketContext();
+  const okxAdapter = new FakeOkxMarketAdapter({ venue: "okx" });
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  await expect(
+    manager.fetchFundingRateHistory({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    details: {
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+
   expect(context.errors).toHaveLength(1);
   expect(context.errors[0]).toMatchObject({
     source: "client",
@@ -918,18 +1277,18 @@ test("MarketManager fetchPublicRawTrades rejects adapters without support", asyn
   });
 });
 
-test("MarketManager fetchPublicRawTrades wraps adapter failures", async () => {
+test("MarketManager fetchFundingRateHistory wraps adapter failures", async () => {
   const context = new StubMarketContext();
-  const cause = new Error("okx raw trades failed");
+  const cause = new Error("okx funding history failed");
   const okxAdapter = new FakeOkxMarketAdapter({
     venue: "okx",
   }) as FakeOkxMarketAdapter & {
-    fetchPublicRawTrades(
+    fetchFundingRateHistory(
       market: MarketDefinition,
-      request: FetchPublicRawTradesRequest,
-    ): Promise<RawPublicTradesResult>;
+      request: FetchFundingRateHistoryRequest,
+    ): Promise<RawFundingRateHistoryResult>;
   };
-  okxAdapter.fetchPublicRawTrades = async () => {
+  okxAdapter.fetchFundingRateHistory = async () => {
     throw cause;
   };
   const manager = new MarketManagerImpl(
@@ -938,17 +1297,16 @@ test("MarketManager fetchPublicRawTrades wraps adapter failures", async () => {
   );
 
   const failure = await manager
-    .fetchPublicRawTrades({
+    .fetchFundingRateHistory({
       venue: "okx",
       symbol: "BTC/USDT:USDT",
-      startTs: 1_000,
       limit: 1,
     })
     .catch((error) => error);
 
   expect(failure).toBeInstanceOf(AcexError);
   expect(failure).toMatchObject({
-    code: "MARKET_PUBLIC_TRADES_FETCH_FAILED",
+    code: "MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED",
     details: {
       venue: "okx",
       symbol: "BTC/USDT:USDT",

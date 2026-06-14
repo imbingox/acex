@@ -2,4 +2,4 @@
 "@imbingox/acex": minor
 ---
 
-Add `client.market.fetchPublicRawTrades()` for public raw market trades, with Binance raw-trade lookup, `publicRawTrades` venue capability reporting, and structured `MARKET_PUBLIC_TRADES_FETCH_FAILED` / `MARKET_INPUT_INVALID` errors.
+Add `client.market.fetchPublicTrades()` for public aggregate market trades and make `client.market.fetchPublicRawTrades()` ready for Binance raw historical trades when a market API key is configured. `fetchPublicTrades()` uses public `aggTrades` without credentials; `fetchPublicRawTrades()` uses `historicalTrades` with `CreateClientOptions.market.venues.binance.apiKey` or `BINANCE_MARKET_API_KEY`.

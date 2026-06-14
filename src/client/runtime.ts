@@ -34,6 +34,7 @@ import {
   type AccountRuntimeOptions,
   type AcexClient,
   type AcexInternalError,
+  type BinanceMarketRuntimeOptions,
   type BufferedEventStreamOptions,
   type CancelAllOrdersInput,
   type CancelOrderInput,
@@ -87,6 +88,9 @@ interface VenueAdapterLifecycle {
 type AccountVenueRuntimeOptionsMap = NonNullable<
   AccountRuntimeOptions["venues"]
 >;
+type MarketVenueRuntimeOptionsMap = NonNullable<
+  NonNullable<CreateClientOptions["market"]>["venues"]
+>;
 
 interface VenueAdapterFactoryDeps {
   readonly rateLimiter: RateLimiter;
@@ -116,10 +120,11 @@ interface VenueAdapterFactoryResult {
 // createVenueAdapterGroups.
 function createVenueAdapterGroups(
   deps: VenueAdapterFactoryDeps,
+  marketOptions: MarketVenueRuntimeOptionsMap | undefined,
   venueOptions: AccountVenueRuntimeOptionsMap | undefined,
 ): VenueAdapterFactoryResult[] {
   return [
-    createBinanceAdapterGroup(deps),
+    createBinanceAdapterGroup(deps, marketOptions?.binance),
     createJuplendAdapterGroup(deps, venueOptions?.juplend),
   ];
 }
@@ -157,6 +162,7 @@ async function raceWithTimeout(
 
 function createBinanceAdapterGroup(
   deps: VenueAdapterFactoryDeps,
+  marketOptions: BinanceMarketRuntimeOptions | undefined,
 ): VenueAdapterFactoryResult {
   const marketCatalog = new BinanceMarketCatalog({
     rateLimiter: deps.rateLimiter,
@@ -193,6 +199,8 @@ function createBinanceAdapterGroup(
       rateLimiter: deps.rateLimiter,
       marketCatalog,
       emitMetric: deps.emitMetric,
+      marketDataApiKey:
+        marketOptions?.apiKey || process.env.BINANCE_MARKET_API_KEY,
     }),
     privateAdapter: new BinancePrivateAdapter({
       signingClock,
@@ -303,6 +311,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         emitMetric: this.emitMetric.bind(this),
         publishRuntimeError: this.publishRuntimeError.bind(this),
       },
+      options.market?.venues,
       options.account?.venues,
     );
     this.adapterLifecycles = adapterGroups.flatMap((group) =>

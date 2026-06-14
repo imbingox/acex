@@ -5,6 +5,7 @@ import type {
   L1BookStreamCallbacks,
   L1BookStreamOptions,
   MarketAdapter,
+  RawFundingRateHistoryEntry,
   RawFundingRateUpdate,
   RawL1BookUpdate,
   RawPublicTrade,
@@ -29,8 +30,13 @@ import { toCanonical } from "../internal/decimal.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
 import type {
   EventStreamOptions,
+  FetchFundingRateHistoryInput,
+  FetchFundingRateHistoryResult,
   FetchPublicRawTradesInput,
   FetchPublicRawTradesResult,
+  FetchPublicTradesInput,
+  FetchPublicTradesResult,
+  FundingRateHistoryEntry,
   FundingRateSnapshot,
   FundingRateUpdatedEvent,
   L1Book,
@@ -98,6 +104,7 @@ const DEFAULT_INITIAL_L1_TIMEOUT_MS = 15_000;
 const DEFAULT_L1_STALE_AFTER_MS = 15_000;
 const DEFAULT_L1_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_L1_RECONNECT_MAX_DELAY_MS = 10_000;
+const MAX_FUNDING_RATE_HISTORY_LIMIT = 1_000;
 
 function marketKey(input: MarketKeyInput): string {
   return `${input.venue}:${input.symbol}`;
@@ -300,10 +307,50 @@ export class MarketManagerImpl
     }
   }
 
+  async fetchPublicTrades(
+    input: FetchPublicTradesInput,
+  ): Promise<FetchPublicTradesResult> {
+    this.validatePublicTradesInput(input);
+
+    const market = await this.resolveMarketDefinition(input);
+    const adapter = this.getMarketAdapter(market.venue);
+    if (!adapter.fetchPublicTrades) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support public trade queries: ${market.venue}`,
+        { venue: market.venue, symbol: market.symbol },
+        "client",
+      );
+    }
+
+    try {
+      const result = await adapter.fetchPublicTrades(market, {
+        startTs: input.startTs,
+        endTs: input.endTs,
+        limit: input.limit,
+      });
+
+      return {
+        trades: result.trades.map((trade) =>
+          this.createPublicTrade(market, trade),
+        ),
+        startTs: input.startTs,
+        truncated: result.truncated,
+        ...(input.endTs !== undefined ? { endTs: input.endTs } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+        ...(result.nextFromId !== undefined
+          ? { nextFromId: result.nextFromId }
+          : {}),
+      };
+    } catch (error) {
+      throw this.createPublicTradesFetchError(market, error);
+    }
+  }
+
   async fetchPublicRawTrades(
     input: FetchPublicRawTradesInput,
   ): Promise<FetchPublicRawTradesResult> {
-    this.validatePublicRawTradesInput(input);
+    this.validatePublicTradesInput(input);
 
     const market = await this.resolveMarketDefinition(input);
     const adapter = this.getMarketAdapter(market.venue);
@@ -336,7 +383,45 @@ export class MarketManagerImpl
           : {}),
       };
     } catch (error) {
-      throw this.createPublicRawTradesFetchError(market, error);
+      throw this.createPublicTradesFetchError(market, error);
+    }
+  }
+
+  async fetchFundingRateHistory(
+    input: FetchFundingRateHistoryInput,
+  ): Promise<FetchFundingRateHistoryResult> {
+    this.validateFundingRateHistoryInput(input);
+
+    const market = await this.resolveMarketDefinition(input);
+    this.assertFundingRateSupported(market);
+    const adapter = this.getMarketAdapter(market.venue);
+    if (!adapter.fetchFundingRateHistory) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support funding rate history queries: ${market.venue}`,
+        { venue: market.venue, symbol: market.symbol },
+        "client",
+      );
+    }
+
+    try {
+      const result = await adapter.fetchFundingRateHistory(market, {
+        startTs: input.startTs,
+        endTs: input.endTs,
+        limit: input.limit,
+      });
+
+      return {
+        rates: result.rates.map((rate) =>
+          this.createFundingRateHistoryEntry(market, rate),
+        ),
+        truncated: result.truncated,
+        ...(input.startTs !== undefined ? { startTs: input.startTs } : {}),
+        ...(input.endTs !== undefined ? { endTs: input.endTs } : {}),
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      };
+    } catch (error) {
+      throw this.createFundingRateHistoryFetchError(market, error);
     }
   }
 
@@ -770,7 +855,7 @@ export class MarketManagerImpl
     return wrapped;
   }
 
-  private createPublicRawTradesFetchError(
+  private createPublicTradesFetchError(
     market: MarketDefinition,
     error: unknown,
   ): AcexError {
@@ -781,7 +866,7 @@ export class MarketManagerImpl
     const wrapped = new AcexError(
       "MARKET_PUBLIC_TRADES_FETCH_FAILED",
       formatAcexErrorMessage(
-        `Failed to fetch public raw trades from ${market.venue}: ${market.symbol}`,
+        `Failed to fetch public trades from ${market.venue}: ${market.symbol}`,
         details,
       ),
       {
@@ -793,13 +878,42 @@ export class MarketManagerImpl
       "adapter",
       error instanceof Error
         ? error
-        : new Error("Unknown public raw trades fetch failure"),
+        : new Error("Unknown public trades fetch failure"),
       { venue: market.venue, symbol: market.symbol },
     );
     return wrapped;
   }
 
-  private validatePublicRawTradesInput(input: FetchPublicRawTradesInput): void {
+  private createFundingRateHistoryFetchError(
+    market: MarketDefinition,
+    error: unknown,
+  ): AcexError {
+    const details = buildAcexErrorDetails(
+      { venue: market.venue, symbol: market.symbol },
+      error,
+    );
+    const wrapped = new AcexError(
+      "MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED",
+      formatAcexErrorMessage(
+        `Failed to fetch funding rate history from ${market.venue}: ${market.symbol}`,
+        details,
+      ),
+      {
+        cause: error,
+        details,
+      },
+    );
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error("Unknown funding rate history fetch failure"),
+      { venue: market.venue, symbol: market.symbol },
+    );
+    return wrapped;
+  }
+
+  private validatePublicTradesInput(input: FetchPublicTradesInput): void {
     const metadata = { venue: input.venue, symbol: input.symbol };
 
     if (!isTimestampMs(input.startTs)) {
@@ -814,7 +928,7 @@ export class MarketManagerImpl
     if (input.endTs === undefined && input.limit === undefined) {
       throw this.createError(
         "MARKET_INPUT_INVALID",
-        "Either endTs or limit must be provided when fetching public raw trades",
+        "Either endTs or limit must be provided when fetching public trades",
         metadata,
         "market",
       );
@@ -833,7 +947,7 @@ export class MarketManagerImpl
       if (input.endTs <= input.startTs) {
         throw this.createError(
           "MARKET_INPUT_INVALID",
-          "endTs must be greater than startTs when fetching public raw trades",
+          "endTs must be greater than startTs when fetching public trades",
           metadata,
           "market",
         );
@@ -846,10 +960,65 @@ export class MarketManagerImpl
     ) {
       throw this.createError(
         "MARKET_INPUT_INVALID",
-        "limit must be a positive integer when fetching public raw trades",
+        "limit must be a positive integer when fetching public trades",
         metadata,
         "market",
       );
+    }
+  }
+
+  private validateFundingRateHistoryInput(
+    input: FetchFundingRateHistoryInput,
+  ): void {
+    const metadata = { venue: input.venue, symbol: input.symbol };
+
+    if (input.startTs !== undefined && !isTimestampMs(input.startTs)) {
+      throw this.createError(
+        "MARKET_INPUT_INVALID",
+        "startTs must be a non-negative integer epoch millisecond timestamp",
+        metadata,
+        "market",
+      );
+    }
+
+    if (input.endTs !== undefined) {
+      if (!isTimestampMs(input.endTs)) {
+        throw this.createError(
+          "MARKET_INPUT_INVALID",
+          "endTs must be a non-negative integer epoch millisecond timestamp",
+          metadata,
+          "market",
+        );
+      }
+
+      if (input.startTs !== undefined && input.endTs < input.startTs) {
+        throw this.createError(
+          "MARKET_INPUT_INVALID",
+          "endTs must be greater than or equal to startTs when fetching funding rate history",
+          metadata,
+          "market",
+        );
+      }
+    }
+
+    if (input.limit !== undefined) {
+      if (!Number.isSafeInteger(input.limit) || input.limit <= 0) {
+        throw this.createError(
+          "MARKET_INPUT_INVALID",
+          "limit must be a positive integer when fetching funding rate history",
+          metadata,
+          "market",
+        );
+      }
+
+      if (input.limit > MAX_FUNDING_RATE_HISTORY_LIMIT) {
+        throw this.createError(
+          "MARKET_INPUT_INVALID",
+          `limit must be less than or equal to ${MAX_FUNDING_RATE_HISTORY_LIMIT} when fetching funding rate history`,
+          metadata,
+          "market",
+        );
+      }
     }
   }
 
@@ -866,6 +1035,24 @@ export class MarketManagerImpl
       cost: input.cost === undefined ? undefined : toCanonical(input.cost),
       side: input.side,
       exchangeTs: input.exchangeTs,
+      receivedAt: input.receivedAt,
+      raw: { ...input.raw },
+    };
+  }
+
+  private createFundingRateHistoryEntry(
+    market: MarketDefinition,
+    input: RawFundingRateHistoryEntry,
+  ): FundingRateHistoryEntry {
+    return {
+      venue: market.venue,
+      symbol: market.symbol,
+      fundingRate: toCanonical(input.fundingRate),
+      fundingTime: input.fundingTime,
+      markPrice:
+        input.markPrice === undefined
+          ? undefined
+          : toCanonical(input.markPrice),
       receivedAt: input.receivedAt,
       raw: { ...input.raw },
     };

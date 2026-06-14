@@ -435,16 +435,31 @@ export function installBinanceMarketInfra(): void {
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input.toString();
+    value: async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
       const parsed = new URL(url);
       const endpoint = `${parsed.origin}${parsed.pathname}`;
+      const headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
 
       if (endpoint === USDM_AGG_TRADES_URL) {
         return jsonResponse(binanceFixtures.publicTrades.aggTrades);
       }
 
       if (endpoint === USDM_HISTORICAL_TRADES_URL) {
+        if (headers.get("X-MBX-APIKEY") !== "market-key") {
+          return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+            status: 401,
+            statusText: "Unauthorized",
+          });
+        }
+
         const fromId = Number(parsed.searchParams.get("fromId") ?? "0");
         const limit = Number(parsed.searchParams.get("limit") ?? "500");
         return jsonResponse(

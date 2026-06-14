@@ -72,6 +72,7 @@ export interface AcexErrorDetails {
 | symbol 手续费费率查询失败 | `ORDER_FEE_RATE_FETCH_FAILED`，保留 `cause`，填 `details.venue/accountId/symbol`、可用 `details.venueError` / `details.transport` | 不填 |
 | account/order bootstrap 返回 `{code,msg}` | `ACCOUNT_BOOTSTRAP_FAILED` / `ORDER_BOOTSTRAP_FAILED`，保留 `cause`，填 `details.venueError` | 不填 |
 | market catalog/server-time 返回纯文本/HTML | 不填 `details.venueError`，只填 `details.transport.rawBody/status/url` | 不填 |
+| market public REST query（public aggregate trades / raw historical trades / funding history）失败 | `MARKET_PUBLIC_TRADES_FETCH_FAILED` / `MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED`，保留 `cause`，填 `details.venue/symbol` 和可用 `details.transport` / `details.venueError`。Binance `fetchPublicRawTrades()` 缺 market API key 也包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`，但 adapter 不发远端请求。 | 不填 |
 | market stream 首包超时 | `MARKET_STREAM_TIMEOUT`，保留 `cause`，填 `details.venue/symbol`，不填 `details.venueError` | 不填 |
 | network/timeout/parse 无可结构化交易所 body | 不填 `details.venueError`，保留 `cause` 与可用 transport metadata | 订单命令为 `unknown`，其他错误不填 |
 | 本地订单输入校验错误 | 可填 `venue/accountId/symbol`，不填 `cause` / `transport` | `not_placed` |
@@ -129,7 +130,7 @@ bun run test
 - 订单命令错误的 `orderState` 判定矩阵：timeout / network / parse / HTTP >= 500 为 `unknown`；结构化 venue 拒单 / 本地输入校验 / `rate_limited` / HTTP < 500 为 `not_placed`；非订单命令错误不填。
 - `isOrderStateUnknown(error)` 只在 `AcexError.details.orderState === "unknown"` 时返回 `true`。
 - 未知 JSON、HTML、纯文本、parse/network/timeout 不填 `details.venueError`。
-- order command、market catalog/server time、market stream timeout、account/order bootstrap 失败都保留 `cause` 和正确 details。
+- order command、market catalog/server time、market public REST query、market stream timeout、account/order bootstrap 失败都保留 `cause` 和正确 details。
 - public `message`、`details.transport.url`、`details.transport.rawBody` 不泄漏 `signature`、`apiKey/key`、`secret`、`token/listenKey/passphrase` 等敏感值。
 
 ### 7. Wrong vs Correct

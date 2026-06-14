@@ -300,6 +300,14 @@ export interface MarketRuntimeOptions {
   l1StaleAfterMs?: number;
   l1ReconnectDelayMs?: number;
   l1ReconnectMaxDelayMs?: number;
+  venues?: {
+    binance?: BinanceMarketRuntimeOptions;
+  };
+}
+
+export interface BinanceMarketRuntimeOptions {
+  /** Market-data API key for Binance public raw historical trades. */
+  apiKey?: string;
 }
 
 export interface BinanceAccountRuntimeOptions {

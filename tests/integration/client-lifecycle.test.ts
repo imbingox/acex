@@ -72,7 +72,9 @@ test("client exposes venue runtime capabilities without starting", () => {
     market: {
       catalog: "supported",
       serverTime: "supported",
+      publicTrades: "supported",
       publicRawTrades: "supported",
+      fundingRateHistory: "supported",
       l1Book: "supported",
       fundingRate: "market_dependent",
     },
@@ -100,7 +102,9 @@ test("client exposes venue runtime capabilities without starting", () => {
     readOnly: true,
     market: {
       serverTime: "unsupported",
+      publicTrades: "unsupported",
       publicRawTrades: "unsupported",
+      fundingRateHistory: "unsupported",
     },
     account: {
       snapshot: "supported",
@@ -121,7 +125,9 @@ test("client exposes venue runtime capabilities without starting", () => {
       market: {
         catalog: "unsupported",
         serverTime: "unsupported",
+        publicTrades: "unsupported",
         publicRawTrades: "unsupported",
+        fundingRateHistory: "unsupported",
       },
       order: {
         supported: false,

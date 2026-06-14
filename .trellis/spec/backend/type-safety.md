@@ -71,7 +71,7 @@ private createStatus(
 
 - `src/types/market.ts`、`src/types/account.ts`、`src/types/order.ts` 中的 public snapshot / market 数值字段必须使用 `string`，代表 canonical decimal string（无科学计数法、不补尾零）。
 - `BigNumber` 只允许作为根入口 re-export 的下游计算工具，以及 `DecimalInput = string | number | BigNumber` 这类输入侧宽类型；不能出现在 public output 类型里。
-- 新增 `MarketDefinition`、`L1Book`、`FundingRateSnapshot`、`BalanceSnapshot`、`PositionSnapshot`、`RiskSnapshot`、`OrderSnapshot` 或 lending facet 字段时，数量 / 价格 / 金额 / 比率字段都必须按 string 输出。
+- 新增 `MarketDefinition`、`L1Book`、`FundingRateSnapshot`、`FundingRateHistoryEntry`、`BalanceSnapshot`、`PositionSnapshot`、`RiskSnapshot`、`OrderSnapshot` 或 lending facet 字段时，数量 / 价格 / 金额 / 比率字段都必须按 string 输出。
 - manager 出口使用 `toCanonical()` 统一 canonical 化；adapter / manager 内部可用 BigNumber 计算，但不得把第三方数值对象泄漏到 public contract。
 
 #### 3.4 不允许自引用 type import

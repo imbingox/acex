@@ -546,7 +546,10 @@ export interface SymbolFeeRate {
 }
 
 export interface FeeManager {
+  subscribe(input: SubscribeFeeRatesInput): Promise<void>;
+  unsubscribe(input: UnsubscribeFeeRatesInput): Promise<void>;
   getSymbolFeeRate(input: GetSymbolFeeRateInput): SymbolFeeRate;
+  getSymbolFeeRates(accountId?: string): SymbolFeeRate[];
   fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<SymbolFeeRate>;
 }
 
@@ -559,7 +562,7 @@ interface FeeAdapterSurface {
 }
 ```
 
-`VenueOrderCapabilities.fees` 是当前 runtime flag，必须声明该 venue runtime 是否支持账号级 symbol fee rate 真实远端查询。FeeManager 用该 flag 决定是否允许 `client.fee.fetchSymbolFeeRate()` 以及是否把维护记录加入后台远端刷新队列。
+`VenueOrderCapabilities.fees` 是当前 runtime flag，必须声明该 venue runtime 是否具备账号级 symbol fee rate 真实远端查询能力。它是允许 `client.fee.fetchSymbolFeeRate()` 和后台远端刷新队列的必要条件，不是唯一条件：FeeManager 还必须按 `marketType` 做支持矩阵校验。当前 Binance 真实远端查询只支持 `marketType: "swap"`；即使 `fees === "supported"`，spot / future 也只能由 `getSymbolFeeRate()` 返回默认值，显式 `fetchSymbolFeeRate()` 必须抛 `VENUE_NOT_SUPPORTED`。
 
 ### 3. Contracts
 

@@ -200,7 +200,7 @@ function createBinanceAdapterGroup(
       marketCatalog,
       emitMetric: deps.emitMetric,
       marketDataApiKey:
-        marketOptions?.apiKey || process.env.BINANCE_MARKET_API_KEY,
+        marketOptions?.apiKey ?? process.env.BINANCE_MARKET_API_KEY,
     }),
     privateAdapter: new BinancePrivateAdapter({
       signingClock,

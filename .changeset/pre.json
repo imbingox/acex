@@ -25,6 +25,7 @@
     "redact-transport-error-secrets",
     "signing-clock-resync",
     "stream-layer-polish",
+    "symbol-fee-rate",
     "venue-capability-dispatch",
     "venue-error-reason-order-state",
     "venue-extensibility-foundation",

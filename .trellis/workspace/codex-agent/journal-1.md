@@ -1640,3 +1640,36 @@ Implemented client.fee manager for account-scoped symbol fee rates, migrated fee
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: 实现 public raw trades 查询
+
+**Date**: 2026-06-14
+**Task**: 实现 public raw trades 查询
+**Branch**: `feat/new_public_methods`
+
+### Summary
+
+新增 MarketManager fetchPublicRawTrades 公共 API，接入 Binance public raw trades 两段式查询，补 capability、限流、测试、文档和 changeset。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5711f3d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

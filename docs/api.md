@@ -11,14 +11,15 @@
 - [5. MarketManager](#5-marketmanager)
 - [6. AccountManager](#6-accountmanager)
 - [7. OrderManager](#7-ordermanager)
-- [8. 健康与错误事件](#8-健康与错误事件)
-- [9. 数据类型速查](#9-数据类型速查)
-- [10. 错误处理](#10-错误处理)
-- [11. 当前限制](#11-当前限制)
+- [8. FeeManager](#8-feemanager)
+- [9. 健康与错误事件](#9-健康与错误事件)
+- [10. 数据类型速查](#10-数据类型速查)
+- [11. 错误处理](#11-错误处理)
+- [12. 当前限制](#12-当前限制)
 
 ## 1. 当前能力
 
-`@imbingox/acex` 是状态型多 venue SDK。调用方创建一个 `AcexClient`，通过 `market` / `account` / `order` 三个 manager 读取最新快照、消费事件流、执行命令；SDK 内部维护本地缓存、ready barrier、WebSocket 生命周期、自动重连、REST timeout / retry / 错误脱敏和 reactive rate limiter。
+`@imbingox/acex` 是状态型多 venue SDK。调用方创建一个 `AcexClient`，通过 `market` / `account` / `order` / `fee` 四个 manager 读取最新快照、消费事件流、执行命令和查询手续费费率；SDK 内部维护本地缓存、ready barrier、WebSocket 生命周期、自动重连、REST timeout / retry / 错误脱敏和 reactive rate limiter。
 
 当前 runtime 落地：
 
@@ -27,6 +28,8 @@
 | `binance` | Spot / USDⓈ-M / COIN-M catalog（含 TradFi Perps）；L1 Book；永续 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
 | `juplend` | 不支持 | Jupiter Lend 只读账户 polling | 不支持，read-only |
 | `okx` / `bybit` / `gate` | 类型占位 | 类型占位 | 类型占位 |
+
+FeeManager 当前可对 Binance `swap` 通过 PAPI UM `commissionRate` 读取账号级真实费率；其他 venue 或 Binance spot/future 先返回默认费率。
 
 ## 2. 快速接入
 
@@ -112,6 +115,14 @@ const client = createClient({
         pollIntervalMs: 30_000,
         rpcUrl: process.env.SOL_HELIUS_RPC,
         jupApiKey: process.env.JUP_API,
+      },
+    },
+  },
+  fee: {
+    refreshIntervalMs: 24 * 60 * 60 * 1000,
+    defaultRates: {
+      binance: {
+        swap: { maker: "0.0002", taker: "0.0005" },
       },
     },
   },
@@ -523,7 +534,7 @@ for await (const event of client.order.events.updates({
 }
 ```
 
-Binance 私有 WS 的逐笔成交、手续费与 realized PnL 通过独立 `order.trade` 事件消费，不挂在 `OrderSnapshot` 上：
+Binance 私有 WS 的逐笔成交、已发生手续费金额与 realized PnL 通过独立 `order.trade` 事件消费，不挂在 `OrderSnapshot` 上：
 
 ```ts
 for await (const event of client.order.events.trades({
@@ -535,11 +546,51 @@ for await (const event of client.order.events.trades({
 }
 ```
 
-`OrderTradeEvent.seq` 是该账户订单成交流的单调序号，可用于检测慢消费者 buffer 溢出造成的缺口；`orderSeq` 在同一交易所 update 成功推进订单快照时关联 `OrderSnapshot.seq`。REST 订单查询/命令回包不含逐笔手续费，不会发布 `order.trade`。
+`OrderTradeEvent.seq` 是该账户订单成交流的单调序号，可用于检测慢消费者 buffer 溢出造成的缺口；`orderSeq` 在同一交易所 update 成功推进订单快照时关联 `OrderSnapshot.seq`。REST 订单查询/命令回包不含逐笔手续费，不会发布 `order.trade`。如果需要“已发生手续费按 symbol 汇总”，下游应消费 `order.trade` 并按 `event.symbol` 聚合；`client.fee.getSymbolFeeRate()` 只返回当前账号 symbol 费率。
 
 Order 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；订单中间状态、逐笔成交和错误恢复信号默认按 buffer 语义保留顺序。慢消费者超过 buffer 上限时会丢弃最旧事件，并通过 `EVENT_BUFFER_OVERFLOW` runtime error 上报对应 stream（例如 `order.trades`）。
 
-## 8. 健康与错误事件
+## 8. FeeManager
+
+```ts
+interface FeeManager {
+  subscribe(input: SubscribeFeeRatesInput): Promise<void>;
+  unsubscribe(input: UnsubscribeFeeRatesInput): Promise<void>;
+  getSymbolFeeRate(input: GetSymbolFeeRateInput): SymbolFeeRate;
+  getSymbolFeeRates(accountId?: string): SymbolFeeRate[];
+  fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<SymbolFeeRate>;
+}
+```
+
+FeeManager 查询的是账号级交易费率，不是已发生成交手续费汇总。费率会受交易所账号等级、折扣和 symbol 规则影响；未读取到真实值时返回默认值。
+
+```ts
+await client.fee.subscribe({
+  accountId: "main-binance",
+  symbols: ["BTC/USDT:USDT"],
+});
+
+const local = client.fee.getSymbolFeeRate({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+const fresh = await client.fee.fetchSymbolFeeRate({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+```
+
+- `subscribe()` 多次调用是增量维护；`unsubscribe({ accountId })` 移除该账号全部 fee 维护记录。
+- `getSymbolFeeRate()` 是同步本地读取；未维护 symbol 会自动加入维护集合并先返回默认值。
+- `fetchSymbolFeeRate()` 立即远端查询单个 symbol，成功后写回同一份 cache，后续 `getSymbolFeeRate()` 返回 `source: "venue"`。
+- 返回的 `maker` / `taker` 是费率小数，例如 `"0.0002"` 表示 0.02%，并且是 canonical decimal string。
+- 默认刷新周期是 24h，可用 `CreateClientOptions.fee.refreshIntervalMs` 覆盖。
+- 默认费率按 `Venue + MarketType` 区分，可用 `CreateClientOptions.fee.defaultRates` 覆盖。Binance 内置默认值：spot `0.001/0.001`、swap `0.0002/0.0005`、future `0.0001/0.0005`。
+- Binance 当前只对 `swap` 使用 PAPI UM `commissionRate` 真实刷新；`spot` / `future` 先返回默认值，显式 `fetchSymbolFeeRate()` 会抛 `VENUE_NOT_SUPPORTED`。
+- 远端查询失败会包装为 `FEE_RATE_FETCH_FAILED`；后台刷新失败保留旧真实值或默认值，并通过 `client.events.errors()` 发布 `source: "fee"`。
+
+## 9. 健康与错误事件
 
 ```ts
 const health = client.getHealth();
@@ -560,7 +611,7 @@ for await (const error of client.events.errors({ maxBuffer: 20_000 })) {
 
 `getHealth()` 聚合 client、market、account、order 的当前状态。`events.health(filter, options?)` 只返回满足 filter 的事件；如果事件没有 filter 请求的字段，会被过滤掉。`events.health()` 与 `events.errors()` 只支持 `{ maxBuffer?: number }`，默认 buffer 上限同样是 `10_000`；`errors()` 自身溢出时只丢弃最旧错误事件，不再发布新的 overflow 错误，避免递归。
 
-## 9. 数据类型速查
+## 10. 数据类型速查
 
 以下类型均从 `@imbingox/acex` 根入口导出；以 package public types 为准。这里列常用形状，完整字段可由 TypeScript 自动补全。
 
@@ -695,6 +746,21 @@ interface CreateClientOptions {
     maxClosedOrdersPerSymbol?: number;
     missingOrderEvictionThreshold?: number;
     pendingClaimTtlMs?: number;
+  };
+  fee?: {
+    /** ms; defaults to 24h */
+    refreshIntervalMs?: number;
+    /**
+     * Defaults keyed by Venue + MarketType.
+     * Binance built-ins: spot 0.001/0.001, swap 0.0002/0.0005,
+     * future 0.0001/0.0005.
+     */
+    defaultRates?: Partial<
+      Record<
+        Venue,
+        Partial<Record<MarketType, { maker: string; taker: string }>>
+      >
+    >;
   };
 }
 
@@ -1061,6 +1127,32 @@ interface CancelAllOrdersInput {
   symbol: string;
 }
 
+interface SubscribeFeeRatesInput {
+  accountId: string;
+  symbols: string[];
+}
+
+interface UnsubscribeFeeRatesInput {
+  accountId: string;
+  symbols?: string[];
+}
+
+interface GetSymbolFeeRateInput {
+  accountId: string;
+  symbol: string;
+}
+
+interface SymbolFeeRate {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  marketType: MarketType;
+  maker: string;
+  taker: string;
+  source: "default" | "venue";
+  receivedAt: number;
+}
+
 interface OrderSnapshot {
   accountId: string;
   venue: Venue;
@@ -1101,6 +1193,7 @@ interface OrderTrade {
   exchangeTs?: number;
   receivedAt: number;
 }
+
 ```
 
 ```ts
@@ -1138,7 +1231,7 @@ type OrderTradeEvent = {
 };
 ```
 
-## 10. 错误处理
+## 11. 错误处理
 
 可预期错误统一抛 `AcexError`：
 
@@ -1197,19 +1290,21 @@ try {
 | `ACCOUNT_BOOTSTRAP_FAILED` | account bootstrap 失败 |
 | `ACCOUNT_NOT_FOUND` | accountId 未注册或已移除 |
 | `CREDENTIALS_MISSING` | private 订阅或下单缺凭证 |
+| `FEE_RATE_FETCH_FAILED` | 单 symbol 手续费费率远端查询失败 |
 | `ORDER_BOOTSTRAP_FAILED` | open orders bootstrap 失败 |
 | `ORDER_INPUT_INVALID` | 本地订单输入校验失败 |
 | `ORDER_CREATE_FAILED` | 下单 REST 失败或交易所拒单 |
 | `ORDER_CANCEL_FAILED` | 撤单失败 |
 | `ORDER_CANCEL_ALL_FAILED` | 批量撤单失败 |
 
-## 11. 当前限制
+## 12. 当前限制
 
 - market/order runtime 当前只支持 `binance`
 - account runtime 支持 `binance` 和只读 `juplend`
 - `okx` / `bybit` / `gate` 只在 `Venue` 类型中声明
 - Funding Rate 仅支持 Binance 永续合约，包括 Binance TradFi Perps
 - Binance order 命令固定走 PAPI UM，venue 级 `order.supported = true` 不代表 spot、COIN-M 或交割合约都能下单
+- Binance fee 真实远端刷新当前只覆盖 `swap`；spot / future 返回默认费率，显式 fetch 抛 `VENUE_NOT_SUPPORTED`
 - `cancelAllOrders()` 必须带 `symbol`，不支持账户级全撤
 - `createOrder()` 不支持条件单、改单
 - SDK 不自动纠偏订单精度；下游应使用 `normalizeOrderInput()`

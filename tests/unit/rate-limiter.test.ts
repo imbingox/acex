@@ -1192,6 +1192,20 @@ test("Binance topology uses semantic plans for host and openOrders variants", ()
     BINANCE_RATE_LIMIT_PLANS.fapiServerTime,
   );
   expect(
+    getBinancePapiRateLimitPlanId("GET", "/papi/v1/um/commissionRate", {
+      symbol: "BTCUSDT",
+    }),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.papiCommissionRate);
+  expect(BINANCE_RATE_LIMIT_TOPOLOGY.plans).toContainEqual({
+    id: BINANCE_RATE_LIMIT_PLANS.papiCommissionRate,
+    costs: [
+      {
+        bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+        cost: 20,
+      },
+    ],
+  });
+  expect(
     getBinancePapiRateLimitPlanId("GET", "/papi/v1/um/openOrders", {
       symbol: "BTCUSDT",
     }),

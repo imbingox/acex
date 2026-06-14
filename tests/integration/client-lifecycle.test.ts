@@ -82,6 +82,7 @@ test("client exposes venue runtime capabilities without starting", () => {
     },
     order: {
       supported: true,
+      fees: "supported",
       create: "supported",
       cancelAll: "symbol",
       orderTypes: ["limit", "market"],
@@ -106,6 +107,7 @@ test("client exposes venue runtime capabilities without starting", () => {
     },
     order: {
       supported: false,
+      fees: "unsupported",
       reason: "read_only",
     },
   });

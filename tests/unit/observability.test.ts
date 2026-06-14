@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
-import type { RawOrderUpdate } from "../../src/adapters/types.ts";
+import type {
+  RawOrderUpdate,
+  RawSymbolFeeRate,
+} from "../../src/adapters/types.ts";
 import type {
   ClientContext,
   RegisteredAccountRecord,
@@ -13,7 +16,9 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  GetSymbolFeeRateInput,
   HealthEvent,
+  MarketDefinition,
   MetricType,
   Venue,
   VenueOrderCapabilities,
@@ -53,6 +58,13 @@ class MetricContext implements ClientContext {
         secret: "secret",
       },
     };
+  }
+
+  getMarketDefinition(
+    _venue: Venue,
+    _symbol: string,
+  ): MarketDefinition | undefined {
+    return undefined;
   }
 
   getPrivateOrderCapabilities(
@@ -128,6 +140,10 @@ class MetricContext implements ClientContext {
         receivedAt: this.now(),
       },
     ]);
+  }
+
+  fetchSymbolFeeRate(_input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate> {
+    throw new Error("not implemented");
   }
 
   publishRuntimeError(

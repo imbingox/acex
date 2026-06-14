@@ -7,9 +7,11 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  FetchSymbolFeeRateRequest,
   MarketAdapter,
   PrivateUserDataAdapter,
   RawOrderUpdate,
+  RawSymbolFeeRate,
 } from "../adapters/types.ts";
 import {
   AcexError,
@@ -23,6 +25,7 @@ import { matchesHealthFilter } from "../internal/filters.ts";
 import { ReactiveRateLimiter } from "../internal/rate-limiter.ts";
 import { SyncingTimeProvider } from "../internal/syncing-time-provider.ts";
 import { AccountManagerImpl } from "../managers/account-manager.ts";
+import { FeeManagerImpl } from "../managers/fee-manager.ts";
 import { MarketManagerImpl } from "../managers/market-manager.ts";
 import { OrderManagerImpl } from "../managers/order-manager.ts";
 import {
@@ -40,9 +43,12 @@ import {
   type ClientStatusChangedEvent,
   type CreateClientOptions,
   type CreateOrderInput,
+  type FeeManager,
+  type GetSymbolFeeRateInput,
   type HealthEvent,
   type HealthEventFilter,
   type JuplendAccountRuntimeOptions,
+  type MarketDefinition,
   type MarketManager,
   METRIC_NAMES,
   type MetricType,
@@ -260,6 +266,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   readonly market: MarketManager;
   readonly account: AccountManager;
   readonly order: OrderManager;
+  readonly fee: FeeManager;
   readonly events: ClientEventStreams;
 
   private status: ClientStatus = "idle";
@@ -272,6 +279,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly marketManager: MarketManagerImpl;
   private readonly accountManager: AccountManagerImpl;
   private readonly orderManager: OrderManagerImpl;
+  private readonly feeManager: FeeManagerImpl;
   private readonly marketAdapters: Map<Venue, MarketAdapter>;
   private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
@@ -322,6 +330,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     });
     this.accountManager = new AccountManagerImpl(this);
     this.orderManager = new OrderManagerImpl(this, options.order);
+    this.feeManager = new FeeManagerImpl(this, options.fee);
     this.privateCoordinator = new PrivateSubscriptionCoordinator(
       this,
       privateAdapters,
@@ -334,6 +343,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.market = this.marketManager;
     this.account = this.accountManager;
     this.order = this.orderManager;
+    this.fee = this.feeManager;
     this.events = new ClientEventStreamsImpl(
       this.healthBus,
       this.errorBus,
@@ -409,6 +419,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     account.credentials = mergeCredentials(account.credentials, credentials);
+    this.feeManager.onCredentialsUpdated(accountId, account.venue);
 
     if (this.status !== "running") {
       return;
@@ -433,6 +444,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.privateCoordinator.onAccountRemoved(accountId);
     this.accountManager.onAccountRemoved(accountId, now);
     this.orderManager.onAccountRemoved(accountId, now);
+    this.feeManager.onAccountRemoved(accountId, now);
     this.registeredAccounts.delete(accountId);
   }
 
@@ -451,6 +463,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.marketManager.onClientStarted();
     this.accountManager.onClientStarted();
     this.orderManager.onClientStarted();
+    this.feeManager.onClientStarted();
     this.privateCoordinator.onClientStarted();
   }
 
@@ -477,6 +490,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       this.marketManager.onClientStopping(now);
       this.accountManager.onClientStopping(now);
       this.orderManager.onClientStopping(now);
+      this.feeManager.onClientStopping(now);
 
       this.setClientStatus("stopped");
     } finally {
@@ -514,6 +528,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     return account;
+  }
+
+  getMarketDefinition(
+    venue: Venue,
+    symbol: string,
+  ): MarketDefinition | undefined {
+    return this.marketManager.getMarket(venue, symbol);
   }
 
   getPrivateOrderCapabilities(
@@ -619,6 +640,52 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         { ...account.options, accountId: account.accountId },
       ),
     );
+  }
+
+  fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate> {
+    this.assertStarted();
+    const account = this.getRegisteredAccount(input.accountId);
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (
+      adapter.orderCapabilities.fees === "unsupported" ||
+      !adapter.fetchSymbolFeeRate
+    ) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support symbol fee rate queries: ${account.venue}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    if (
+      !hasPrivateCredentials(
+        account.credentials,
+        adapter.accountCapabilities.credentialsRequired,
+      )
+    ) {
+      throw this.createError(
+        "CREDENTIALS_MISSING",
+        `Account credentials are required for symbol fee rate queries: ${input.accountId}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    const request: FetchSymbolFeeRateRequest = {
+      symbol: input.symbol,
+    };
+
+    return adapter.fetchSymbolFeeRate(account.credentials ?? {}, request, {
+      ...account.options,
+      accountId: account.accountId,
+    });
   }
 
   publishRuntimeError(

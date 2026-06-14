@@ -25,6 +25,7 @@ const unsupportedOrder: Omit<VenueOrderCapabilities, "reason"> = {
   supported: false,
   openOrders: "unsupported",
   updates: "unsupported",
+  fees: "unsupported",
   create: "unsupported",
   cancel: "unsupported",
   cancelAll: "unsupported",

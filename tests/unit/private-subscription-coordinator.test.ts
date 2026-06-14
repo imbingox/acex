@@ -9,6 +9,7 @@ import type {
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
   RawRiskLevelChange,
+  RawSymbolFeeRate,
   StreamHandle,
 } from "../../src/adapters/types.ts";
 import type {
@@ -29,7 +30,9 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  GetSymbolFeeRateInput,
   HealthEvent,
+  MarketDefinition,
   MetricType,
   OrderSnapshot,
   Venue,
@@ -81,6 +84,13 @@ class StubContext implements ClientContext {
     return this.account;
   }
 
+  getMarketDefinition(
+    _venue: Venue,
+    _symbol: string,
+  ): MarketDefinition | undefined {
+    return undefined;
+  }
+
   getPrivateOrderCapabilities(
     _venue: Venue,
   ): VenueOrderCapabilities | undefined {
@@ -117,6 +127,10 @@ class StubContext implements ClientContext {
   }
 
   cancelAllOrders(_input: CancelAllOrdersInput): Promise<RawOrderUpdate[]> {
+    throw new Error("not implemented");
+  }
+
+  fetchSymbolFeeRate(_input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate> {
     throw new Error("not implemented");
   }
 
@@ -298,6 +312,7 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     supported: true,
     openOrders: "supported",
     updates: "websocket",
+    fees: "unsupported",
     create: "supported",
     cancel: "supported",
     cancelAll: "symbol",
@@ -594,6 +609,7 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
     supported: false,
     openOrders: "unsupported",
     updates: "unsupported",
+    fees: "unsupported",
     create: "unsupported",
     cancel: "unsupported",
     cancelAll: "unsupported",

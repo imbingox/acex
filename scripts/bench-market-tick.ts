@@ -5,6 +5,7 @@ import type {
   L1BookStreamOptions,
   MarketAdapter,
   RawOrderUpdate,
+  RawSymbolFeeRate,
   StreamHandle,
 } from "../src/adapters/types.ts";
 import type { ClientContext } from "../src/client/context.ts";
@@ -14,6 +15,7 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  GetSymbolFeeRateInput,
   HealthEvent,
   MarketDefinition,
   Venue,
@@ -100,6 +102,14 @@ function createContext(nowRef: { value: number }): ClientContext {
     getRegisteredAccount() {
       return notUsed("getRegisteredAccount");
     },
+    getMarketDefinition(
+      venue: Venue,
+      symbol: string,
+    ): MarketDefinition | undefined {
+      void venue;
+      void symbol;
+      return undefined;
+    },
     getPrivateOrderCapabilities(
       venue: Venue,
     ): VenueOrderCapabilities | undefined {
@@ -142,6 +152,12 @@ function createContext(nowRef: { value: number }): ClientContext {
     ): Promise<RawOrderUpdate[]> {
       void input;
       return notUsed("cancelAllOrders");
+    },
+    async fetchSymbolFeeRate(
+      input: GetSymbolFeeRateInput,
+    ): Promise<RawSymbolFeeRate> {
+      void input;
+      return notUsed("fetchSymbolFeeRate");
     },
     publishRuntimeError(): void {},
     publishHealthEvent(event: HealthEvent): void {

@@ -283,7 +283,7 @@ export class OrderManagerImpl
         },
       );
     } finally {
-      this.emitOrderCommandRtt(
+      this.emitOrderOperationRtt(
         "create",
         input.accountId,
         account.venue,
@@ -341,7 +341,7 @@ export class OrderManagerImpl
         },
       );
     } finally {
-      this.emitOrderCommandRtt(
+      this.emitOrderOperationRtt(
         "cancel",
         input.accountId,
         account.venue,
@@ -398,7 +398,7 @@ export class OrderManagerImpl
         },
       );
     } finally {
-      this.emitOrderCommandRtt(
+      this.emitOrderOperationRtt(
         "cancelAll",
         input.accountId,
         account.venue,
@@ -1431,7 +1431,7 @@ export class OrderManagerImpl
     };
   }
 
-  private emitOrderCommandRtt(
+  private emitOrderOperationRtt(
     op: "create" | "cancel" | "cancelAll",
     accountId: string,
     venue: Venue,

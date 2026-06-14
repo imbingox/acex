@@ -7,6 +7,7 @@ import type {
   L1BookStreamOptions,
   MarketAdapter,
   RawOrderUpdate,
+  RawSymbolFeeRate,
   StreamHandle,
 } from "../../src/adapters/types.ts";
 import type {
@@ -20,6 +21,7 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  GetSymbolFeeRateInput,
   HealthEvent,
   MarketDefinition,
   Venue,
@@ -58,6 +60,13 @@ class StubMarketContext implements ClientContext {
     throw new AcexError("ACCOUNT_NOT_FOUND", "Account not found");
   }
 
+  getMarketDefinition(
+    _venue: Venue,
+    _symbol: string,
+  ): MarketDefinition | undefined {
+    return undefined;
+  }
+
   getPrivateOrderCapabilities(
     _venue: Venue,
   ): VenueOrderCapabilities | undefined {
@@ -94,6 +103,10 @@ class StubMarketContext implements ClientContext {
   }
 
   cancelAllOrders(_input: CancelAllOrdersInput): Promise<RawOrderUpdate[]> {
+    throw new Error("not implemented");
+  }
+
+  fetchSymbolFeeRate(_input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate> {
     throw new Error("not implemented");
   }
 

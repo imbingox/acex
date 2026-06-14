@@ -8,6 +8,8 @@ export const SUPPORTED_VENUES = [
 
 export type Venue = (typeof SUPPORTED_VENUES)[number];
 
+export type MarketType = "spot" | "swap" | "future";
+
 export type ClientStatus =
   | "idle"
   | "starting"
@@ -329,6 +331,18 @@ export interface OrderRuntimeOptions {
   pendingClaimTtlMs?: number;
 }
 
+export interface FeeRatePair {
+  maker: string;
+  taker: string;
+}
+
+export interface FeeRuntimeOptions {
+  refreshIntervalMs?: number;
+  defaultRates?: Partial<
+    Record<Venue, Partial<Record<MarketType, FeeRatePair>>>
+  >;
+}
+
 export interface CreateClientOptions {
   sandbox?: boolean;
   /** Request/signing clock override; local receivedAt/freshness clocks stay independent. */
@@ -341,6 +355,7 @@ export interface CreateClientOptions {
   market?: MarketRuntimeOptions;
   account?: AccountRuntimeOptions;
   order?: OrderRuntimeOptions;
+  fee?: FeeRuntimeOptions;
 }
 
 export interface AccountCredentials {
@@ -407,7 +422,14 @@ export interface BufferedEventStreamOptions {
 }
 
 export interface AcexInternalError {
-  source: "client" | "market" | "account" | "order" | "adapter" | "runtime";
+  source:
+    | "client"
+    | "market"
+    | "account"
+    | "order"
+    | "fee"
+    | "adapter"
+    | "runtime";
   venue?: Venue;
   accountId?: string;
   symbol?: string;

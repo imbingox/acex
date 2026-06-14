@@ -69,6 +69,7 @@ export interface AcexErrorDetails {
 | 下单/撤单 timeout / network / parse | `ORDER_*_FAILED`，保留 `cause`，填可用 `details.transport` | `unknown` |
 | 下单/撤单 HTTP >= 500 | `ORDER_*_FAILED`，保留 `cause`，填可用 `details.transport`；即使 body 可解析，也按执行状态未知处理 | `unknown` |
 | 下单/撤单限流（`transport.kind === "rate_limited"`） | `ORDER_*_FAILED`，保留 `cause`，填可用 `details.venueError` / `details.transport` | `not_placed` |
+| symbol 手续费费率查询失败 | `ORDER_FEE_RATE_FETCH_FAILED`，保留 `cause`，填 `details.venue/accountId/symbol`、可用 `details.venueError` / `details.transport` | 不填 |
 | account/order bootstrap 返回 `{code,msg}` | `ACCOUNT_BOOTSTRAP_FAILED` / `ORDER_BOOTSTRAP_FAILED`，保留 `cause`，填 `details.venueError` | 不填 |
 | market catalog/server-time 返回纯文本/HTML | 不填 `details.venueError`，只填 `details.transport.rawBody/status/url` | 不填 |
 | market stream 首包超时 | `MARKET_STREAM_TIMEOUT`，保留 `cause`，填 `details.venue/symbol`，不填 `details.venueError` | 不填 |

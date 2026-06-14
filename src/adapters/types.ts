@@ -334,6 +334,17 @@ export interface CancelAllOrdersRequest {
   symbol: string;
 }
 
+export interface FetchSymbolFeeRateRequest {
+  symbol: string;
+}
+
+export interface RawSymbolFeeRate {
+  symbol: string;
+  maker: string;
+  taker: string;
+  receivedAt: number;
+}
+
 export interface PrivateStreamCallbacks {
   onAccountSnapshot(snapshot: RawAccountBootstrap): void;
   onAccountUpdate(update: RawAccountUpdate): void;
@@ -387,6 +398,11 @@ export interface PrivateUserDataAdapter {
     request: FetchOrderRequest,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate | undefined>;
+  fetchSymbolFeeRate?(
+    credentials: AccountCredentials,
+    request: FetchSymbolFeeRateRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolFeeRate>;
   createOrder(
     credentials: AccountCredentials,
     request: CreateOrderRequest,

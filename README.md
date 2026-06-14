@@ -153,8 +153,9 @@ const capabilities = client.listVenueCapabilities();
 | **Capabilities** | `getVenueCapabilities` / `listVenueCapabilities` 查询 SDK 当前 runtime 支持能力 | [docs/api.md §4](./docs/api.md#43-venue-capabilities) |
 | **Market** | Market catalog、L1 Book / Funding Rate 订阅、增量事件、订阅状态与自动重连 | [docs/api.md §5](./docs/api.md#5-marketmanager) |
 | **Account** | 账户快照、余额、持仓、风险投影与事件流 | [docs/api.md §6](./docs/api.md#6-accountmanager) |
-| **Order** | open orders 投影、订单事件流，`createOrder` / `cancelOrder` / `cancelAllOrders` 第一版命令，以及账号级 symbol 手续费费率查询 | [docs/api.md §7](./docs/api.md#7-ordermanager) |
-| **健康与错误** | `getHealth()`、`events.health()`、`events.errors()` | [docs/api.md §8](./docs/api.md#8-健康与错误事件) |
+| **Order** | open orders 投影、订单事件流，`createOrder` / `cancelOrder` / `cancelAllOrders` 第一版命令 | [docs/api.md §7](./docs/api.md#7-ordermanager) |
+| **Fee** | `client.fee` / FeeManager 维护账号级 symbol 手续费费率查询 | [docs/api.md §8](./docs/api.md#8-feemanager) |
+| **健康与错误** | `getHealth()`、`events.health()`、`events.errors()` | [docs/api.md §9](./docs/api.md#9-健康与错误事件) |
 
 完整手册（接口签名、数据类型、错误码）：[docs/api.md](./docs/api.md)。
 

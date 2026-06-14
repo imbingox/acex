@@ -747,6 +747,21 @@ interface CreateClientOptions {
     missingOrderEvictionThreshold?: number;
     pendingClaimTtlMs?: number;
   };
+  fee?: {
+    /** ms; defaults to 24h */
+    refreshIntervalMs?: number;
+    /**
+     * Defaults keyed by Venue + MarketType.
+     * Binance built-ins: spot 0.001/0.001, swap 0.0002/0.0005,
+     * future 0.0001/0.0005.
+     */
+    defaultRates?: Partial<
+      Record<
+        Venue,
+        Partial<Record<MarketType, { maker: string; taker: string }>>
+      >
+    >;
+  };
 }
 
 interface RateLimitScope {

@@ -372,8 +372,11 @@ export class FeeManagerImpl
     }
 
     record.marketType = nextMarketType;
-    if (record.source === "default") {
-      record.receivedAt = now;
+    record.receivedAt = now;
+    if (record.source === "venue") {
+      record.source = "default";
+      record.maker = undefined;
+      record.taker = undefined;
     }
   }
 

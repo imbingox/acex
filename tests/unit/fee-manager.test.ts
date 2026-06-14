@@ -110,7 +110,13 @@ function installHeldLongTimers(minDelayMs = 1_000): {
   ): ReturnType<typeof setTimeout> => {
     const delay = Number(timeout ?? 0);
     if (delay < minDelayMs) {
-      return originalSetTimeout(handler, timeout);
+      return (
+        originalSetTimeout as (
+          handler: Parameters<typeof setTimeout>[0],
+          timeout: Parameters<typeof setTimeout>[1],
+          ...args: unknown[]
+        ) => ReturnType<typeof setTimeout>
+      )(handler, timeout, ...args);
     }
 
     const handle = {};
@@ -427,6 +433,38 @@ test("fee manager fetch writes venue rate into cache and credentials update down
   ).toMatchObject({
     maker: "0.0002",
     taker: "0.0005",
+    source: "default",
+    receivedAt: context.nowMs,
+  });
+
+  manager.onClientStopping(context.now());
+});
+
+test("fee manager invalidates venue rate when market type changes", async () => {
+  const context = new StubFeeContext();
+  const manager = new FeeManagerImpl(context);
+  manager.onClientStarted();
+
+  await manager.fetchSymbolFeeRate({
+    accountId: "main-binance",
+    symbol: "ETH/BTC",
+  });
+
+  context.markets.set(
+    "binance:ETH/BTC",
+    createMarketDefinition("ETH/BTC", "spot"),
+  );
+  context.nowMs += 1;
+
+  expect(
+    manager.getSymbolFeeRate({
+      accountId: "main-binance",
+      symbol: "ETH/BTC",
+    }),
+  ).toMatchObject({
+    marketType: "spot",
+    maker: "0.001",
+    taker: "0.001",
     source: "default",
     receivedAt: context.nowMs,
   });

@@ -135,6 +135,54 @@ export interface RawFundingRateUpdate {
   receivedAt: number;
 }
 
+export interface FetchPublicRawTradesRequest {
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+}
+
+export interface FetchPublicTradesRequest {
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+}
+
+export interface FetchFundingRateHistoryRequest {
+  startTs?: number;
+  endTs?: number;
+  limit?: number;
+}
+
+export interface RawPublicTrade {
+  id: string;
+  price: string;
+  amount: string;
+  cost?: string;
+  side?: OrderSide;
+  exchangeTs: number;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+export interface RawPublicTradesResult {
+  trades: RawPublicTrade[];
+  truncated: boolean;
+  nextFromId?: string;
+}
+
+export interface RawFundingRateHistoryEntry {
+  fundingRate: string;
+  fundingTime: number;
+  markPrice?: string;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+export interface RawFundingRateHistoryResult {
+  rates: RawFundingRateHistoryEntry[];
+  truncated: boolean;
+}
+
 export interface L1BookStreamCallbacks {
   onUpdate(update: RawL1BookUpdate): void;
   onFreshnessChange(
@@ -176,6 +224,19 @@ export interface MarketAdapter {
   readonly marketCapabilities: VenueMarketCapabilities;
   loadMarkets(): Promise<MarketDefinition[]>;
   fetchServerTime?(): Promise<VenueServerTime>;
+  fetchPublicTrades?(
+    market: MarketDefinition,
+    request: FetchPublicTradesRequest,
+  ): Promise<RawPublicTradesResult>;
+  fetchPublicRawTrades?(
+    market: MarketDefinition,
+    request: FetchPublicRawTradesRequest,
+  ): Promise<RawPublicTradesResult>;
+  assertPublicRawTradesConfigured?(): void;
+  fetchFundingRateHistory?(
+    market: MarketDefinition,
+    request: FetchFundingRateHistoryRequest,
+  ): Promise<RawFundingRateHistoryResult>;
   createL1BookStream(
     market: MarketDefinition,
     callbacks: L1BookStreamCallbacks,

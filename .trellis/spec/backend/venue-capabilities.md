@@ -31,6 +31,17 @@ interface VenueCapabilities {
   account: VenueAccountCapabilities;
   order: VenueOrderCapabilities;
 }
+
+interface VenueMarketCapabilities {
+  catalog: "supported" | "unsupported";
+  serverTime: "supported" | "unsupported";
+  publicTrades: "supported" | "unsupported";
+  publicRawTrades: "supported" | "unsupported";
+  fundingRateHistory: "supported" | "unsupported";
+  l1Book: "supported" | "unsupported";
+  fundingRate: "supported" | "unsupported" | "market_dependent";
+  marketTypes: MarketType[];
+}
 ```
 
 ### 3. Contracts
@@ -39,6 +50,9 @@ interface VenueCapabilities {
 - `runtimeStatus = "type_only"` 表示 venue 只出现在 public `Venue` 类型中，当前没有 runtime adapter。
 - `readOnly = true` 表示 SDK 对该 venue 只提供读能力，不允许通过 `OrderManager` 或链上写操作修改状态。
 - `market.fundingRate = "market_dependent"` 表示 venue 级无法保证所有 market 都支持；具体 symbol 仍以 `subscribeFundingRate()` 的实际结果为准。
+- `market.publicTrades = "supported"` 表示当前 SDK runtime 实现了 public market trades 查询链路。Binance 当前返回 `aggTrades` 聚合成交，不是逐笔 raw trade。
+- `market.publicRawTrades = "supported"` 表示当前 SDK runtime 实现了逐笔 raw public trade 查询链路。Binance 该方法需要 market-data API key；capability 不检查 key 是否已配置或权限是否有效。
+- `market.fundingRateHistory = "supported"` 表示当前 SDK runtime 可通过 `client.market.fetchFundingRateHistory()` 查询历史 funding rate；具体 symbol 仍需是永续合约，spot / dated future 会由 manager 抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 - `market.serverTime = "supported"` 表示当前 SDK runtime 可通过 `client.market.fetchServerTime(venue)` 获取交易所服务器时间、单次 RTT 与 NTP 式时钟偏移估算。Binance 当前测量源固定为 USDⓈ-M REST 集群 `/fapi/v1/time`。
 - `order.supported = true` 才表示可以通过当前 SDK 调 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`。
 - `order.supported = true` 是 venue 级能力，不是 market/symbol 级能力。例如 Binance 当前订单命令固定走 PAPI UM，不能据此推断 Binance spot、COIN-M 或交割合约都可通过 `OrderManager` 下单。
@@ -46,7 +60,7 @@ interface VenueCapabilities {
   - `read_only`: venue 只读，例如 Juplend
   - `not_implemented`: venue 仅类型占位或 runtime 未接入
 - capability 真源应尽量靠近 adapter：
-  - `MarketAdapter.marketCapabilities` 声明该 market adapter 已实现的 catalog / server time / L1 / funding rate 能力。
+  - `MarketAdapter.marketCapabilities` 声明该 market adapter 已实现的 catalog / server time / public trades / public raw trades / funding history / L1 / funding rate 能力。
   - `PrivateUserDataAdapter.accountCapabilities` 声明账户视图能力。
   - `PrivateUserDataAdapter.orderCapabilities` 声明订单命令与订单流能力。
   - `PrivateUserDataAdapter.readOnly` / `notes` 声明私有链路的只读状态和说明。
@@ -58,7 +72,7 @@ interface VenueCapabilities {
 | 场景 | 约定 |
 |---|---|
 | 查询 `binance` | `runtimeStatus = "available"`，`order.supported = true`，`order.orderTypes = ["limit", "market"]` |
-| 查询 `binance` 的 market 能力 | `catalog = "supported"`，`serverTime = "supported"`，`l1Book = "supported"`，`fundingRate = "market_dependent"` |
+| 查询 `binance` 的 market 能力 | `catalog = "supported"`，`serverTime = "supported"`，`publicTrades = "supported"`，`publicRawTrades = "supported"`，`fundingRateHistory = "supported"`，`l1Book = "supported"`，`fundingRate = "market_dependent"` |
 | 查询 `juplend` | `runtimeStatus = "available"`，`readOnly = true`，`market.serverTime = "unsupported"`，`order.supported = false`，`reason = "read_only"` |
 | 查询 `okx` / `bybit` / `gate` | `runtimeStatus = "type_only"`，runtime 能力均为 unsupported，`market.serverTime = "unsupported"`，`order.reason = "not_implemented"` |
 | client 未 `start()` | capability 查询仍可用 |
@@ -99,6 +113,7 @@ for (const venue of SUPPORTED_VENUES) {
 
 - Integration: `getVenueCapabilities("binance")` 返回 `order.supported = true`、`fundingRate = "market_dependent"`。
 - Integration: `getVenueCapabilities("binance")` 返回 `market.serverTime = "supported"`。
+- Integration: `getVenueCapabilities("binance")` 返回 `market.publicTrades = "supported"`、`market.publicRawTrades = "supported"` 与 `market.fundingRateHistory = "supported"`。
 - Integration: `getVenueCapabilities("juplend")` 返回 `readOnly = true`、`market.serverTime = "unsupported"`、`order.reason = "read_only"`、`account.updates = "polling"`。
 - Integration: `okx` / `bybit` / `gate` 返回 `runtimeStatus = "type_only"`、`market.serverTime = "unsupported"` 和 `order.reason = "not_implemented"`。
 - Integration: 不调用 `client.start()` 也能查询。

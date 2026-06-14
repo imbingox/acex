@@ -6,6 +6,7 @@ import {
   BINANCE_RATE_LIMIT_TOPOLOGY,
   getBinanceCatalogRateLimitPlanId,
   getBinancePapiRateLimitPlanId,
+  getBinancePublicMarketRateLimitPlanId,
   getBinanceServerTimeRateLimitPlanId,
   registerBinanceRateLimitTopology,
 } from "../../src/adapters/binance/rate-limit-topology.ts";
@@ -208,6 +209,33 @@ test("registerBinanceRateLimitTopology feature-detects old custom limiters", () 
     planId: BINANCE_RATE_LIMIT_PLANS.papiAccount,
   });
   expect(seen.at(-1)?.planId).toBe(BINANCE_RATE_LIMIT_PLANS.papiAccount);
+});
+
+test("Binance public market endpoints map to request-weight plans", () => {
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/api/v3/aggTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.spotAggTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/api/v3/historicalTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.spotHistoricalTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/fapi/v1/aggTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.fapiAggTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/fapi/v1/historicalTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.fapiHistoricalTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/dapi/v1/aggTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.dapiAggTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/dapi/v1/historicalTrades"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.dapiHistoricalTrades);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/fapi/v1/fundingRate"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.fapiFundingRateHistory);
+  expect(
+    getBinancePublicMarketRateLimitPlanId("GET", "/dapi/v1/fundingRate"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.dapiFundingRateHistory);
 });
 
 test("BudgetRateLimiter falls back to endpoint scope for unknown plans", async () => {
@@ -1191,6 +1219,24 @@ test("Binance topology uses semantic plans for host and openOrders variants", ()
   expect(getBinanceServerTimeRateLimitPlanId()).toBe(
     BINANCE_RATE_LIMIT_PLANS.fapiServerTime,
   );
+  expect(BINANCE_RATE_LIMIT_TOPOLOGY.plans).toContainEqual({
+    id: BINANCE_RATE_LIMIT_PLANS.fapiFundingRateHistory,
+    costs: [
+      {
+        bucketId: BINANCE_RATE_LIMIT_BUCKETS.fapiFundingRate5m,
+        cost: 1,
+      },
+    ],
+  });
+  expect(BINANCE_RATE_LIMIT_TOPOLOGY.plans).toContainEqual({
+    id: BINANCE_RATE_LIMIT_PLANS.dapiFundingRateHistory,
+    costs: [
+      {
+        bucketId: BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
+        cost: 1,
+      },
+    ],
+  });
   expect(
     getBinancePapiRateLimitPlanId("GET", "/papi/v1/um/commissionRate", {
       symbol: "BTCUSDT",

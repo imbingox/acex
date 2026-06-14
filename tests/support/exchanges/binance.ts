@@ -5,6 +5,10 @@ const SPOT_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo";
 const USDM_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
 const COINM_EXCHANGE_INFO_URL = "https://dapi.binance.com/dapi/v1/exchangeInfo";
 const USDM_SERVER_TIME_URL = "https://fapi.binance.com/fapi/v1/time";
+const USDM_AGG_TRADES_URL = "https://fapi.binance.com/fapi/v1/aggTrades";
+const USDM_HISTORICAL_TRADES_URL =
+  "https://fapi.binance.com/fapi/v1/historicalTrades";
+const USDM_FUNDING_RATE_URL = "https://fapi.binance.com/fapi/v1/fundingRate";
 const PAPI_REST_BASE_URL = "https://papi.binance.com";
 
 export const BINANCE_SPOT_WS_BASE_URL = "wss://stream.binance.com:9443/ws";
@@ -335,6 +339,59 @@ const binanceFixtures = {
       takerCommissionRate: "0.00050000",
     },
   },
+  publicTrades: {
+    aggTrades: [
+      {
+        a: 9000,
+        p: "102000.10",
+        q: "0.010",
+        f: 1000,
+        l: 1002,
+        T: 1710000000000,
+        m: false,
+      },
+    ],
+    rawTrades: [
+      {
+        id: 1000,
+        price: "102000.10",
+        qty: "0.010",
+        quoteQty: "1020.001",
+        time: 1710000000000,
+        isBuyerMaker: false,
+      },
+      {
+        id: 1001,
+        price: "102000.20",
+        qty: "0.020",
+        quoteQty: "2040.004",
+        time: 1710000000100,
+        isBuyerMaker: true,
+      },
+      {
+        id: 1002,
+        price: "102000.30",
+        qty: "0.030",
+        quoteQty: "3060.009",
+        time: 1710000000200,
+        isBuyerMaker: false,
+      },
+    ],
+  },
+  fundingRateHistory: [
+    {
+      symbol: "BTCUSDT",
+      fundingRate: "0.00010000",
+      fundingTime: 1710000000000,
+      markPrice: "102000.10",
+    },
+    {
+      symbol: "BTCUSDT",
+      fundingRate: "-0.00020000",
+      fundingTime: 1710028800000,
+      markPrice: "101500.00",
+    },
+  ],
 };
 
 function parseControlFrame(frame: string): BinanceControlFrame | undefined {
@@ -393,8 +450,44 @@ export function installBinanceMarketInfra(): void {
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (input: string | URL | Request) => {
-      const url = typeof input === "string" ? input : input.toString();
+    value: async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const parsed = new URL(url);
+      const endpoint = `${parsed.origin}${parsed.pathname}`;
+      const headers = new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+
+      if (endpoint === USDM_AGG_TRADES_URL) {
+        return jsonResponse(binanceFixtures.publicTrades.aggTrades);
+      }
+
+      if (endpoint === USDM_HISTORICAL_TRADES_URL) {
+        if (headers.get("X-MBX-APIKEY") !== "market-key") {
+          return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+            status: 401,
+            statusText: "Unauthorized",
+          });
+        }
+
+        const fromId = Number(parsed.searchParams.get("fromId") ?? "0");
+        const limit = Number(parsed.searchParams.get("limit") ?? "500");
+        return jsonResponse(
+          binanceFixtures.publicTrades.rawTrades
+            .filter((trade) => trade.id >= fromId)
+            .slice(0, limit),
+        );
+      }
+
+      if (endpoint === USDM_FUNDING_RATE_URL) {
+        const limit = Number(parsed.searchParams.get("limit") ?? "100");
+        return jsonResponse(binanceFixtures.fundingRateHistory.slice(0, limit));
+      }
 
       switch (url) {
         case SPOT_EXCHANGE_INFO_URL:

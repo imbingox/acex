@@ -7,18 +7,28 @@ import type {
 } from "../../types/index.ts";
 import { METRIC_NAMES, type OnMetric } from "../../types/index.ts";
 import type {
+  FetchFundingRateHistoryRequest,
+  FetchPublicRawTradesRequest,
+  FetchPublicTradesRequest,
   FundingRateStreamCallbacks,
   FundingRateStreamOptions,
   L1BookStreamCallbacks,
   L1BookStreamOptions,
   MarketAdapter,
+  RawFundingRateHistoryResult,
+  RawPublicTradesResult,
   StreamHandle,
 } from "../types.ts";
+import { fetchBinanceFundingRateHistory } from "./funding-history.ts";
 import {
   BinanceMarketCatalog,
   type BinanceMarketDefinition,
   type BinanceMarketFamily,
 } from "./market-catalog.ts";
+import {
+  fetchBinancePublicRawTrades,
+  fetchBinancePublicTrades,
+} from "./public-trades.ts";
 import { registerBinanceRateLimitTopology } from "./rate-limit-topology.ts";
 import { fetchBinanceServerTime } from "./server-time.ts";
 import {
@@ -51,6 +61,9 @@ export class BinanceMarketAdapter implements MarketAdapter {
   readonly marketCapabilities: VenueMarketCapabilities = {
     catalog: "supported",
     serverTime: "supported",
+    publicTrades: "supported",
+    publicRawTrades: "supported",
+    fundingRateHistory: "supported",
     l1Book: "supported",
     fundingRate: "market_dependent",
     marketTypes: ["spot", "swap", "future"],
@@ -65,6 +78,7 @@ export class BinanceMarketAdapter implements MarketAdapter {
       readonly rateLimiter?: RateLimiter;
       readonly marketCatalog?: BinanceMarketCatalog;
       readonly emitMetric?: OnMetric;
+      readonly marketDataApiKey?: string;
     } = {},
   ) {
     this.catalog =
@@ -79,6 +93,59 @@ export class BinanceMarketAdapter implements MarketAdapter {
 
   async fetchServerTime(): Promise<VenueServerTime> {
     return await fetchBinanceServerTime({
+      rateLimiter: this.options.rateLimiter,
+    });
+  }
+
+  async fetchPublicTrades(
+    market: MarketDefinition,
+    request: FetchPublicTradesRequest,
+  ): Promise<RawPublicTradesResult> {
+    const binanceMarket = this.getBinanceMarket(market);
+    if (!binanceMarket) {
+      throw new Error(`Unknown Binance market: ${market.symbol}`);
+    }
+
+    return await fetchBinancePublicTrades(binanceMarket, request, {
+      rateLimiter: this.options.rateLimiter,
+    });
+  }
+
+  async fetchPublicRawTrades(
+    market: MarketDefinition,
+    request: FetchPublicRawTradesRequest,
+  ): Promise<RawPublicTradesResult> {
+    const binanceMarket = this.getBinanceMarket(market);
+    if (!binanceMarket) {
+      throw new Error(`Unknown Binance market: ${market.symbol}`);
+    }
+
+    return await fetchBinancePublicRawTrades(binanceMarket, request, {
+      apiKey: this.options.marketDataApiKey,
+      rateLimiter: this.options.rateLimiter,
+    });
+  }
+
+  assertPublicRawTradesConfigured(): void {
+    if (this.options.marketDataApiKey?.trim()) {
+      return;
+    }
+
+    throw new Error(
+      "Binance public raw trades require a market API key; set CreateClientOptions.market.venues.binance.apiKey or BINANCE_MARKET_API_KEY",
+    );
+  }
+
+  async fetchFundingRateHistory(
+    market: MarketDefinition,
+    request: FetchFundingRateHistoryRequest,
+  ): Promise<RawFundingRateHistoryResult> {
+    const binanceMarket = this.getBinanceMarket(market);
+    if (!binanceMarket) {
+      throw new Error(`Unknown Binance market: ${market.symbol}`);
+    }
+
+    return await fetchBinanceFundingRateHistory(binanceMarket, request, {
       rateLimiter: this.options.rateLimiter,
     });
   }

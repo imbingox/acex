@@ -25,7 +25,7 @@
 
 | Venue | Market | Account | Order |
 |---|---|---|---|
-| `binance` | Spot / USDⓈ-M / COIN-M catalog（含 TradFi Perps）；L1 Book；永续 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
+| `binance` | Spot / USDⓈ-M / COIN-M catalog（含 TradFi Perps）；L1 Book；永续 funding rate；历史 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
 | `juplend` | 不支持 | Jupiter Lend 只读账户 polling | 不支持，read-only |
 | `okx` / `bybit` / `gate` | 类型占位 | 类型占位 | 类型占位 |
 
@@ -49,7 +49,7 @@ await client.start();
 await client.stop();
 ```
 
-`createClient()` 不建立网络连接。`start()` 后才能调用订阅类方法；`loadMarkets()`、`reloadMarkets()`、`fetchServerTime()` 和 capability 查询不要求 client 已 start。
+`createClient()` 不建立网络连接。`start()` 后才能调用订阅类方法；`loadMarkets()`、`reloadMarkets()`、`fetchServerTime()`、`fetchPublicTrades()`、`fetchPublicRawTrades()`、`fetchFundingRateHistory()` 和 capability 查询不要求 client 已 start。
 
 ### 2.2 订阅 Binance L1 Book
 
@@ -347,6 +347,15 @@ interface MarketManager {
   loadMarkets(): Promise<void>;
   reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
   fetchServerTime(venue: Venue): Promise<VenueServerTime>;
+  fetchPublicTrades(
+    input: FetchPublicTradesInput,
+  ): Promise<FetchPublicTradesResult>;
+  fetchPublicRawTrades(
+    input: FetchPublicRawTradesInput,
+  ): Promise<FetchPublicRawTradesResult>;
+  fetchFundingRateHistory(
+    input: FetchFundingRateHistoryInput,
+  ): Promise<FetchFundingRateHistoryResult>;
 
   listMarkets(venue?: Venue): MarketDefinition[];
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
@@ -407,11 +416,59 @@ console.log(time.serverTime, time.roundTripMs, time.estimatedOffsetMs);
 
 当前 Binance server time 测量源固定为 USDⓈ-M REST `/fapi/v1/time`。失败会包装为 `MARKET_SERVER_TIME_FETCH_FAILED`。
 
-### 5.4 Funding rate
+### 5.4 Public trades
+
+```ts
+const result = await client.market.fetchPublicTrades({
+  venue: "binance",
+  symbol: "BTC/USDT:USDT",
+  startTs: 1710000000000,
+  endTs: 1710000000600,
+});
+
+for (const trade of result.trades) {
+  console.log(trade.id, trade.price, trade.amount, trade.side, trade.exchangeTs);
+}
+```
+
+`fetchPublicTrades()` 查询公开市场成交，不是账号成交。当前 Binance 实现走 `aggTrades`，返回的是聚合成交：`PublicTrade.id` 是 aggregate trade id，`raw` 中保留 Binance 原始 `a/f/l/T/m` 等字段。`startTs` 必填，`endTs` 是排他上界；`endTs` 和 `limit` 至少传一个。只传 `limit` 时，从 `startTs` 开始返回最多 N 条；只传 `endTs` 时返回 `[startTs, endTs)` 内成交，adapter 会使用安全上限；两者都传时同时生效，返回时间窗口内最多 `limit` 条。命中上限时 `truncated = true`。
+
+```ts
+const raw = await client.market.fetchPublicRawTrades({
+  venue: "binance",
+  symbol: "BTC/USDT:USDT",
+  startTs: 1710000000000,
+  limit: 100,
+});
+```
+
+`fetchPublicRawTrades()` 查询 Binance 逐笔 raw public trades，内部先用 `aggTrades` 按 `startTs` 定位起始 raw trade id，再带 `X-MBX-APIKEY` 调 `historicalTrades`，并按 raw trade 的 `time` 做 `[startTs, endTs)` 本地过滤。SDK 不会把用户的完整 `endTs` 窗口传给 locator 请求；如果定位到的首条 aggregate trade 已晚于 `endTs`，会返回空结果。该方法需要 Binance market API key；可通过 `createClient({ market: { venues: { binance: { apiKey } } } })` 显式传入，未显式传入时默认读取 `BINANCE_MARKET_API_KEY`。缺少 key 会在加载 market catalog 前本地失败并包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`。可查询范围同时受 Binance `aggTrades` locator 与 `historicalTrades`/MARKET_DATA 端点自身的数据可用性限制。
+
+### 5.5 Funding rate history
+
+```ts
+const history = await client.market.fetchFundingRateHistory({
+  venue: "binance",
+  symbol: "BTC/USDT:USDT",
+  startTs: 1710000000000,
+  endTs: 1710100000000,
+  limit: 100,
+});
+
+for (const rate of history.rates) {
+  console.log(rate.fundingRate, rate.fundingTime, rate.markPrice);
+}
+```
+
+`fetchFundingRateHistory()` 查询公开历史 funding rate，不是账号实际收付的 funding income。`startTs` 和 `endTs` 都是 funding time 的 inclusive 边界；两者都不传时返回交易所默认最近记录。`limit` 可选，Binance 最大 1000。返回的 `FundingRateHistoryEntry.fundingTime` 是交易所历史结算/生效时间，`receivedAt` 是 SDK 本次 REST 响应到达本地的时间。USDⓈ-M 返回 `markPrice`，COIN-M 可能没有该字段。
+
+当前 Binance 支持 USDⓈ-M 和 COIN-M 永续合约。spot 或 dated future 会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`；远端请求或响应结构失败会包装为 `MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED`。
+
+### 5.6 Funding rate
 
 Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`，包括 Binance TradFi Perps）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 
-### 5.5 事件流 options
+### 5.7 事件流 options
 
 Market 事件流支持可选第二参：
 
@@ -668,6 +725,9 @@ interface VenueCapabilities {
   market: {
     catalog: "supported" | "unsupported";
     serverTime: "supported" | "unsupported";
+    publicTrades: "supported" | "unsupported";
+    publicRawTrades: "supported" | "unsupported";
+    fundingRateHistory: "supported" | "unsupported";
     l1Book: "supported" | "unsupported";
     fundingRate: "supported" | "unsupported" | "market_dependent";
     marketTypes: MarketType[];
@@ -723,6 +783,12 @@ interface CreateClientOptions {
     l1StaleAfterMs?: number;
     l1ReconnectDelayMs?: number;
     l1ReconnectMaxDelayMs?: number;
+    venues?: {
+      binance?: {
+        /** Used by fetchPublicRawTrades(); secret/signature not required. */
+        apiKey?: string;
+      };
+    };
   };
   account?: {
     streamOpenTimeoutMs?: number;
@@ -971,6 +1037,77 @@ interface VenueServerTime {
   responseReceivedAt: number;
   roundTripMs: number;
   estimatedOffsetMs: number;
+}
+
+interface PublicTrade {
+  venue: Venue;
+  symbol: string;
+  id: string;
+  price: string;
+  amount: string;
+  cost?: string;
+  side?: "buy" | "sell";
+  exchangeTs: number;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+interface FetchPublicTradesInput {
+  venue: Venue;
+  symbol: string;
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+}
+
+interface FetchPublicTradesResult {
+  trades: PublicTrade[];
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
+}
+
+interface FetchPublicRawTradesInput {
+  venue: Venue;
+  symbol: string;
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+}
+
+interface FetchPublicRawTradesResult {
+  trades: PublicTrade[];
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
+}
+
+interface FundingRateHistoryEntry {
+  venue: Venue;
+  symbol: string;
+  fundingRate: string;
+  fundingTime: number;
+  markPrice?: string;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+interface FetchFundingRateHistoryInput {
+  venue: Venue;
+  symbol: string;
+  startTs?: number;
+  endTs?: number;
+  limit?: number;
+}
+
+interface FetchFundingRateHistoryResult {
+  rates: FundingRateHistoryEntry[];
+  startTs?: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
 }
 
 interface L1Book {
@@ -1282,6 +1419,9 @@ try {
 | `VENUE_NOT_SUPPORTED` | venue runtime 未实现，或 read-only venue 被用于下单 |
 | `MARKET_CATALOG_LOAD_FAILED` | market catalog 拉取失败 |
 | `MARKET_SERVER_TIME_FETCH_FAILED` | server time 请求失败或响应结构不合法 |
+| `MARKET_INPUT_INVALID` | market REST 查询输入不合法，例如时间窗口或 limit 无效 |
+| `MARKET_PUBLIC_TRADES_FETCH_FAILED` | public trades / raw trades 请求失败、缺少 Binance market API key 或响应结构不合法 |
+| `MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED` | 历史 funding rate 请求失败或响应结构不合法 |
 | `MARKET_INACTIVE` | catalog 中 market 不活跃 |
 | `MARKET_FUNDING_RATE_UNSUPPORTED` | 指定 market 不支持 funding rate |
 | `MARKET_NOT_FOUND` | 指定 symbol 不存在 |

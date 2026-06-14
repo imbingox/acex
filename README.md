@@ -135,6 +135,9 @@ Juplend 使用 `@jup-ag/lend-read` 通过 Solana RPC 读取原生借贷仓位，
 ```ts
 const binance = client.getVenueCapabilities("binance");
 console.log(binance.order.supported); // true
+console.log(binance.market.publicTrades); // "supported"
+console.log(binance.market.publicRawTrades); // "supported"
+console.log(binance.market.fundingRateHistory); // "supported"
 console.log(binance.market.fundingRate); // "market_dependent"
 
 const juplend = client.getVenueCapabilities("juplend");
@@ -165,6 +168,7 @@ const capabilities = client.listVenueCapabilities();
 - 账户视图支持 Binance PAPI UM 与 Juplend 只读借贷账户
 - Juplend 只读，不支持订单和链上写操作；仓位数量来自 `@jup-ag/lend-read` 原生 position 数据
 - Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；支持 Binance TradFi Perps，不支持现货和交割合约
+- `fetchPublicTrades()` 返回 Binance `aggTrades` 聚合成交；`fetchPublicRawTrades()` 走 Binance `historicalTrades`，需要 `market.venues.binance.apiKey` 或 `BINANCE_MARKET_API_KEY`
 - `createOrder()` 只支持 `limit` / `market`；条件单、改单、账户级全撤不支持
 - 双向持仓账户下单时必须显式传 `positionSide`
 - `CreateClientOptions` 中 `sandbox` / `logger` / `logLevel` 是预留位
@@ -219,7 +223,7 @@ bun run test:live:order:soak
 
 覆盖内容：
 
-- `market`：`loadMarkets()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
+- `market`：`loadMarkets()`、`fetchFundingRateHistory()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
 - `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
 - `juplend`：`@jup-ag/lend-read` + Jup Tokens/Price API 连通性、lending balance facet、账户级 `riskRatio`、支持 `--wallet-address` 聚合或 `--vault-id + --position-id` 单仓直读
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 46
+- **Total Sessions**: 48
 - **Last Active**: 2026-06-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1642 | Active |
+| `journal-1.md` | ~1711 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,8 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 48 | 2026-06-14 | Public market history queries | `8fb896f`, `7005723`, `b90e3b2`, `10aa860` | `feat/new_public_methods` |
+| 47 | 2026-06-14 | 实现 public raw trades 查询 | `5711f3d` | `feat/new_public_methods` |
 | 46 | 2026-06-14 | Fee manager | `ead2fda`, `771317c` | `codex/symbol-fee-capability` |
 | 45 | 2026-06-13 | Symbol fee capability | `4f2f7db` | `codex/symbol-fee-capability` |
 | 44 | 2026-06-13 | P2-4 onMetric 可观测性钩子 + 延迟打点 | `9c231de` | `codex/p2-4-observability` |

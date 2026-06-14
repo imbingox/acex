@@ -1640,3 +1640,72 @@ Implemented client.fee manager for account-scoped symbol fee rates, migrated fee
 ### Next Steps
 
 - None - task complete
+
+
+## Session 47: 实现 public raw trades 查询
+
+**Date**: 2026-06-14
+**Task**: 实现 public raw trades 查询
+**Branch**: `feat/new_public_methods`
+
+### Summary
+
+新增 MarketManager fetchPublicRawTrades 公共 API，接入 Binance public raw trades 两段式查询，补 capability、限流、测试、文档和 changeset。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5711f3d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 48: Public market history queries
+
+**Date**: 2026-06-14
+**Task**: Public market history queries
+**Branch**: `feat/new_public_methods`
+
+### Summary
+
+新增 public aggregate trades、Binance raw historical trades 与 funding rate history 查询；补齐 docs、changesets、capability、key 预检和集成/单元覆盖；开 PR #89 并完成 Codex 子代理预审核。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8fb896f` | (see git log) |
+| `7005723` | (see git log) |
+| `b90e3b2` | (see git log) |
+| `10aa860` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

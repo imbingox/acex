@@ -9,6 +9,7 @@ const ONE_MINUTE_MS = 60_000;
 
 const SPOT_REQUEST_WEIGHT_LIMIT_1M = 6_000;
 const FAPI_REQUEST_WEIGHT_LIMIT_1M = 2_400;
+const FAPI_FUNDING_RATE_LIMIT_5M = 500;
 const DAPI_REQUEST_WEIGHT_LIMIT_1M = 6_000;
 const PAPI_REQUEST_WEIGHT_LIMIT_1M = 6_000;
 const PAPI_CANCEL_REQUEST_WEIGHT_RESERVE_1M = 300;
@@ -17,6 +18,7 @@ const PAPI_ORDERS_LIMIT_1M = 1_200;
 export const BINANCE_RATE_LIMIT_BUCKETS = {
   spotRequestWeight1m: "binance:spot:request-weight:1m",
   fapiRequestWeight1m: "binance:fapi:request-weight:1m",
+  fapiFundingRate5m: "binance:fapi:funding-rate:5m",
   dapiRequestWeight1m: "binance:dapi:request-weight:1m",
   papiRequestWeight1m: "binance:papi:request-weight:1m",
   papiOrders1m: "binance:papi:orders:1m",
@@ -24,8 +26,16 @@ export const BINANCE_RATE_LIMIT_BUCKETS = {
 
 export const BINANCE_RATE_LIMIT_PLANS = {
   spotExchangeInfo: "binance:spot:exchange-info",
+  spotAggTrades: "binance:spot:agg-trades",
+  spotHistoricalTrades: "binance:spot:historical-trades",
   fapiExchangeInfo: "binance:fapi:exchange-info",
+  fapiAggTrades: "binance:fapi:agg-trades",
+  fapiHistoricalTrades: "binance:fapi:historical-trades",
+  fapiFundingRateHistory: "binance:fapi:funding-rate-history",
   dapiExchangeInfo: "binance:dapi:exchange-info",
+  dapiAggTrades: "binance:dapi:agg-trades",
+  dapiHistoricalTrades: "binance:dapi:historical-trades",
+  dapiFundingRateHistory: "binance:dapi:funding-rate-history",
   fapiServerTime: "binance:fapi:server-time",
   papiBalance: "binance:papi:balance",
   papiAccount: "binance:papi:account",
@@ -55,6 +65,13 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       kind: "request_weight",
       limit: FAPI_REQUEST_WEIGHT_LIMIT_1M,
       intervalMs: ONE_MINUTE_MS,
+      scope: ["venue"],
+    },
+    {
+      id: BINANCE_RATE_LIMIT_BUCKETS.fapiFundingRate5m,
+      kind: "request_weight",
+      limit: FAPI_FUNDING_RATE_LIMIT_5M,
+      intervalMs: 5 * ONE_MINUTE_MS,
       scope: ["venue"],
     },
     {
@@ -90,12 +107,52 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       20,
     ),
     requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.spotAggTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.spotRequestWeight1m,
+      4,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.spotHistoricalTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.spotRequestWeight1m,
+      25,
+    ),
+    requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.fapiExchangeInfo,
       BINANCE_RATE_LIMIT_BUCKETS.fapiRequestWeight1m,
       1,
     ),
     requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.fapiAggTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.fapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.fapiHistoricalTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.fapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.fapiFundingRateHistory,
+      BINANCE_RATE_LIMIT_BUCKETS.fapiFundingRate5m,
+      1,
+    ),
+    requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.dapiExchangeInfo,
+      BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
+      1,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.dapiAggTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.dapiHistoricalTrades,
+      BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
+      20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.dapiFundingRateHistory,
       BINANCE_RATE_LIMIT_BUCKETS.dapiRequestWeight1m,
       1,
     ),
@@ -196,6 +253,32 @@ export function getBinanceCatalogRateLimitPlanId(
 
 export function getBinanceServerTimeRateLimitPlanId(): string {
   return BINANCE_RATE_LIMIT_PLANS.fapiServerTime;
+}
+
+export function getBinancePublicMarketRateLimitPlanId(
+  method: string,
+  path: string,
+): string | undefined {
+  switch (`${method} ${path}`) {
+    case "GET /api/v3/aggTrades":
+      return BINANCE_RATE_LIMIT_PLANS.spotAggTrades;
+    case "GET /api/v3/historicalTrades":
+      return BINANCE_RATE_LIMIT_PLANS.spotHistoricalTrades;
+    case "GET /fapi/v1/aggTrades":
+      return BINANCE_RATE_LIMIT_PLANS.fapiAggTrades;
+    case "GET /fapi/v1/historicalTrades":
+      return BINANCE_RATE_LIMIT_PLANS.fapiHistoricalTrades;
+    case "GET /fapi/v1/fundingRate":
+      return BINANCE_RATE_LIMIT_PLANS.fapiFundingRateHistory;
+    case "GET /dapi/v1/aggTrades":
+      return BINANCE_RATE_LIMIT_PLANS.dapiAggTrades;
+    case "GET /dapi/v1/historicalTrades":
+      return BINANCE_RATE_LIMIT_PLANS.dapiHistoricalTrades;
+    case "GET /dapi/v1/fundingRate":
+      return BINANCE_RATE_LIMIT_PLANS.dapiFundingRateHistory;
+    default:
+      return undefined;
+  }
 }
 
 export function getBinancePapiRateLimitPlanId(

@@ -1,5 +1,6 @@
 import type BigNumber from "bignumber.js";
 import type { AcexError } from "../errors.ts";
+import type { OrderSide } from "./order.ts";
 import type {
   EventStreamOptions,
   MarketFreshness,
@@ -53,6 +54,80 @@ export interface VenueServerTime {
   roundTripMs: number;
   /** NTP-style offset estimate: serverTime - midpoint(requestSentAt, responseReceivedAt). */
   estimatedOffsetMs: number;
+}
+
+export interface PublicTrade {
+  venue: Venue;
+  symbol: string;
+  id: string;
+  price: string;
+  amount: string;
+  cost?: string;
+  side?: OrderSide;
+  exchangeTs: number;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+export interface FetchPublicTradesInput extends MarketKeyInput {
+  /** Inclusive exchange aggregate-trade time lower bound, in epoch milliseconds. */
+  startTs: number;
+  /** Exclusive exchange aggregate-trade time upper bound, in epoch milliseconds. */
+  endTs?: number;
+  /** Maximum number of aggregate trades to return. */
+  limit?: number;
+}
+
+export interface FetchPublicTradesResult {
+  trades: PublicTrade[];
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
+}
+
+export interface FetchPublicRawTradesInput extends MarketKeyInput {
+  /** Inclusive exchange trade-time lower bound, in epoch milliseconds. */
+  startTs: number;
+  /** Exclusive exchange trade-time upper bound, in epoch milliseconds. */
+  endTs?: number;
+  /** Maximum number of raw trades to return. */
+  limit?: number;
+}
+
+export interface FetchPublicRawTradesResult {
+  trades: PublicTrade[];
+  startTs: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
+}
+
+export interface FundingRateHistoryEntry {
+  venue: Venue;
+  symbol: string;
+  fundingRate: string;
+  fundingTime: number;
+  markPrice?: string;
+  receivedAt: number;
+  raw: Record<string, unknown>;
+}
+
+export interface FetchFundingRateHistoryInput extends MarketKeyInput {
+  /** Inclusive exchange funding-time lower bound, in epoch milliseconds. */
+  startTs?: number;
+  /** Inclusive exchange funding-time upper bound, in epoch milliseconds. */
+  endTs?: number;
+  /** Maximum number of funding records to return. Binance supports up to 1000. */
+  limit?: number;
+}
+
+export interface FetchFundingRateHistoryResult {
+  rates: FundingRateHistoryEntry[];
+  startTs?: number;
+  endTs?: number;
+  limit?: number;
+  truncated: boolean;
 }
 
 export interface MarketDataStatus {
@@ -200,6 +275,15 @@ export interface MarketManager {
   loadMarkets(): Promise<void>;
   reloadMarkets(venue?: Venue): Promise<MarketCatalogReloadSummary[]>;
   fetchServerTime(venue: Venue): Promise<VenueServerTime>;
+  fetchPublicTrades(
+    input: FetchPublicTradesInput,
+  ): Promise<FetchPublicTradesResult>;
+  fetchPublicRawTrades(
+    input: FetchPublicRawTradesInput,
+  ): Promise<FetchPublicRawTradesResult>;
+  fetchFundingRateHistory(
+    input: FetchFundingRateHistoryInput,
+  ): Promise<FetchFundingRateHistoryResult>;
   subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
   subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;

@@ -51,6 +51,9 @@ class BenchMarketAdapter implements MarketAdapter {
   readonly marketCapabilities = {
     catalog: "supported",
     serverTime: "unsupported",
+    publicTrades: "unsupported",
+    publicRawTrades: "unsupported",
+    fundingRateHistory: "unsupported",
     l1Book: "supported",
     fundingRate: "unsupported",
     marketTypes: ["swap"],

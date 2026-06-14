@@ -280,6 +280,266 @@ test("fetchServerTime works before client start and returns latency fields", asy
   );
 });
 
+test("fetchPublicTrades returns Binance aggregate public trades filtered by exchange time", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  const result = await client.market.fetchPublicTrades({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+  });
+
+  expect(result).toMatchObject({
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+    truncated: false,
+  });
+  expect(result.trades).toHaveLength(1);
+  expect(result.trades[0]).toMatchObject({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    id: "9000",
+    price: new BigNumber("102000.10").toFixed(),
+    amount: new BigNumber("0.010").toFixed(),
+    side: "buy",
+    exchangeTs: 1710000000000,
+  });
+  expect(result.trades[0]?.raw).toMatchObject({
+    a: 9000,
+    f: 1000,
+    l: 1002,
+  });
+  expect(
+    result.trades.every((trade) => Number.isFinite(trade.receivedAt)),
+  ).toBe(true);
+});
+
+test("fetchPublicRawTrades returns Binance raw public trades with a market API key", async () => {
+  installBinanceMarketInfra();
+  const client = createClient({
+    market: {
+      venues: {
+        binance: {
+          apiKey: "market-key",
+        },
+      },
+    },
+  });
+
+  const result = await client.market.fetchPublicRawTrades({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+  });
+
+  expect(result).toMatchObject({
+    startTs: 1710000000000,
+    endTs: 1710000000200,
+    truncated: false,
+  });
+  expect(result.trades).toHaveLength(2);
+  expect(result.trades[0]).toMatchObject({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    id: "1000",
+    price: new BigNumber("102000.10").toFixed(),
+    amount: new BigNumber("0.010").toFixed(),
+    cost: new BigNumber("1020.001").toFixed(),
+    side: "buy",
+    exchangeTs: 1710000000000,
+  });
+  expect(result.trades[1]).toMatchObject({
+    id: "1001",
+    side: "sell",
+    exchangeTs: 1710000000100,
+  });
+  expect(
+    result.trades.every((trade) => Number.isFinite(trade.receivedAt)),
+  ).toBe(true);
+  expect(result.trades.map((trade) => trade.id)).not.toContain("1002");
+});
+
+test("fetchPublicRawTrades reads BINANCE_MARKET_API_KEY when no explicit key is configured", async () => {
+  const previousApiKey = process.env.BINANCE_MARKET_API_KEY;
+  process.env.BINANCE_MARKET_API_KEY = "market-key";
+
+  try {
+    installBinanceMarketInfra();
+    const client = createClient();
+
+    const result = await client.market.fetchPublicRawTrades({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      startTs: 1710000000000,
+      endTs: 1710000000100,
+    });
+
+    expect(result.trades.map((trade) => trade.id)).toEqual(["1000"]);
+    expect(result.truncated).toBe(false);
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.BINANCE_MARKET_API_KEY;
+    } else {
+      process.env.BINANCE_MARKET_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test("fetchPublicRawTrades rejects missing market API key before catalog requests", async () => {
+  const previousApiKey = process.env.BINANCE_MARKET_API_KEY;
+  delete process.env.BINANCE_MARKET_API_KEY;
+  const requestedUrls: string[] = [];
+
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: string | URL | Request) => {
+      requestedUrls.push(
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url,
+      );
+      return textResponse("unexpected request", {
+        status: 500,
+        statusText: "Internal Server Error",
+      });
+    },
+  });
+
+  try {
+    const client = createClient();
+    const failure = await client.market
+      .fetchPublicRawTrades({
+        venue: "binance",
+        symbol: "BTC/USDT:USDT",
+        startTs: 1710000000000,
+        limit: 1,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AcexError);
+    expect(failure).toMatchObject({
+      code: "MARKET_PUBLIC_TRADES_FETCH_FAILED",
+      details: {
+        venue: "binance",
+        symbol: "BTC/USDT:USDT",
+      },
+    });
+    expect(requestedUrls).toEqual([]);
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.BINANCE_MARKET_API_KEY;
+    } else {
+      process.env.BINANCE_MARKET_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test("fetchPublicRawTrades treats an explicit blank market API key as missing", async () => {
+  const previousApiKey = process.env.BINANCE_MARKET_API_KEY;
+  process.env.BINANCE_MARKET_API_KEY = "market-key";
+  const requestedUrls: string[] = [];
+
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: string | URL | Request) => {
+      requestedUrls.push(
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url,
+      );
+      return textResponse("unexpected request", {
+        status: 500,
+        statusText: "Internal Server Error",
+      });
+    },
+  });
+
+  try {
+    const client = createClient({
+      market: {
+        venues: {
+          binance: {
+            apiKey: "   ",
+          },
+        },
+      },
+    });
+    const failure = await client.market
+      .fetchPublicRawTrades({
+        venue: "binance",
+        symbol: "BTC/USDT:USDT",
+        startTs: 1710000000000,
+        limit: 1,
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AcexError);
+    expect(failure).toMatchObject({
+      code: "MARKET_PUBLIC_TRADES_FETCH_FAILED",
+      details: {
+        venue: "binance",
+        symbol: "BTC/USDT:USDT",
+      },
+    });
+    expect(requestedUrls).toEqual([]);
+  } finally {
+    if (previousApiKey === undefined) {
+      delete process.env.BINANCE_MARKET_API_KEY;
+    } else {
+      process.env.BINANCE_MARKET_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test("fetchFundingRateHistory returns Binance funding history through the client", async () => {
+  installBinanceMarketInfra();
+  const client = createClient();
+
+  const result = await client.market.fetchFundingRateHistory({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    startTs: 1710000000000,
+    endTs: 1710100000000,
+    limit: 2,
+  });
+
+  expect(result).toMatchObject({
+    startTs: 1710000000000,
+    endTs: 1710100000000,
+    limit: 2,
+    truncated: true,
+  });
+  expect(result.rates).toHaveLength(2);
+  expect(result.rates[0]).toMatchObject({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    fundingRate: new BigNumber("0.00010000").toFixed(),
+    fundingTime: 1710000000000,
+    markPrice: new BigNumber("102000.10").toFixed(),
+    raw: {
+      symbol: "BTCUSDT",
+      fundingRate: "0.00010000",
+      fundingTime: 1710000000000,
+      markPrice: "102000.10",
+    },
+  });
+  expect(result.rates[1]).toMatchObject({
+    fundingRate: new BigNumber("-0.00020000").toFixed(),
+    fundingTime: 1710028800000,
+    markPrice: new BigNumber("101500.00").toFixed(),
+  });
+  expect(result.rates.every((rate) => Number.isFinite(rate.receivedAt))).toBe(
+    true,
+  );
+});
+
 test("market subscribe is a ready barrier and emits standardized l1 book updates", async () => {
   installBinanceMarketInfra();
   const client = createClient({

@@ -1673,3 +1673,39 @@ Implemented client.fee manager for account-scoped symbol fee rates, migrated fee
 ### Next Steps
 
 - None - task complete
+
+
+## Session 48: Public market history queries
+
+**Date**: 2026-06-14
+**Task**: Public market history queries
+**Branch**: `feat/new_public_methods`
+
+### Summary
+
+新增 public aggregate trades、Binance raw historical trades 与 funding rate history 查询；补齐 docs、changesets、capability、key 预检和集成/单元覆盖；开 PR #89 并完成 Codex 子代理预审核。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8fb896f` | (see git log) |
+| `7005723` | (see git log) |
+| `b90e3b2` | (see git log) |
+| `10aa860` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

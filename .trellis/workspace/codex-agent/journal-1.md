@@ -1606,3 +1606,37 @@ P2-4：CreateClientOptions.onMetric(name,value,type,tags?) 同步钩子 + METRIC
 ### Next Steps
 
 - None - task complete
+
+
+## Session 46: Fee manager
+
+**Date**: 2026-06-14
+**Task**: Fee manager
+**Branch**: `codex/symbol-fee-capability`
+
+### Summary
+
+Implemented client.fee manager for account-scoped symbol fee rates, migrated fee lookup out of order manager, addressed PR review comments, and validated lint/type-check/tests.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ead2fda` | (see git log) |
+| `771317c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

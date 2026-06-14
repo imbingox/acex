@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 45
-- **Last Active**: 2026-06-13
+- **Total Sessions**: 46
+- **Last Active**: 2026-06-14
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1608 | Active |
+| `journal-1.md` | ~1642 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 46 | 2026-06-14 | Fee manager | `ead2fda`, `771317c` | `codex/symbol-fee-capability` |
 | 45 | 2026-06-13 | Symbol fee capability | `4f2f7db` | `codex/symbol-fee-capability` |
 | 44 | 2026-06-13 | P2-4 onMetric 可观测性钩子 + 延迟打点 | `9c231de` | `codex/p2-4-observability` |
 | 43 | 2026-06-13 | PR #83 review 修复：cid entropy Set 内存泄漏 | `b620eb8` | `codex/p2-batch1-engineering-cleanup` |

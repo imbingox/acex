@@ -204,9 +204,16 @@ interface BinanceRiskLevelChangeMessage {
   m?: string;
 }
 
+interface BinanceAccountConfigUpdatePayload {
+  s?: string;
+  l?: number | string;
+}
+
 interface BinanceAccountConfigUpdateMessage {
   e?: string;
   E?: number;
+  T?: number;
+  ac?: BinanceAccountConfigUpdatePayload;
 }
 
 type BinancePrivateMessage =
@@ -250,6 +257,11 @@ const BINANCE_RISK_LEVEL_CHANGE_MAP: Record<string, RiskAlertLevel> = {
   REDUCE_ONLY: "reduce_only",
   FORCE_LIQUIDATION: "force_liquidation",
 };
+const BINANCE_ACCOUNT_CONFIG_POSITION_SIDES: readonly PositionSide[] = [
+  "net",
+  "long",
+  "short",
+];
 const BINANCE_ACCOUNT_STATUS_RISK_LEVEL_MAP: Record<string, RiskLevel> = {
   NORMAL: "normal",
   MARGIN_CALL: "margin_call",
@@ -289,8 +301,12 @@ function firstString(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => value !== undefined && value !== "");
 }
 
-function canonicalString(value: string | undefined): string | undefined {
-  return value === undefined || value === "" ? undefined : toCanonical(value);
+function canonicalString(
+  value: number | string | undefined,
+): string | undefined {
+  return value === undefined || value === ""
+    ? undefined
+    : toCanonical(`${value}`);
 }
 
 function getNumberOption(
@@ -728,6 +744,36 @@ function mapRiskLevelChange(
   };
 }
 
+function mapAccountConfigUpdate(
+  catalog: BinanceMarketCatalog,
+  message: BinanceAccountConfigUpdateMessage,
+  receivedAt: number,
+): RawAccountUpdate | undefined {
+  const venueId = message.ac?.s;
+  const leverage = canonicalString(message.ac?.l);
+  if (!venueId || leverage === undefined) {
+    return undefined;
+  }
+
+  const symbol = catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, venueId);
+  if (!symbol) {
+    return undefined;
+  }
+
+  const exchangeTs = message.T ?? message.E;
+  return {
+    positions: BINANCE_ACCOUNT_CONFIG_POSITION_SIDES.map((side) => ({
+      symbol,
+      side,
+      leverage,
+      exchangeTs,
+      receivedAt,
+    })),
+    exchangeTs,
+    receivedAt,
+  };
+}
+
 function mapOrderUpdate(
   catalog: BinanceMarketCatalog,
   message: BinanceOrderTradeUpdateMessage,
@@ -861,6 +907,18 @@ function firstMissingAccountUpdateVenueId(
     ) {
       return position.s;
     }
+  }
+
+  return undefined;
+}
+
+function missingAccountConfigUpdateVenueId(
+  catalog: BinanceMarketCatalog,
+  message: BinanceAccountConfigUpdateMessage,
+): string | undefined {
+  const venueId = message.ac?.s;
+  if (venueId && !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, venueId)) {
+    return venueId;
   }
 
   return undefined;
@@ -1350,6 +1408,27 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       }
 
       if (isAccountConfigUpdateMessage(message)) {
+        const missingVenueId = missingAccountConfigUpdateVenueId(
+          this.marketCatalog,
+          message,
+        );
+        if (missingVenueId) {
+          if (replaying) {
+            this.reportSymbolMappingMisses([missingVenueId]);
+            return true;
+          }
+          quarantineSymbolMappingMiss(message, receivedAt, [missingVenueId]);
+          return false;
+        }
+
+        const accountUpdate = mapAccountConfigUpdate(
+          this.marketCatalog,
+          message,
+          receivedAt,
+        );
+        if (accountUpdate) {
+          callbacks.onAccountUpdate(accountUpdate);
+        }
         return false;
       }
 

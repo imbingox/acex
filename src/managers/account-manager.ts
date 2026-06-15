@@ -421,8 +421,12 @@ export class AccountManagerImpl
 
     for (const position of update.positions ?? []) {
       const key = positionKey(position.symbol, position.side);
+      const previousPosition = positions.get(key);
+      if (position.size === undefined && !previousPosition) {
+        continue;
+      }
       if (
-        !shouldApplyWatermarkedUpdate(positions.get(key), position, {
+        !shouldApplyWatermarkedUpdate(previousPosition, position, {
           requestStartedAt: options.requestStartedAt,
           source: options.requestStartedAt === undefined ? "stream" : "rest",
         })
@@ -434,7 +438,7 @@ export class AccountManagerImpl
         accountId,
         venue,
         position,
-        positions.get(key),
+        previousPosition,
       );
 
       if (isZeroDecimal(nextPosition.size)) {
@@ -882,7 +886,10 @@ export class AccountManagerImpl
       venue,
       symbol: input.symbol,
       side: input.side,
-      size: toCanonical(input.size),
+      size:
+        input.size === undefined
+          ? (previous?.size ?? "0")
+          : toCanonical(input.size),
       entryPrice:
         input.entryPrice === undefined
           ? previous?.entryPrice

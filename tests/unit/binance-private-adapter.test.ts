@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { BinanceMarketCatalog } from "../../src/adapters/binance/market-catalog.ts";
 import { BinancePrivateAdapter } from "../../src/adapters/binance/private-adapter.ts";
 import {
+  type RawAccountUpdate,
   type RawRiskLevelChange,
   SymbolMappingError,
 } from "../../src/adapters/types.ts";
@@ -398,6 +399,190 @@ test("BinancePrivateAdapter maps PAPI riskLevelChange risk levels", async () => 
   socket.emitJson({ e: "ACCOUNT_CONFIG_UPDATE", E: 1710000000005 });
   await Bun.sleep(0);
   expect(events).toHaveLength(4);
+  handle.close();
+});
+
+test("BinancePrivateAdapter maps ACCOUNT_CONFIG_UPDATE leverage updates", async () => {
+  FakeWebSocket.reset();
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/listenKey"
+      ) {
+        return jsonResponse({ listenKey: "test-listen-key" });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+  const updates: RawAccountUpdate[] = [];
+
+  const handle = adapter.createPrivateStream(
+    { apiKey: "key", secret: "secret" },
+    {
+      onAccountSnapshot(): void {},
+      onAccountUpdate(update): void {
+        updates.push(update);
+      },
+      onRiskLevelChange(): void {},
+      onOrderUpdate(): void {},
+      onFreshnessChange(): void {},
+      onDisconnected(): void {},
+      onReconnected(): void {},
+      onError(error): void {
+        throw error;
+      },
+    },
+    streamOptions,
+  );
+
+  const socket = await waitForSocket(PAPI_WS_URL);
+  await handle.ready;
+  socket.emitJson({
+    e: "ACCOUNT_CONFIG_UPDATE",
+    E: 1710000000005,
+    T: 1710000000004,
+    fs: "UM",
+    ac: {
+      s: "BTCUSDT",
+      l: 25,
+    },
+  });
+
+  await waitForCondition(() => updates.length === 1);
+  expect(updates[0]).toMatchObject({
+    exchangeTs: 1710000000004,
+    positions: [
+      {
+        symbol: "BTC/USDT:USDT",
+        side: "net",
+        leverage: "25",
+        exchangeTs: 1710000000004,
+      },
+      {
+        symbol: "BTC/USDT:USDT",
+        side: "long",
+        leverage: "25",
+        exchangeTs: 1710000000004,
+      },
+      {
+        symbol: "BTC/USDT:USDT",
+        side: "short",
+        leverage: "25",
+        exchangeTs: 1710000000004,
+      },
+    ],
+  });
+  expect(updates[0]?.positions?.map((position) => position.size)).toEqual([
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  handle.close();
+});
+
+test("BinancePrivateAdapter replays quarantined ACCOUNT_CONFIG_UPDATE after catalog refresh", async () => {
+  FakeWebSocket.reset();
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+
+  let catalogRequests = 0;
+  let reconcileRequests = 0;
+  const fetchFn = async (input: string | URL | Request): Promise<Response> => {
+    const url = new URL(input.toString());
+    if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+      catalogRequests += 1;
+      return jsonResponse(
+        catalogRequests === 1
+          ? usdmExchangeInfo()
+          : usdmExchangeInfo([newUsdtSymbol()]),
+      );
+    }
+    if (
+      url.origin === PAPI_REST_BASE_URL &&
+      `${url.pathname}` === "/papi/v1/listenKey"
+    ) {
+      return jsonResponse({ listenKey: "test-listen-key" });
+    }
+
+    throw new Error(`Unexpected URL: ${url.toString()}`);
+  };
+  const catalog = new BinanceMarketCatalog({ fetchFn });
+  const adapter = new BinancePrivateAdapter({
+    fetchFn,
+    marketCatalog: catalog,
+  });
+  const updates: RawAccountUpdate[] = [];
+
+  const handle = adapter.createPrivateStream(
+    { apiKey: "key", secret: "secret" },
+    {
+      onAccountSnapshot(): void {},
+      onAccountUpdate(update): void {
+        updates.push(update);
+      },
+      onRiskLevelChange(): void {},
+      onOrderUpdate(): void {},
+      onFreshnessChange(): void {},
+      onDisconnected(): void {},
+      onReconnected(): void {},
+      requestReconcile(): void {
+        reconcileRequests += 1;
+      },
+      onError(error): void {
+        throw error;
+      },
+    },
+    streamOptions,
+  );
+
+  const socket = await waitForSocket(PAPI_WS_URL);
+  await handle.ready;
+  socket.emitJson({
+    e: "ACCOUNT_CONFIG_UPDATE",
+    E: 1710000000005,
+    ac: {
+      s: "NEWUSDT",
+      l: "10.0000",
+    },
+  });
+  expect(updates).toHaveLength(0);
+
+  await waitForCondition(() => updates.length === 1);
+  expect(reconcileRequests).toBe(0);
+  expect(catalogRequests).toBe(2);
+  expect(updates[0]).toMatchObject({
+    exchangeTs: 1710000000005,
+    positions: [
+      {
+        symbol: "NEW/USDT:USDT",
+        side: "net",
+        leverage: "10",
+      },
+      {
+        symbol: "NEW/USDT:USDT",
+        side: "long",
+        leverage: "10",
+      },
+      {
+        symbol: "NEW/USDT:USDT",
+        side: "short",
+        leverage: "10",
+      },
+    ],
+  });
   handle.close();
 });
 

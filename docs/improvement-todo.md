@@ -215,7 +215,7 @@
 - [ ] **P2-4 可观测性**：logger/logLevel 预留位未实现；无下单 RTT/WS 消息延迟打点、无指标钩子。建议先做最小事件钩子（`onMetric(name, value, tags)`）。
 - [ ] **P2-5 查询面**：closed orders 内部存了 500/symbol（order-manager.ts:75）却无 `getClosedOrders()`；无成交历史/资金费历史 API。
 - [ ] **P2-6 交易操作面**：改单（amend）、条件单、杠杆/持仓模式设置、资金划转均缺失（与 capabilities 声明一致，属 roadmap 性缺口）。
-- [x] **P2-7 账户风控事件**：经核实 PAPI（`wss://fstream.binance.com/pm/ws`）的风控事件是 `riskLevelChange`（账户级聚合、三态 `margin_call`/`reduce_only`/`force_liquidation`），**不是** USDM/CM 独立合约流的 `MARGIN_CALL`。已透传为公开 `account.risk_level_change` 事件 + 回填 `RiskSnapshot.riskLevel`（REST `accountStatus` + WS 双源，走 watermark），`u/eq/ae/m` 实时刷新 riskRatio/netEquity/riskEquity/maintenanceMargin；`ACCOUNT_CONFIG_UPDATE` 仅放 parser 白名单计 watchdog 活性、不转发（等 P2-6 一起设计）。→ .trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12
+- [x] **P2-7 账户风控事件**：经核实 PAPI（`wss://fstream.binance.com/pm/ws`）的风控事件是 `riskLevelChange`（账户级聚合、三态 `margin_call`/`reduce_only`/`force_liquidation`），**不是** USDM/CM 独立合约流的 `MARGIN_CALL`。已透传为公开 `account.risk_level_change` 事件 + 回填 `RiskSnapshot.riskLevel`（REST `accountStatus` + WS 双源，走 watermark），`u/eq/ae/m` 实时刷新 riskRatio/netEquity/riskEquity/maintenanceMargin；`ACCOUNT_CONFIG_UPDATE` 已用于根据 `ac.s/ac.l` 实时更新已有仓位的 leverage。→ .trellis/tasks/06-13-p2-batch1-engineering-cleanup-packaging-p2-7-8-9-10-12、.trellis/tasks/06-15-binance-account-config-leverage
 - [x] ~~**P2-8 分发产物**~~（**本批裁掉，不做**）：包目前自用、Bun-only，无 Node 兼容需求（2026-06-13 决策）；将来要分发给非 Bun 用户时再立项。
 
 ### 工程小项

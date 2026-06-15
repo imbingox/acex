@@ -159,6 +159,7 @@ test("caller can observe l1 book keep changing for one minute", async () => {
   } finally {
     feed.stop();
     await feed.done;
+    l1Lease.close();
     await iterator.return?.();
   }
 }, 75_000);

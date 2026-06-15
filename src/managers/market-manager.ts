@@ -1426,6 +1426,24 @@ export class MarketManagerImpl
     error: unknown,
   ): void {
     stream.close();
+    this.clearMarketStream(record, channel);
+    this.handleMarketStreamInitialFailure(record, market, channel, error);
+  }
+
+  private handleMarketStreamStartFailure(
+    record: MarketRecord,
+    market: MarketDefinition,
+    channel: MarketStreamChannel,
+    error: unknown,
+  ): void {
+    this.clearMarketStream(record, channel);
+    this.handleMarketStreamInitialFailure(record, market, channel, error);
+  }
+
+  private clearMarketStream(
+    record: MarketRecord,
+    channel: MarketStreamChannel,
+  ): void {
     if (channel === "l1Book") {
       record.l1BookStream = undefined;
       record.l1BookStreamReady = false;
@@ -1433,7 +1451,14 @@ export class MarketManagerImpl
       record.fundingRateStream = undefined;
       record.fundingRateStreamReady = false;
     }
+  }
 
+  private handleMarketStreamInitialFailure(
+    record: MarketRecord,
+    market: MarketDefinition,
+    channel: MarketStreamChannel,
+    error: unknown,
+  ): void {
     const timeoutError = this.createMarketStreamTimeoutError(market, error);
     this.context.publishRuntimeError("runtime", timeoutError, {
       venue: market.venue,
@@ -1940,7 +1965,16 @@ export class MarketManagerImpl
           record.l1Freshness = record.l1Book ? "stale" : undefined;
           record.l1Reason = undefined;
           this.recomputeAndPublishStatus(record);
-          this.startL1BookStreamIfNeeded(record, market);
+          try {
+            this.startL1BookStreamIfNeeded(record, market);
+          } catch (error) {
+            this.handleMarketStreamStartFailure(
+              record,
+              market,
+              "l1Book",
+              error,
+            );
+          }
         });
       }
 
@@ -1955,7 +1989,16 @@ export class MarketManagerImpl
             : undefined;
           record.fundingRateReason = undefined;
           this.recomputeAndPublishStatus(record);
-          this.startFundingRateStreamIfNeeded(record, market);
+          try {
+            this.startFundingRateStreamIfNeeded(record, market);
+          } catch (error) {
+            this.handleMarketStreamStartFailure(
+              record,
+              market,
+              "fundingRate",
+              error,
+            );
+          }
         });
       }
     }

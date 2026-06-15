@@ -60,21 +60,25 @@ const l1Lease = await client.market.acquireL1BookSubscription({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
-await l1Lease.ready;
+try {
+  await l1Lease.ready;
 
-const book = client.market.getL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
+  const book = client.market.getL1Book({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
 
-console.log(book?.bidPrice, book?.askPrice, book?.status.freshness);
+  console.log(book?.bidPrice, book?.askPrice, book?.status.freshness);
 
-for await (const event of client.market.events.l1BookUpdates({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-})) {
-  console.log(event.snapshot.bidPrice);
-  break;
+  for await (const event of client.market.events.l1BookUpdates({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  })) {
+    console.log(event.snapshot.bidPrice);
+    break;
+  }
+} finally {
+  l1Lease.close();
 }
 ```
 

@@ -191,57 +191,65 @@ async function main(): Promise<void> {
     new Map<Venue, MarketAdapter>([["binance", adapter]]),
   );
 
-  await manager.acquireL1BookSubscription({ venue: "binance", symbol: SYMBOL });
+  const lease = await manager.acquireL1BookSubscription({
+    venue: "binance",
+    symbol: SYMBOL,
+  });
   const callbacks = adapter.l1Callbacks;
   if (!callbacks) {
+    lease.close();
     throw new Error("L1 callbacks were not registered");
   }
 
-  maybeGc();
-  const heapBefore = process.memoryUsage().heapUsed;
-  const startedAt = performance.now();
+  try {
+    maybeGc();
+    const heapBefore = process.memoryUsage().heapUsed;
+    const startedAt = performance.now();
 
-  for (let index = 0; index < TICKS; index += 1) {
-    nowRef.value = index + 1;
-    callbacks.onUpdate({
-      bidPrice: decimal(60_000, index),
-      bidSize: `0.${(index % 9) + 1}`,
-      askPrice: decimal(60_001, index),
-      askSize: `0.${((index + 3) % 9) + 1}`,
-      exchangeTs: nowRef.value,
-      receivedAt: nowRef.value,
-    });
+    for (let index = 0; index < TICKS; index += 1) {
+      nowRef.value = index + 1;
+      callbacks.onUpdate({
+        bidPrice: decimal(60_000, index),
+        bidSize: `0.${(index % 9) + 1}`,
+        askPrice: decimal(60_001, index),
+        askSize: `0.${((index + 3) % 9) + 1}`,
+        exchangeTs: nowRef.value,
+        receivedAt: nowRef.value,
+      });
 
-    const snapshot = manager.getL1Book({ venue: "binance", symbol: SYMBOL });
-    if (!snapshot || snapshot.version !== index + 1) {
-      throw new Error(`unexpected snapshot version at tick ${index}`);
+      const snapshot = manager.getL1Book({ venue: "binance", symbol: SYMBOL });
+      if (!snapshot || snapshot.version !== index + 1) {
+        throw new Error(`unexpected snapshot version at tick ${index}`);
+      }
     }
+
+    const durationMs = performance.now() - startedAt;
+    const heapAfter = process.memoryUsage().heapUsed;
+    maybeGc();
+    const heapAfterGc = process.memoryUsage().heapUsed;
+    const heapDeltaBytes = heapAfter - heapBefore;
+    const retainedHeapDeltaBytes = heapAfterGc - heapBefore;
+
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          ticks: TICKS,
+          durationMs: Number(durationMs.toFixed(2)),
+          opsPerSec: Math.round((TICKS / durationMs) * 1_000),
+          heapDeltaBytes,
+          bytesPerTick: Number((heapDeltaBytes / TICKS).toFixed(2)),
+          retainedHeapDeltaBytes,
+          retainedBytesPerTick: Number(
+            (retainedHeapDeltaBytes / TICKS).toFixed(2),
+          ),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } finally {
+    lease.close();
   }
-
-  const durationMs = performance.now() - startedAt;
-  const heapAfter = process.memoryUsage().heapUsed;
-  maybeGc();
-  const heapAfterGc = process.memoryUsage().heapUsed;
-  const heapDeltaBytes = heapAfter - heapBefore;
-  const retainedHeapDeltaBytes = heapAfterGc - heapBefore;
-
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        ticks: TICKS,
-        durationMs: Number(durationMs.toFixed(2)),
-        opsPerSec: Math.round((TICKS / durationMs) * 1_000),
-        heapDeltaBytes,
-        bytesPerTick: Number((heapDeltaBytes / TICKS).toFixed(2)),
-        retainedHeapDeltaBytes,
-        retainedBytesPerTick: Number(
-          (retainedHeapDeltaBytes / TICKS).toFixed(2),
-        ),
-      },
-      null,
-      2,
-    )}\n`,
-  );
 }
 
 await main();

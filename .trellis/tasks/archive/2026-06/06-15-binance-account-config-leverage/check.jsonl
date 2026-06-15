@@ -1,0 +1,6 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend layer index and applicable guideline routing"}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "Validate private stream contract change"}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Validate type boundary and decimal string behavior"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow review"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality gate commands"}

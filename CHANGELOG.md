@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 1.0.0-beta.28
+
+### Patch Changes
+
+- fe77a3d: 处理 Binance PAPI 私有 WS `ACCOUNT_CONFIG_UPDATE` 事件，使用 `ac.s/ac.l` 实时更新已有仓位的 leverage。
+
 ## 1.0.0-beta.27
 
 ### Major Changes

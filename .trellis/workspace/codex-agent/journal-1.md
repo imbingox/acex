@@ -1709,3 +1709,39 @@ Implemented client.fee manager for account-scoped symbol fee rates, migrated fee
 ### Next Steps
 
 - None - task complete
+
+
+## Session 49: Market subscription lease API
+
+**Date**: 2026-06-15
+**Task**: Market subscription lease API
+**Branch**: `main`
+
+### Summary
+
+实现 market L1/funding per-consumer subscription lease API，删除旧 public market subscribe/unsubscribe，补齐 stop/start 恢复、ready failure 清理、文档和测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f05af49` | (see git log) |
+| `95ff8bd` | (see git log) |
+| `b348f04` | (see git log) |
+| `ce7b505` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

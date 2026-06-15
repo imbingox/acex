@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 48
-- **Last Active**: 2026-06-14
+- **Total Sessions**: 49
+- **Last Active**: 2026-06-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1711 | Active |
+| `journal-1.md` | ~1747 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 49 | 2026-06-15 | Market subscription lease API | `f05af49`, `95ff8bd`, `b348f04`, `ce7b505` | `main` |
 | 48 | 2026-06-14 | Public market history queries | `8fb896f`, `7005723`, `b90e3b2`, `10aa860` | `feat/new_public_methods` |
 | 47 | 2026-06-14 | 实现 public raw trades 查询 | `5711f3d` | `feat/new_public_methods` |
 | 46 | 2026-06-14 | Fee manager | `ead2fda`, `771317c` | `codex/symbol-fee-capability` |

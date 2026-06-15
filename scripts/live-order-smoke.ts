@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import {
   BigNumber,
   createClient,
+  type MarketSubscriptionLease,
   type OrderEvent,
   type OrderSnapshot,
   type OrderTradeEvent,
@@ -480,13 +481,13 @@ async function runCancelAllSmoke(options: {
     venue: "binance" as const,
     symbol: options.symbol,
   };
-  let l1Subscribed = false;
+  let l1Lease: MarketSubscriptionLease | undefined;
   let cleanupNeeded = false;
   const placedOrders: OrderSnapshot[] = [];
 
   try {
-    await options.client.market.subscribeL1Book(key);
-    l1Subscribed = true;
+    l1Lease = await options.client.market.acquireL1BookSubscription(key);
+    await l1Lease.ready;
 
     const market = options.client.market.getMarket("binance", options.symbol);
     const book = options.client.market.getL1Book(key);
@@ -587,9 +588,7 @@ async function runCancelAllSmoke(options: {
       }
     }
 
-    if (l1Subscribed) {
-      await options.client.market.unsubscribeL1Book(key);
-    }
+    l1Lease?.close();
   }
 }
 

@@ -281,10 +281,11 @@ test("L1 updates emit websocket message latency only when metrics are enabled", 
     new Map([["binance", adapter]]),
   );
 
-  const subscribePromise = manager.subscribeL1Book({
+  const l1Lease = await manager.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
   const stream = await waitForValue(
     () => adapter.l1BookStreams[0],
     "l1 stream",
@@ -319,10 +320,11 @@ test("L1 updates emit websocket message latency only when metrics are enabled", 
     disabledContext,
     new Map([["binance", disabledAdapter]]),
   );
-  const disabledSubscribe = disabledManager.subscribeL1Book({
+  const disabledLease = await disabledManager.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const disabledSubscribe = disabledLease.ready;
   const disabledStream = await waitForValue(
     () => disabledAdapter.l1BookStreams[0],
     "disabled l1 stream",

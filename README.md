@@ -15,47 +15,56 @@ bun add @imbingox/acex
 ### 行情（无需凭证）
 
 ```ts
-import { createClient } from "@imbingox/acex";
+import { createClient, type MarketSubscriptionLease } from "@imbingox/acex";
 
 const client = createClient();
-await client.start();
+let l1Lease: MarketSubscriptionLease | undefined;
+let fundingLease: MarketSubscriptionLease | undefined;
 
-await client.market.subscribeL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
+try {
+  await client.start();
 
-const book = client.market.getL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-const books = client.market.getL1Books("BTC/USDT:USDT");
-console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
-console.log(`venues=${books.length}`);
-console.log(`book freshness=${book?.status.freshness}`);
+  l1Lease = await client.market.acquireL1BookSubscription({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  await l1Lease.ready;
 
-await client.market.subscribeFundingRate({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
+  const book = client.market.getL1Book({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const books = client.market.getL1Books("BTC/USDT:USDT");
+  console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
+  console.log(`venues=${books.length}`);
+  console.log(`book freshness=${book?.status.freshness}`);
 
-const funding = client.market.getFundingRate({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
-console.log(`funding=${funding?.fundingRate}`);
-console.log(`funding venues=${fundingRates.length}`);
+  fundingLease = await client.market.acquireFundingRateSubscription({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  await fundingLease.ready;
 
-for await (const event of client.market.events.l1BookUpdates({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-})) {
-  console.log(event.snapshot.bidPrice);
-  break;
+  const funding = client.market.getFundingRate({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
+  console.log(`funding=${funding?.fundingRate}`);
+  console.log(`funding venues=${fundingRates.length}`);
+
+  for await (const event of client.market.events.l1BookUpdates({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  })) {
+    console.log(event.snapshot.bidPrice);
+    break;
+  }
+} finally {
+  l1Lease?.close();
+  fundingLease?.close();
+  await client.stop();
 }
-
-await client.stop();
 ```
 
 ### 同一个 client 同时使用 Binance + Juplend
@@ -223,7 +232,7 @@ bun run test:live:order:soak
 
 覆盖内容：
 
-- `market`：`loadMarkets()`、`fetchFundingRateHistory()`、`subscribeL1Book()`、`subscribeFundingRate()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
+- `market`：`loadMarkets()`、`fetchFundingRateHistory()`、`acquireL1BookSubscription()`、`acquireFundingRateSubscription()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
 - `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
 - `juplend`：`@jup-ag/lend-read` + Jup Tokens/Price API 连通性、lending balance facet、账户级 `riskRatio`、支持 `--wallet-address` 聚合或 `--vault-id + --position-id` 单仓直读
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连

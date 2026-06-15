@@ -184,9 +184,14 @@ export interface NormalizedOrderInput {
   minNotional?: string;
 }
 
-export interface SubscribeL1BookInput extends MarketKeyInput {}
+export interface AcquireL1BookSubscriptionInput extends MarketKeyInput {}
 
-export interface SubscribeFundingRateInput extends MarketKeyInput {}
+export interface AcquireFundingRateSubscriptionInput extends MarketKeyInput {}
+
+export interface MarketSubscriptionLease {
+  readonly ready: Promise<void>;
+  close(): void;
+}
 
 export interface MarketEventFilter {
   venue?: Venue;
@@ -284,10 +289,12 @@ export interface MarketManager {
   fetchFundingRateHistory(
     input: FetchFundingRateHistoryInput,
   ): Promise<FetchFundingRateHistoryResult>;
-  subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
-  unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
-  subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
-  unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
+  acquireL1BookSubscription(
+    input: AcquireL1BookSubscriptionInput,
+  ): Promise<MarketSubscriptionLease>;
+  acquireFundingRateSubscription(
+    input: AcquireFundingRateSubscriptionInput,
+  ): Promise<MarketSubscriptionLease>;
 
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];

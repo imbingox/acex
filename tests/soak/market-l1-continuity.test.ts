@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createClient } from "../../index.ts";
+import { createClient, type MarketSubscriptionLease } from "../../index.ts";
 import {
   BINANCE_USDM_WS_BASE_URL,
   installBinanceMarketInfra,
@@ -95,21 +95,26 @@ test("caller can observe l1 book keep changing for one minute", async () => {
       symbol: "BTC/USDT:USDT",
     })
     [Symbol.asyncIterator]();
-
-  await client.start();
-  const subscribePromise = client.market.subscribeL1Book({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
-  const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0, 1_000);
-  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
-  const feed = startContinuousBookTickerFeed(socket, {
-    durationMs: 60_000,
-    intervalMs: 1_000,
-    startPrice: 102000,
-  });
+  let l1Lease: MarketSubscriptionLease | undefined;
+  let feed: ContinuousBookTickerFeed | undefined;
 
   try {
+    await client.start();
+    l1Lease = await client.market.acquireL1BookSubscription({
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    });
+    const subscribePromise = l1Lease.ready;
+    const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0, 1_000);
+    await waitForBinanceControlFrame(socket, "SUBSCRIBE", [
+      "btcusdt@bookTicker",
+    ]);
+    feed = startContinuousBookTickerFeed(socket, {
+      durationMs: 60_000,
+      intervalMs: 1_000,
+      startPrice: 102000,
+    });
+
     await subscribePromise;
 
     let eventCount = 0;
@@ -156,8 +161,9 @@ test("caller can observe l1 book keep changing for one minute", async () => {
       freshness: "fresh",
     });
   } finally {
-    feed.stop();
-    await feed.done;
+    feed?.stop();
+    await feed?.done;
+    l1Lease?.close();
     await iterator.return?.();
   }
 }, 75_000);

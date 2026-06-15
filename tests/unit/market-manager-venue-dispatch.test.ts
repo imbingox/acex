@@ -45,6 +45,7 @@ import {
   FakeOkxMarketAdapter,
 } from "../support/exchanges/okx.ts";
 import {
+  expectPending,
   FakeWebSocket,
   textResponse,
   waitForSocket,
@@ -201,6 +202,37 @@ class CountingMarketAdapter implements MarketAdapter {
   }
 }
 
+class ThrowingCreateMarketAdapter extends FakeOkxMarketAdapter {
+  failNextL1BookStream = false;
+  failNextFundingRateStream = false;
+
+  override createL1BookStream(
+    market: MarketDefinition,
+    callbacks: L1BookStreamCallbacks,
+    options: L1BookStreamOptions,
+  ): StreamHandle {
+    if (this.failNextL1BookStream) {
+      this.failNextL1BookStream = false;
+      throw new Error("sync l1 create failed");
+    }
+
+    return super.createL1BookStream(market, callbacks, options);
+  }
+
+  override createFundingRateStream(
+    market: MarketDefinition,
+    callbacks: FundingRateStreamCallbacks,
+    options: FundingRateStreamOptions,
+  ): StreamHandle {
+    if (this.failNextFundingRateStream) {
+      this.failNextFundingRateStream = false;
+      throw new Error("sync funding create failed");
+    }
+
+    return super.createFundingRateStream(market, callbacks, options);
+  }
+}
+
 async function waitForValue<T>(
   read: () => T | undefined,
   timeoutMs = 100,
@@ -339,7 +371,7 @@ test("MarketManager reloadMarkets leaves existing L1 and funding subscriptions r
     { initialL1TimeoutMs: 200 },
   );
 
-  const l1Subscribe = manager.subscribeL1Book({
+  const l1Lease = await manager.acquireL1BookSubscription({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
   });
@@ -351,9 +383,9 @@ test("MarketManager reloadMarkets leaves existing L1 and funding subscriptions r
     askSize: "3",
     receivedAt: 1710000000100,
   });
-  await l1Subscribe;
+  await l1Lease.ready;
 
-  const fundingSubscribe = manager.subscribeFundingRate({
+  const fundingLease = await manager.acquireFundingRateSubscription({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
   });
@@ -364,7 +396,7 @@ test("MarketManager reloadMarkets leaves existing L1 and funding subscriptions r
     fundingRate: "0.0001",
     receivedAt: 1710000000200,
   });
-  await fundingSubscribe;
+  await fundingLease.ready;
 
   markets.push(createFakeSpotMarket("okx", "ETH/USDT", "ETH-USDT", "ETH"));
   await manager.reloadMarkets("okx");
@@ -402,7 +434,7 @@ test("MarketManager resumes market streams concurrently and isolates failures", 
     { initialL1TimeoutMs: 200 },
   );
 
-  const l1Subscribe = manager.subscribeL1Book({
+  const l1Lease = await manager.acquireL1BookSubscription({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
   });
@@ -414,9 +446,9 @@ test("MarketManager resumes market streams concurrently and isolates failures", 
     askSize: "3",
     receivedAt: 1710000000100,
   });
-  await l1Subscribe;
+  await l1Lease.ready;
 
-  const fundingSubscribe = manager.subscribeFundingRate({
+  const fundingLease = await manager.acquireFundingRateSubscription({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
   });
@@ -427,7 +459,7 @@ test("MarketManager resumes market streams concurrently and isolates failures", 
     fundingRate: "0.0001",
     receivedAt: 1710000000200,
   });
-  await fundingSubscribe;
+  await fundingLease.ready;
 
   manager.onClientStopping(1710000000300);
   manager.onClientStarted();
@@ -472,12 +504,11 @@ test("MarketManager closes failed initial market streams before dropping them", 
     new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
   );
 
-  const l1Subscribe = manager
-    .subscribeL1Book({
-      venue: "okx",
-      symbol: "BTC/USDT:USDT",
-    })
-    .catch((error) => error);
+  const l1Lease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const l1Subscribe = l1Lease.ready.catch((error) => error);
   const l1Stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
   const l1Cause = new Error("l1 ready failed");
   l1Stream.rejectReady(l1Cause);
@@ -494,12 +525,11 @@ test("MarketManager closes failed initial market streams before dropping them", 
   expect(l1Failure.cause).toBe(l1Cause);
   expect(l1Stream.closeCalls).toBe(1);
 
-  const fundingSubscribe = manager
-    .subscribeFundingRate({
-      venue: "okx",
-      symbol: "BTC/USDT:USDT",
-    })
-    .catch((error) => error);
+  const fundingLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingSubscribe = fundingLease.ready.catch((error) => error);
   const fundingStream = await waitForValue(
     () => okxAdapter.fundingRateStreams[0],
   );
@@ -517,6 +547,482 @@ test("MarketManager closes failed initial market streams before dropping them", 
   });
   expect(fundingFailure.cause).toBe(fundingCause);
   expect(fundingStream.closeCalls).toBe(1);
+});
+
+test("MarketManager L1 leases share one stream and close only after the last lease", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const [firstLease, secondLease] = await Promise.all([
+    manager.acquireL1BookSubscription({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+    manager.acquireL1BookSubscription({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ]);
+  const stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+
+  expect(okxAdapter.l1BookStreams).toHaveLength(1);
+  stream.emitUpdate({
+    bidPrice: "101.1",
+    bidSize: "2",
+    askPrice: "101.2",
+    askSize: "3",
+    receivedAt: 1710000000100,
+  });
+  await Promise.all([firstLease.ready, secondLease.ready]);
+
+  firstLease.close();
+  firstLease.close();
+  expect(stream.closeCalls).toBe(0);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "active", ready: true });
+
+  stream.emitUpdate({
+    bidPrice: "102.1",
+    bidSize: "4",
+    askPrice: "102.2",
+    askSize: "5",
+    receivedAt: 1710000000200,
+  });
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "102.1", version: 2 });
+
+  secondLease.close();
+  expect(stream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+});
+
+test("MarketManager funding leases share one stream and close only after the last lease", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const [firstLease, secondLease] = await Promise.all([
+    manager.acquireFundingRateSubscription({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+    manager.acquireFundingRateSubscription({
+      venue: "okx",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ]);
+  const stream = await waitForValue(() => okxAdapter.fundingRateStreams[0]);
+
+  expect(okxAdapter.fundingRateStreams).toHaveLength(1);
+  stream.emitUpdate({
+    fundingRate: "0.0001",
+    receivedAt: 1710000000100,
+  });
+  await Promise.all([firstLease.ready, secondLease.ready]);
+
+  firstLease.close();
+  expect(stream.closeCalls).toBe(0);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "active", ready: true });
+
+  secondLease.close();
+  secondLease.close();
+  expect(stream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+});
+
+test("MarketManager initial stream failure rejects pending leases and allows a fresh acquire", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const firstLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const secondLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const firstFailure = firstLease.ready.catch((error) => error);
+  const secondFailure = secondLease.ready.catch((error) => error);
+  const failedStream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+
+  failedStream.rejectReady(new Error("initial l1 failed"));
+
+  expect(await firstFailure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(await secondFailure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(failedStream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const recoveredLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const recoveredStream = await waitForValue(() => okxAdapter.l1BookStreams[1]);
+  recoveredStream.emitUpdate({
+    bidPrice: "103.1",
+    bidSize: "6",
+    askPrice: "103.2",
+    askSize: "7",
+    receivedAt: 1710000000300,
+  });
+  await recoveredLease.ready;
+
+  expect(okxAdapter.l1BookStreams).toHaveLength(2);
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "103.1", version: 1 });
+});
+
+test("MarketManager L1 reacquire after close waits for the new stream before ready", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const firstLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const firstStream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  firstStream.emitUpdate({
+    bidPrice: "103.1",
+    bidSize: "6",
+    askPrice: "103.2",
+    askSize: "7",
+    receivedAt: 1710000000300,
+  });
+  await firstLease.ready;
+  firstLease.close();
+
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "103.1" });
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const reacquiredLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  await expectPending(reacquiredLease.ready, 10);
+  const readyFailure = reacquiredLease.ready.catch((error) => error);
+  const failedStream = await waitForValue(() => okxAdapter.l1BookStreams[1]);
+
+  failedStream.rejectReady(new Error("fresh l1 failed"));
+
+  expect(await readyFailure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(failedStream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const recoveredLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const recoveredStream = await waitForValue(() => okxAdapter.l1BookStreams[2]);
+  recoveredStream.emitUpdate({
+    bidPrice: "104.1",
+    bidSize: "8",
+    askPrice: "104.2",
+    askSize: "9",
+    receivedAt: 1710000000400,
+  });
+  await recoveredLease.ready;
+  expect(okxAdapter.l1BookStreams).toHaveLength(3);
+});
+
+test("MarketManager funding reacquire after close waits for the new stream before ready", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const firstLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const firstStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+  firstStream.emitUpdate({
+    fundingRate: "0.0001",
+    receivedAt: 1710000000300,
+  });
+  await firstLease.ready;
+  firstLease.close();
+
+  expect(
+    manager.getFundingRate({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ fundingRate: "0.0001" });
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const reacquiredLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  await expectPending(reacquiredLease.ready, 10);
+  const readyFailure = reacquiredLease.ready.catch((error) => error);
+  const failedStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[1],
+  );
+
+  failedStream.rejectReady(new Error("fresh funding failed"));
+
+  expect(await readyFailure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(failedStream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const recoveredLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const recoveredStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[2],
+  );
+  recoveredStream.emitUpdate({
+    fundingRate: "0.0002",
+    receivedAt: 1710000000400,
+  });
+  await recoveredLease.ready;
+  expect(okxAdapter.fundingRateStreams).toHaveLength(3);
+});
+
+test("MarketManager pending leases survive client stop and resolve after restart", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const lease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const initialStream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+
+  manager.onClientStopping(1710000000100);
+
+  expect(initialStream.closeCalls).toBe(1);
+  await expectPending(lease.ready, 10);
+
+  manager.onClientStarted();
+  const resumedStream = await waitForValue(() => okxAdapter.l1BookStreams[1]);
+  resumedStream.emitUpdate({
+    bidPrice: "104.1",
+    bidSize: "8",
+    askPrice: "104.2",
+    askSize: "9",
+    receivedAt: 1710000000200,
+  });
+  await lease.ready;
+
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "104.1", version: 1 });
+});
+
+test("MarketManager restart stream creation failure rejects pending leases", async () => {
+  const okxAdapter = new ThrowingCreateMarketAdapter();
+  const context = new StubMarketContext();
+  const manager = new MarketManagerImpl(
+    context,
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const l1Lease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const l1Failure = l1Lease.ready.catch((error) => error);
+  const fundingFailure = fundingLease.ready.catch((error) => error);
+  const l1Stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  const fundingStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+
+  manager.onClientStopping(1710000000100);
+  okxAdapter.failNextL1BookStream = true;
+  okxAdapter.failNextFundingRateStream = true;
+  manager.onClientStarted();
+
+  expect(l1Stream.closeCalls).toBe(1);
+  expect(fundingStream.closeCalls).toBe(1);
+  expect(await l1Failure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(await fundingFailure).toMatchObject({
+    code: "MARKET_STREAM_TIMEOUT",
+  });
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+  expect(context.errors).toHaveLength(2);
+
+  const recoveredLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const recoveredStream = await waitForValue(() => okxAdapter.l1BookStreams[1]);
+  recoveredStream.emitUpdate({
+    bidPrice: "106.1",
+    bidSize: "12",
+    askPrice: "106.2",
+    askSize: "13",
+    receivedAt: 1710000000300,
+  });
+  await recoveredLease.ready;
+});
+
+test("MarketManager closing a pending stopped lease prevents restart recovery", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const lease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const readyFailure = lease.ready.catch((error) => error);
+  const initialStream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+
+  manager.onClientStopping(1710000000100);
+  lease.close();
+  manager.onClientStarted();
+
+  expect(initialStream.closeCalls).toBe(1);
+  expect(await readyFailure).toMatchObject({
+    message: expect.stringContaining("closed before ready"),
+  });
+  await Bun.sleep(5);
+  expect(okxAdapter.l1BookStreams).toHaveLength(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+});
+
+test("MarketManager close before ready rejects that lease without closing other active leases", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const firstLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const secondLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const firstFailure = firstLease.ready.catch((error) => error);
+  const stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+
+  firstLease.close();
+
+  expect(await firstFailure).toMatchObject({
+    message: expect.stringContaining("closed before ready"),
+  });
+  expect(stream.closeCalls).toBe(0);
+
+  stream.emitUpdate({
+    bidPrice: "105.1",
+    bidSize: "10",
+    askPrice: "105.2",
+    askSize: "11",
+    receivedAt: 1710000000300,
+  });
+  await secondLease.ready;
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "105.1", version: 1 });
+});
+
+test("MarketManager L1 and funding leases are independent for the same market", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const l1Lease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const l1Stream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  l1Stream.emitUpdate({
+    bidPrice: "101.1",
+    bidSize: "2",
+    askPrice: "101.2",
+    askSize: "3",
+    receivedAt: 1710000000100,
+  });
+  await l1Lease.ready;
+
+  const fundingLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+  fundingStream.emitUpdate({
+    fundingRate: "0.0001",
+    receivedAt: 1710000000200,
+  });
+  await fundingLease.ready;
+
+  l1Lease.close();
+
+  expect(l1Stream.closeCalls).toBe(1);
+  expect(fundingStream.closeCalls).toBe(0);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "active", ready: true });
+  expect(
+    manager.getFundingRate({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({
+    status: {
+      activity: "active",
+      freshness: "fresh",
+    },
+  });
+
+  fundingLease.close();
+  expect(fundingStream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive" });
 });
 
 test("MarketManager coalesces concurrent reloadMarkets calls for the same venue", async () => {
@@ -1338,7 +1844,7 @@ test("MarketManager dispatches L1 subscriptions to the adapter for each venue", 
     },
   );
 
-  const binanceSubscribe = manager.subscribeL1Book({
+  const binanceLease = await manager.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
@@ -1354,7 +1860,7 @@ test("MarketManager dispatches L1 subscriptions to the adapter for each venue", 
     A: "2.500",
     T: 1710000000000,
   });
-  await binanceSubscribe;
+  await binanceLease.ready;
 
   expect(binanceAdapter.loadMarketsCalls).toBe(1);
   expect(binanceAdapter.l1BookStreamCalls).toBe(1);
@@ -1362,7 +1868,7 @@ test("MarketManager dispatches L1 subscriptions to the adapter for each venue", 
   expect(okxAdapter.l1BookStreams).toHaveLength(0);
   expect(FakeWebSocket.instances).toHaveLength(1);
 
-  const okxSubscribe = manager.subscribeL1Book({
+  const okxLease = await manager.acquireL1BookSubscription({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
   });
@@ -1374,7 +1880,7 @@ test("MarketManager dispatches L1 subscriptions to the adapter for each venue", 
     askSize: "3",
     receivedAt: 1710000000100,
   });
-  await okxSubscribe;
+  await okxLease.ready;
 
   expect(binanceAdapter.loadMarketsCalls).toBe(1);
   expect(binanceAdapter.l1BookStreamCalls).toBe(1);
@@ -1400,7 +1906,7 @@ test("MarketManager rejects subscriptions for unregistered venues", async () => 
   );
 
   await expect(
-    manager.subscribeL1Book({
+    manager.acquireL1BookSubscription({
       venue: "bybit",
       symbol: "BTC/USDT:USDT",
     }),
@@ -1435,7 +1941,7 @@ test("MarketManager keeps one venue catalog failure isolated from another venue"
   );
 
   await expect(
-    manager.subscribeL1Book({
+    manager.acquireL1BookSubscription({
       venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
@@ -1450,7 +1956,7 @@ test("MarketManager keeps one venue catalog failure isolated from another venue"
   });
   expect(failingBinanceAdapter.loadMarketsCalls).toBe(1);
 
-  const okxSubscribe = manager.subscribeL1Book({
+  const okxLease = await manager.acquireL1BookSubscription({
     venue: "okx",
     symbol: "BTC/USDT:USDT",
   });
@@ -1462,7 +1968,7 @@ test("MarketManager keeps one venue catalog failure isolated from another venue"
     askSize: "3",
     receivedAt: 1710000000200,
   });
-  await okxSubscribe;
+  await okxLease.ready;
 
   expect(okxAdapter.loadMarketsCalls).toBe(1);
   expect(okxAdapter.l1BookStreams).toHaveLength(1);

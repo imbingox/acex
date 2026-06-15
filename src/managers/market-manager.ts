@@ -29,6 +29,8 @@ import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
 import { matchesMarketFilter } from "../internal/filters.ts";
 import type {
+  AcquireFundingRateSubscriptionInput,
+  AcquireL1BookSubscriptionInput,
   EventStreamOptions,
   FetchFundingRateHistoryInput,
   FetchFundingRateHistoryResult,
@@ -50,11 +52,10 @@ import type {
   MarketKeyInput,
   MarketManager,
   MarketStatusChangedEvent,
+  MarketSubscriptionLease,
   NormalizedOrderInput,
   NormalizeOrderInputInput,
   PublicTrade,
-  SubscribeFundingRateInput,
-  SubscribeL1BookInput,
   SubscriptionActivity,
   Venue,
   VenueServerTime,
@@ -83,7 +84,22 @@ interface MarketRecord {
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
   fundingRateStream?: StreamHandle;
+  l1BookStreamReady: boolean;
+  fundingRateStreamReady: boolean;
+  l1BookLeases: Set<MarketSubscriptionLeaseState>;
+  fundingRateLeases: Set<MarketSubscriptionLeaseState>;
   lastPublishedStatusKey?: MarketStatusPublicationKey;
+}
+
+type MarketStreamChannel = "l1Book" | "fundingRate";
+
+interface MarketSubscriptionLeaseState {
+  readonly channel: MarketStreamChannel;
+  readonly ready: Promise<void>;
+  readySettled: boolean;
+  closed: boolean;
+  resolveReady(): void;
+  rejectReady(error: Error): void;
 }
 
 interface MarketStatusPublicationKey {
@@ -154,6 +170,59 @@ function freezeL1Book(book: L1Book): L1Book {
 
 function freezeFundingRate(snapshot: FundingRateSnapshot): FundingRateSnapshot {
   return Object.freeze(snapshot);
+}
+
+function createDeferredReady(): {
+  promise: Promise<void>;
+  resolve(): void;
+  reject(error: Error): void;
+} {
+  let resolveReady: (() => void) | undefined;
+  let rejectReady: ((error: Error) => void) | undefined;
+  const promise = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  return {
+    promise,
+    resolve(): void {
+      resolveReady?.();
+    },
+    reject(error: Error): void {
+      rejectReady?.(error);
+    },
+  };
+}
+
+function createMarketSubscriptionLeaseState(
+  channel: MarketStreamChannel,
+): MarketSubscriptionLeaseState {
+  const deferred = createDeferredReady();
+  const state: MarketSubscriptionLeaseState = {
+    channel,
+    ready: deferred.promise,
+    readySettled: false,
+    closed: false,
+    resolveReady(): void {
+      if (state.readySettled) {
+        return;
+      }
+
+      state.readySettled = true;
+      deferred.resolve();
+    },
+    rejectReady(error: Error): void {
+      if (state.readySettled) {
+        return;
+      }
+
+      state.readySettled = true;
+      deferred.reject(error);
+    },
+  };
+
+  return state;
 }
 
 function isTimestampMs(value: number): boolean {
@@ -426,7 +495,9 @@ export class MarketManagerImpl
     }
   }
 
-  async subscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
+  async acquireL1BookSubscription(
+    input: AcquireL1BookSubscriptionInput,
+  ): Promise<MarketSubscriptionLease> {
     this.context.assertStarted();
     const market = await this.resolveMarketDefinition(input);
     const record = this.getOrCreateRecord({
@@ -435,30 +506,12 @@ export class MarketManagerImpl
     });
 
     record.market = market;
-    record.l1BookSubscribed = true;
-    record.l1Freshness = record.l1Book ? "stale" : undefined;
-    record.l1Reason = undefined;
-    this.recomputeAndPublishStatus(record);
-
-    await this.ensureL1BookStream(record, market);
+    return this.createL1BookLease(record, market);
   }
 
-  async unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void> {
-    const record = this.records.get(marketKey(input));
-    if (!record?.l1BookSubscribed) {
-      return;
-    }
-
-    record.l1BookStream?.close();
-    record.l1BookStream = undefined;
-    record.l1BookSubscribed = false;
-    record.l1Freshness = undefined;
-    record.l1Reason = undefined;
-    this.syncL1BookStatus(record);
-    this.recomputeAndPublishStatus(record, this.context.now());
-  }
-
-  async subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void> {
+  async acquireFundingRateSubscription(
+    input: AcquireFundingRateSubscriptionInput,
+  ): Promise<MarketSubscriptionLease> {
     this.context.assertStarted();
     const market = await this.resolveMarketDefinition(input);
     this.assertFundingRateSupported(market);
@@ -468,29 +521,7 @@ export class MarketManagerImpl
     });
 
     record.market = market;
-    record.fundingRateSubscribed = true;
-    record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
-    record.fundingRateReason = undefined;
-    this.recomputeAndPublishStatus(record);
-
-    await this.ensureFundingRateStream(record, market);
-  }
-
-  async unsubscribeFundingRate(
-    input: SubscribeFundingRateInput,
-  ): Promise<void> {
-    const record = this.records.get(marketKey(input));
-    if (!record?.fundingRateSubscribed) {
-      return;
-    }
-
-    record.fundingRateStream?.close();
-    record.fundingRateStream = undefined;
-    record.fundingRateSubscribed = false;
-    record.fundingRateFreshness = undefined;
-    record.fundingRateReason = undefined;
-    this.syncFundingRateStatus(record);
-    this.recomputeAndPublishStatus(record, this.context.now());
+    return this.createFundingRateLease(record, market);
   }
 
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined {
@@ -659,8 +690,10 @@ export class MarketManagerImpl
 
       record.l1BookStream?.close();
       record.l1BookStream = undefined;
+      record.l1BookStreamReady = false;
       record.fundingRateStream?.close();
       record.fundingRateStream = undefined;
+      record.fundingRateStreamReady = false;
       record.l1Freshness = record.l1Book ? "stale" : undefined;
       record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
       this.syncL1BookStatus(record, now, "inactive");
@@ -1157,6 +1190,10 @@ export class MarketManagerImpl
       symbol: input.symbol,
       l1BookSubscribed: false,
       fundingRateSubscribed: false,
+      l1BookStreamReady: false,
+      fundingRateStreamReady: false,
+      l1BookLeases: new Set(),
+      fundingRateLeases: new Set(),
       status: freezeMarketStatus({
         venue: input.venue,
         symbol: input.symbol,
@@ -1169,83 +1206,342 @@ export class MarketManagerImpl
     return record;
   }
 
-  private async ensureL1BookStream(
+  private createL1BookLease(
     record: MarketRecord,
     market: MarketDefinition,
-  ): Promise<void> {
-    if (record.l1BookStream) {
-      await record.l1BookStream.ready;
+  ): MarketSubscriptionLease {
+    const wasSubscribed = record.l1BookSubscribed;
+    const state = createMarketSubscriptionLeaseState("l1Book");
+
+    record.l1BookLeases.add(state);
+    record.l1BookSubscribed = true;
+    if (!wasSubscribed) {
+      record.l1Freshness = record.l1Book ? "stale" : undefined;
+      record.l1Reason = undefined;
+      this.syncL1BookStatus(record);
+    }
+    this.recomputeAndPublishStatus(record);
+
+    try {
+      this.startL1BookStreamIfNeeded(record, market);
+    } catch (error) {
+      this.releaseMarketSubscriptionLease(record, state, {
+        rejectPendingReady: false,
+      });
+      throw error;
+    }
+
+    if (record.l1BookStreamReady && record.l1Book) {
+      state.resolveReady();
+    }
+
+    return this.createMarketSubscriptionLease(record, state);
+  }
+
+  private createFundingRateLease(
+    record: MarketRecord,
+    market: MarketDefinition,
+  ): MarketSubscriptionLease {
+    const wasSubscribed = record.fundingRateSubscribed;
+    const state = createMarketSubscriptionLeaseState("fundingRate");
+
+    record.fundingRateLeases.add(state);
+    record.fundingRateSubscribed = true;
+    if (!wasSubscribed) {
+      record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
+      record.fundingRateReason = undefined;
+      this.syncFundingRateStatus(record);
+    }
+    this.recomputeAndPublishStatus(record);
+
+    try {
+      this.startFundingRateStreamIfNeeded(record, market);
+    } catch (error) {
+      this.releaseMarketSubscriptionLease(record, state, {
+        rejectPendingReady: false,
+      });
+      throw error;
+    }
+
+    if (record.fundingRateStreamReady && record.fundingRate) {
+      state.resolveReady();
+    }
+
+    return this.createMarketSubscriptionLease(record, state);
+  }
+
+  private createMarketSubscriptionLease(
+    record: MarketRecord,
+    state: MarketSubscriptionLeaseState,
+  ): MarketSubscriptionLease {
+    return {
+      ready: state.ready,
+      close: (): void => {
+        this.releaseMarketSubscriptionLease(record, state);
+      },
+    };
+  }
+
+  private releaseMarketSubscriptionLease(
+    record: MarketRecord,
+    state: MarketSubscriptionLeaseState,
+    options: { rejectPendingReady?: boolean } = {},
+  ): void {
+    if (state.closed) {
       return;
     }
 
-    record.l1BookStream = this.createL1BookStream(record, market);
+    state.closed = true;
+    if (!state.readySettled && (options.rejectPendingReady ?? true)) {
+      state.rejectReady(this.createLeaseClosedError(record, state.channel));
+    } else if (!state.readySettled) {
+      state.resolveReady();
+    }
 
-    try {
-      await record.l1BookStream.ready;
-    } catch (error) {
-      record.l1BookStream.close();
-      record.l1BookStream = undefined;
-      const details = buildAcexErrorDetails(
-        { venue: market.venue, symbol: market.symbol },
-        error,
-      );
-      const timeoutError = new AcexError(
-        "MARKET_STREAM_TIMEOUT",
-        `Timed out waiting for market data: ${market.symbol}`,
-        {
-          cause: error,
-          details,
-        },
-      );
-      this.context.publishRuntimeError("runtime", timeoutError, {
-        venue: market.venue,
-        symbol: market.symbol,
-      });
-      this.updateConnectionState(record, "l1Book", "stale", "ws_disconnected");
-      throw timeoutError;
+    if (state.channel === "l1Book") {
+      record.l1BookLeases.delete(state);
+      if (record.l1BookLeases.size === 0) {
+        this.deactivateL1BookSubscription(record);
+      }
+      return;
+    }
+
+    record.fundingRateLeases.delete(state);
+    if (record.fundingRateLeases.size === 0) {
+      this.deactivateFundingRateSubscription(record);
     }
   }
 
-  private async ensureFundingRateStream(
+  private deactivateL1BookSubscription(record: MarketRecord): void {
+    record.l1BookStream?.close();
+    record.l1BookStream = undefined;
+    record.l1BookStreamReady = false;
+    record.l1BookSubscribed = false;
+    record.l1Freshness = undefined;
+    record.l1Reason = undefined;
+    this.syncL1BookStatus(record);
+    this.recomputeAndPublishStatus(record, this.context.now());
+  }
+
+  private deactivateFundingRateSubscription(record: MarketRecord): void {
+    record.fundingRateStream?.close();
+    record.fundingRateStream = undefined;
+    record.fundingRateStreamReady = false;
+    record.fundingRateSubscribed = false;
+    record.fundingRateFreshness = undefined;
+    record.fundingRateReason = undefined;
+    this.syncFundingRateStatus(record);
+    this.recomputeAndPublishStatus(record, this.context.now());
+  }
+
+  private startL1BookStreamIfNeeded(
     record: MarketRecord,
     market: MarketDefinition,
-  ): Promise<void> {
-    if (record.fundingRateStream) {
-      await record.fundingRateStream.ready;
+  ): void {
+    if (!record.l1BookSubscribed || record.l1BookStream) {
       return;
     }
 
-    record.fundingRateStream = this.createFundingRateStream(record, market);
+    record.l1BookStreamReady = false;
+    const stream = this.createL1BookStream(record, market);
+    record.l1BookStream = stream;
+    void this.monitorL1BookStreamReady(record, market, stream);
+  }
 
+  private startFundingRateStreamIfNeeded(
+    record: MarketRecord,
+    market: MarketDefinition,
+  ): void {
+    if (!record.fundingRateSubscribed || record.fundingRateStream) {
+      return;
+    }
+
+    record.fundingRateStreamReady = false;
+    const stream = this.createFundingRateStream(record, market);
+    record.fundingRateStream = stream;
+    void this.monitorFundingRateStreamReady(record, market, stream);
+  }
+
+  private async monitorL1BookStreamReady(
+    record: MarketRecord,
+    market: MarketDefinition,
+    stream: StreamHandle,
+  ): Promise<void> {
     try {
-      await record.fundingRateStream.ready;
+      await stream.ready;
+      if (record.l1BookStream !== stream) {
+        return;
+      }
+
+      record.l1BookStreamReady = true;
+      this.resolvePendingLeases(record.l1BookLeases);
     } catch (error) {
-      record.fundingRateStream.close();
-      record.fundingRateStream = undefined;
-      const details = buildAcexErrorDetails(
-        { venue: market.venue, symbol: market.symbol },
+      if (record.l1BookStream !== stream) {
+        return;
+      }
+
+      this.handleMarketStreamReadyFailure(
+        record,
+        market,
+        "l1Book",
+        stream,
         error,
       );
-      const timeoutError = new AcexError(
-        "MARKET_STREAM_TIMEOUT",
-        `Timed out waiting for market data: ${market.symbol}`,
-        {
-          cause: error,
-          details,
-        },
-      );
-      this.context.publishRuntimeError("runtime", timeoutError, {
-        venue: market.venue,
-        symbol: market.symbol,
-      });
-      this.updateConnectionState(
-        record,
-        "fundingRate",
-        "stale",
-        "ws_disconnected",
-      );
-      throw timeoutError;
     }
+  }
+
+  private async monitorFundingRateStreamReady(
+    record: MarketRecord,
+    market: MarketDefinition,
+    stream: StreamHandle,
+  ): Promise<void> {
+    try {
+      await stream.ready;
+      if (record.fundingRateStream !== stream) {
+        return;
+      }
+
+      record.fundingRateStreamReady = true;
+      this.resolvePendingLeases(record.fundingRateLeases);
+    } catch (error) {
+      if (record.fundingRateStream !== stream) {
+        return;
+      }
+
+      this.handleMarketStreamReadyFailure(
+        record,
+        market,
+        "fundingRate",
+        stream,
+        error,
+      );
+    }
+  }
+
+  private handleMarketStreamReadyFailure(
+    record: MarketRecord,
+    market: MarketDefinition,
+    channel: MarketStreamChannel,
+    stream: StreamHandle,
+    error: unknown,
+  ): void {
+    stream.close();
+    this.clearMarketStream(record, channel);
+    this.handleMarketStreamInitialFailure(record, market, channel, error);
+  }
+
+  private handleMarketStreamStartFailure(
+    record: MarketRecord,
+    market: MarketDefinition,
+    channel: MarketStreamChannel,
+    error: unknown,
+  ): void {
+    this.clearMarketStream(record, channel);
+    this.handleMarketStreamInitialFailure(record, market, channel, error);
+  }
+
+  private clearMarketStream(
+    record: MarketRecord,
+    channel: MarketStreamChannel,
+  ): void {
+    if (channel === "l1Book") {
+      record.l1BookStream = undefined;
+      record.l1BookStreamReady = false;
+    } else {
+      record.fundingRateStream = undefined;
+      record.fundingRateStreamReady = false;
+    }
+  }
+
+  private handleMarketStreamInitialFailure(
+    record: MarketRecord,
+    market: MarketDefinition,
+    channel: MarketStreamChannel,
+    error: unknown,
+  ): void {
+    const timeoutError = this.createMarketStreamTimeoutError(market, error);
+    this.context.publishRuntimeError("runtime", timeoutError, {
+      venue: market.venue,
+      symbol: market.symbol,
+    });
+    this.rejectPendingLeases(record, channel, timeoutError);
+
+    if (channel === "l1Book") {
+      if (record.l1BookLeases.size === 0) {
+        this.deactivateL1BookSubscription(record);
+        return;
+      }
+
+      this.updateConnectionState(record, "l1Book", "stale", "ws_disconnected");
+      return;
+    }
+
+    if (record.fundingRateLeases.size === 0) {
+      this.deactivateFundingRateSubscription(record);
+      return;
+    }
+
+    this.updateConnectionState(
+      record,
+      "fundingRate",
+      "stale",
+      "ws_disconnected",
+    );
+  }
+
+  private resolvePendingLeases(
+    leases: Set<MarketSubscriptionLeaseState>,
+  ): void {
+    for (const lease of leases) {
+      lease.resolveReady();
+    }
+  }
+
+  private rejectPendingLeases(
+    record: MarketRecord,
+    channel: MarketStreamChannel,
+    error: Error,
+  ): void {
+    const leases =
+      channel === "l1Book" ? record.l1BookLeases : record.fundingRateLeases;
+
+    for (const lease of [...leases]) {
+      if (lease.readySettled) {
+        continue;
+      }
+
+      lease.closed = true;
+      lease.rejectReady(error);
+      leases.delete(lease);
+    }
+  }
+
+  private createLeaseClosedError(
+    record: MarketRecord,
+    channel: MarketStreamChannel,
+  ): Error {
+    return new Error(
+      `Market subscription lease closed before ready: ${channel} ${record.venue}:${record.symbol}`,
+    );
+  }
+
+  private createMarketStreamTimeoutError(
+    market: MarketDefinition,
+    error: unknown,
+  ): AcexError {
+    const details = buildAcexErrorDetails(
+      { venue: market.venue, symbol: market.symbol },
+      error,
+    );
+
+    return new AcexError(
+      "MARKET_STREAM_TIMEOUT",
+      `Timed out waiting for market data: ${market.symbol}`,
+      {
+        cause: error,
+        details,
+      },
+    );
   }
 
   private createL1BookStream(
@@ -1275,6 +1571,7 @@ export class MarketManagerImpl
           update,
           record.l1Book,
         );
+        this.resolvePendingLeases(record.l1BookLeases);
 
         const event: L1BookUpdatedEvent = {
           type: "l1_book.updated",
@@ -1335,6 +1632,7 @@ export class MarketManagerImpl
           update,
           record.fundingRate,
         );
+        this.resolvePendingLeases(record.fundingRateLeases);
 
         const event: FundingRateUpdatedEvent = {
           type: "funding_rate.updated",
@@ -1667,7 +1965,16 @@ export class MarketManagerImpl
           record.l1Freshness = record.l1Book ? "stale" : undefined;
           record.l1Reason = undefined;
           this.recomputeAndPublishStatus(record);
-          await this.ensureL1BookStream(record, market);
+          try {
+            this.startL1BookStreamIfNeeded(record, market);
+          } catch (error) {
+            this.handleMarketStreamStartFailure(
+              record,
+              market,
+              "l1Book",
+              error,
+            );
+          }
         });
       }
 
@@ -1682,7 +1989,16 @@ export class MarketManagerImpl
             : undefined;
           record.fundingRateReason = undefined;
           this.recomputeAndPublishStatus(record);
-          await this.ensureFundingRateStream(record, market);
+          try {
+            this.startFundingRateStreamIfNeeded(record, market);
+          } catch (error) {
+            this.handleMarketStreamStartFailure(
+              record,
+              market,
+              "fundingRate",
+              error,
+            );
+          }
         });
       }
     }

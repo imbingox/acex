@@ -56,28 +56,33 @@ await client.stop();
 ```ts
 await client.start();
 
-await client.market.subscribeL1Book({
+const l1Lease = await client.market.acquireL1BookSubscription({
   venue: "binance",
   symbol: "BTC/USDT:USDT",
 });
+try {
+  await l1Lease.ready;
 
-const book = client.market.getL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
+  const book = client.market.getL1Book({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
 
-console.log(book?.bidPrice, book?.askPrice, book?.status.freshness);
+  console.log(book?.bidPrice, book?.askPrice, book?.status.freshness);
 
-for await (const event of client.market.events.l1BookUpdates({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-})) {
-  console.log(event.snapshot.bidPrice);
-  break;
+  for await (const event of client.market.events.l1BookUpdates({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  })) {
+    console.log(event.snapshot.bidPrice);
+    break;
+  }
+} finally {
+  l1Lease.close();
 }
 ```
 
-`subscribeL1Book()` 会等待该 logical subscription 的首条有效数据到达后才 resolve。首条数据超时会抛 `MARKET_STREAM_TIMEOUT`。
+`acquireL1BookSubscription()` 只完成输入校验、market resolution 和 logical lease 注册；`lease.ready` 会等待该 lease 的首条有效数据到达后 resolve。首条数据超时会 reject `MARKET_STREAM_TIMEOUT`，并自动释放该 lease。释放订阅时调用 `lease.close()`，该方法幂等；只有最后一个 active lease 关闭后，SDK 才会关闭底层 websocket stream。
 
 ### 2.3 注册 Binance 交易账户
 
@@ -196,14 +201,22 @@ const batch = await client.order.cancelAllOrders({
 
 ### 3.2 Ready barrier
 
-订阅方法 resolve 之后，相关 getter 应已有第一份可读快照：
+`acquire*Subscription()` 返回 lease 后，调用方用 `lease.ready` 等待第一份可读快照：
 
 ```ts
-await client.market.subscribeL1Book({ venue: "binance", symbol });
-const snapshot = client.market.getL1Book({ venue: "binance", symbol });
+const lease = await client.market.acquireL1BookSubscription({
+  venue: "binance",
+  symbol,
+});
+try {
+  await lease.ready;
+  const snapshot = client.market.getL1Book({ venue: "binance", symbol });
+} finally {
+  lease.close();
+}
 ```
 
-如果首条数据迟迟不到，订阅 promise 会 reject。稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。行情多路复用连接健康时，单个 symbol 长时间没有新盘口推送不会被标记为 `stale`；这通常表示盘口未变化，若需要 per-symbol 活跃度请用 `lastReceivedAt` 自行计算 age。
+如果首条数据迟迟不到，`lease.ready` 会 reject，SDK 会自动释放该 lease。稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。行情多路复用连接健康时，单个 symbol 长时间没有新盘口推送不会被标记为 `stale`；这通常表示盘口未变化，若需要 per-symbol 活跃度请用 `lastReceivedAt` 自行计算 age。
 
 ### 3.3 Decimal string
 
@@ -362,17 +375,20 @@ interface MarketManager {
   getMarkets(symbol: string): MarketDefinition[];
   normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
 
-  subscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
-  unsubscribeL1Book(input: SubscribeL1BookInput): Promise<void>;
+  acquireL1BookSubscription(input: AcquireL1BookSubscriptionInput): Promise<MarketSubscriptionLease>;
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getL1Books(symbol: string): L1Book[];
 
-  subscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
-  unsubscribeFundingRate(input: SubscribeFundingRateInput): Promise<void>;
+  acquireFundingRateSubscription(input: AcquireFundingRateSubscriptionInput): Promise<MarketSubscriptionLease>;
   getFundingRate(key: MarketKeyInput): FundingRateSnapshot | undefined;
   getFundingRates(symbol: string): FundingRateSnapshot[];
 
   getMarketStatus(key: MarketKeyInput): MarketDataStatus | undefined;
+}
+
+interface MarketSubscriptionLease {
+  readonly ready: Promise<void>;
+  close(): void;
 }
 ```
 

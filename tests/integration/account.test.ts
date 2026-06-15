@@ -251,6 +251,94 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   await iterator.return?.();
 });
 
+test("Binance ACCOUNT_CONFIG_UPDATE updates existing position leverage", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 10_000,
+          privateReconcileIntervalMs: 0,
+        },
+      },
+    },
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "account.snapshot_replaced",
+  });
+
+  expect(
+    client.account.getPosition({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    size: new BigNumber("0.010").toFixed(),
+    leverage: "5",
+  });
+
+  socket.emitJson({
+    e: "ACCOUNT_CONFIG_UPDATE",
+    E: 1710000000500,
+    T: 1710000000499,
+    fs: "UM",
+    ac: {
+      s: "BTCUSDT",
+      l: 25,
+    },
+  });
+
+  const leverageEvent = await nextAccountEventOfType(
+    iterator,
+    "position.updated",
+  );
+  expect(leverageEvent).toMatchObject({
+    symbol: "BTC/USDT:USDT",
+    snapshot: {
+      size: new BigNumber("0.010").toFixed(),
+      entryPrice: new BigNumber("100000.10").toFixed(),
+      leverage: "25",
+      exchangeTs: 1710000000499,
+    },
+  });
+  expect(
+    client.account.getPosition({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toMatchObject({
+    size: new BigNumber("0.010").toFixed(),
+    leverage: "25",
+  });
+
+  await iterator.return?.();
+});
+
 test("Binance PAPI riskLevelChange publishes account event and backfills risk snapshot", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient({

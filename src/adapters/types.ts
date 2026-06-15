@@ -271,7 +271,7 @@ export interface RawLendingBalanceUpdate {
 export interface RawPositionUpdate {
   symbol: string;
   side: PositionSide;
-  size: string;
+  size?: string;
   entryPrice?: string;
   markPrice?: string;
   unrealizedPnl?: string;

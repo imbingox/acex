@@ -34,6 +34,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, 
 | [Database Guidelines](./database-guidelines.md) | 占位文档：当前仓库无数据库 / ORM / migration 层，防止 workflow 指向空路径 | Placeholder |
 | [Error Handling](./error-handling.md) | Public `AcexError` contract、`cause` / `details.venueError` / `details.transport` 语义、adapter `TransportError` 到 manager/runtime public error 的包装规则、脱敏验收 | Active |
 | [Logging Guidelines](./logging-guidelines.md) | 占位文档：当前仓库无正式 logger 集成，`logger` / `logLevel` 仍为预留位 | Placeholder |
+| [Market Subscription Leases](./market-subscription-leases.md) | Market websocket per-consumer lease API、ready/close 语义、L1/funding 独立 ref-count、client stop/start 恢复规则 | Active |
 | [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
 | [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |
 | [Type Safety](./type-safety.md) | 类型定义位置、显式返回类型、避免宽化和循环引用 | Active |
@@ -69,6 +70,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, 
 - 新增或修改 `getVenueCapabilities()` / `listVenueCapabilities()`、新增 venue runtime 能力、调整只读/可交易状态：读 [Venue Capabilities](./venue-capabilities.md)
 - 新增或修改 GitHub Actions 发布流程、npm publish 参数、发布前质量门禁：读 [Release Publishing](./release-publishing.md)
 - 新增公共类型、修复类型错误、改返回值语义：读 [Type Safety](./type-safety.md)
+- 新增或修改 `MarketManager` market websocket 订阅 API、L1/funding stream lease/ref-count、client stop/start 恢复语义：读 [Market Subscription Leases](./market-subscription-leases.md)
 
 ---
 

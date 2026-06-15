@@ -191,7 +191,7 @@ async function main(): Promise<void> {
     new Map<Venue, MarketAdapter>([["binance", adapter]]),
   );
 
-  await manager.subscribeL1Book({ venue: "binance", symbol: SYMBOL });
+  await manager.acquireL1BookSubscription({ venue: "binance", symbol: SYMBOL });
   const callbacks = adapter.l1Callbacks;
   if (!callbacks) {
     throw new Error("L1 callbacks were not registered");

@@ -45,7 +45,7 @@ test("root entry exposes lifecycle snapshot and structured error stream", async 
   expect(new BigNumber("1.25").plus("2.5").toFixed()).toBe("3.75");
 
   await expect(
-    client.market.subscribeL1Book({
+    client.market.acquireL1BookSubscription({
       venue: "binance",
       symbol: "BTC/USDT:USDT",
     }),
@@ -167,10 +167,11 @@ test("client stop keeps lifecycle and market health semantics observable", async
 
   await client.start();
 
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
   socket.emitJson({
@@ -184,10 +185,11 @@ test("client stop keeps lifecycle and market health semantics observable", async
 
   await subscribePromise;
 
-  const fundingSubscribePromise = client.market.subscribeFundingRate({
+  const fundingLease = await client.market.acquireFundingRateSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const fundingSubscribePromise = fundingLease.ready;
   const fundingSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL);
   await waitForBinanceControlFrame(fundingSocket, "SUBSCRIBE", [
     "btcusdt@markPrice",
@@ -426,10 +428,11 @@ test("health venue filters only emit matching market events", async () => {
   });
   await expectPending(firstBinanceEvent, 20);
 
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
   socket.emitJson({

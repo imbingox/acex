@@ -540,7 +540,7 @@ test("fetchFundingRateHistory returns Binance funding history through the client
   );
 });
 
-test("market subscribe is a ready barrier and emits standardized l1 book updates", async () => {
+test("market lease ready is a barrier and emits standardized l1 book updates", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
@@ -556,10 +556,11 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
     [Symbol.asyncIterator]();
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
 
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
@@ -610,10 +611,7 @@ test("market subscribe is a ready barrier and emits standardized l1 book updates
   const event = await nextEvent(iterator);
   expect(event.snapshot.bidSize).toEqual(new BigNumber("1.500").toFixed());
 
-  await client.market.unsubscribeL1Book({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  l1Lease.close();
 
   expect(
     client.market.getMarketStatus({
@@ -638,12 +636,11 @@ test("market stream timeout exposes cause and market context details", async () 
   const errors = client.events.errors()[Symbol.asyncIterator]();
 
   await client.start();
-  const subscribePromise = client.market
-    .subscribeL1Book({
-      venue: "binance",
-      symbol: "BTC/USDT:USDT",
-    })
-    .catch((error) => error);
+  const l1Lease = await client.market.acquireL1BookSubscription({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const subscribePromise = l1Lease.ready.catch((error) => error);
 
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
@@ -684,10 +681,11 @@ test("l1 book snapshots canonicalize decimal string output", async () => {
   });
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
 
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
@@ -714,13 +712,10 @@ test("l1 book snapshots canonicalize decimal string output", async () => {
     askSize: "-0.01",
   });
 
-  await client.market.unsubscribeL1Book({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  l1Lease.close();
 });
 
-test("funding rate subscribe emits standardized binance mark price updates", async () => {
+test("funding rate lease emits standardized binance mark price updates", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
@@ -736,10 +731,11 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
     [Symbol.asyncIterator]();
 
   await client.start();
-  const subscribePromise = client.market.subscribeFundingRate({
+  const fundingLease = await client.market.acquireFundingRateSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = fundingLease.ready;
 
   const socket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@markPrice"]);
@@ -796,10 +792,7 @@ test("funding rate subscribe emits standardized binance mark price updates", asy
     new BigNumber("0.00010000").toFixed(),
   );
 
-  await client.market.unsubscribeFundingRate({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  fundingLease.close();
 
   expect(
     client.market.getMarketStatus({
@@ -837,10 +830,11 @@ test("binance tradfi perpetual supports l1 book and funding subscriptions", asyn
   await client.market.loadMarkets();
   await client.start();
 
-  const l1SubscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "AAPL/USDT:USDT",
   });
+  const l1SubscribePromise = l1Lease.ready;
   const l1Socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(l1Socket, "SUBSCRIBE", [
     "aaplusdt@bookTicker",
@@ -857,10 +851,11 @@ test("binance tradfi perpetual supports l1 book and funding subscriptions", asyn
 
   await l1SubscribePromise;
 
-  const fundingSubscribePromise = client.market.subscribeFundingRate({
+  const fundingLease = await client.market.acquireFundingRateSubscription({
     venue: "binance",
     symbol: "AAPL/USDT:USDT",
   });
+  const fundingSubscribePromise = fundingLease.ready;
   const fundingSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(fundingSocket, "SUBSCRIBE", [
     "aaplusdt@markPrice",
@@ -916,14 +911,8 @@ test("binance tradfi perpetual supports l1 book and funding subscriptions", asyn
     symbol: "AAPL/USDT:USDT",
   });
 
-  await client.market.unsubscribeL1Book({
-    venue: "binance",
-    symbol: "AAPL/USDT:USDT",
-  });
-  await client.market.unsubscribeFundingRate({
-    venue: "binance",
-    symbol: "AAPL/USDT:USDT",
-  });
+  l1Lease.close();
+  fundingLease.close();
   await l1Iterator.return?.();
   await fundingIterator.return?.();
 });
@@ -940,14 +929,16 @@ test("binance l1 multiplexes multiple symbols onto one websocket", async () => {
   await client.market.loadMarkets();
   await client.start();
 
-  const btcSubscribe = client.market.subscribeL1Book({
+  const btcLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const ethSubscribe = client.market.subscribeL1Book({
+  const ethLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "ETH/USDT:USDT",
   });
+  const btcSubscribe = btcLease.ready;
+  const ethSubscribe = ethLease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", [
     "btcusdt@bookTicker",
@@ -984,7 +975,7 @@ test("binance l1 multiplexes multiple symbols onto one websocket", async () => {
   });
 });
 
-test("binance l1 unsubscribe removes one logical stream and keeps others active", async () => {
+test("closing a binance l1 lease removes one logical stream and keeps others active", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
@@ -996,14 +987,16 @@ test("binance l1 unsubscribe removes one logical stream and keeps others active"
   await client.market.loadMarkets();
   await client.start();
 
-  const btcSubscribe = client.market.subscribeL1Book({
+  const btcLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const ethSubscribe = client.market.subscribeL1Book({
+  const ethLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "ETH/USDT:USDT",
   });
+  const btcSubscribe = btcLease.ready;
+  const ethSubscribe = ethLease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", [
     "btcusdt@bookTicker",
@@ -1014,10 +1007,7 @@ test("binance l1 unsubscribe removes one logical stream and keeps others active"
   emitBookTicker(socket, "ETHUSDT", "3000.10");
   await Promise.all([btcSubscribe, ethSubscribe]);
 
-  await client.market.unsubscribeL1Book({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  btcLease.close();
   await waitForBinanceControlFrame(socket, "UNSUBSCRIBE", [
     "btcusdt@bookTicker",
   ]);
@@ -1067,14 +1057,16 @@ test("binance l1 replay active subscriptions after reconnect", async () => {
   await client.market.loadMarkets();
   await client.start();
 
-  const btcSubscribe = client.market.subscribeL1Book({
+  const btcLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
-  const ethSubscribe = client.market.subscribeL1Book({
+  const ethLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "ETH/USDT:USDT",
   });
+  const btcSubscribe = btcLease.ready;
+  const ethSubscribe = ethLease.ready;
   const firstSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(firstSocket, "SUBSCRIBE", [
     "btcusdt@bookTicker",
@@ -1129,10 +1121,11 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
   });
 
   await client.start();
-  const subscribePromise = client.market.subscribeFundingRate({
+  const fundingLease = await client.market.acquireFundingRateSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = fundingLease.ready;
   const firstSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(firstSocket, "SUBSCRIBE", [
     "btcusdt@markPrice",
@@ -1218,7 +1211,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
   });
 });
 
-test("unsubscribe funding keeps active l1 status fresh", async () => {
+test("closing funding lease keeps active l1 status fresh", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
@@ -1228,10 +1221,11 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   });
 
   await client.start();
-  const bookSubscribePromise = client.market.subscribeL1Book({
+  const bookLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const bookSubscribePromise = bookLease.ready;
   const bookSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(bookSocket, "SUBSCRIBE", [
     "btcusdt@bookTicker",
@@ -1246,10 +1240,11 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
   });
   await bookSubscribePromise;
 
-  const fundingSubscribePromise = client.market.subscribeFundingRate({
+  const fundingLease = await client.market.acquireFundingRateSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const fundingSubscribePromise = fundingLease.ready;
   const fundingSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(fundingSocket, "SUBSCRIBE", [
     "btcusdt@markPrice",
@@ -1289,10 +1284,7 @@ test("unsubscribe funding keeps active l1 status fresh", async () => {
     },
   });
 
-  await client.market.unsubscribeFundingRate({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  fundingLease.close();
 
   expect(
     client.market.getMarketStatus({
@@ -1356,10 +1348,11 @@ test("market update events keep publish-time snapshot status", async () => {
 
   await client.start();
 
-  const bookSubscribePromise = client.market.subscribeL1Book({
+  const bookLease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const bookSubscribePromise = bookLease.ready;
   const bookSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(bookSocket, "SUBSCRIBE", [
     "btcusdt@bookTicker",
@@ -1374,10 +1367,11 @@ test("market update events keep publish-time snapshot status", async () => {
   });
   await bookSubscribePromise;
 
-  const fundingSubscribePromise = client.market.subscribeFundingRate({
+  const fundingLease = await client.market.acquireFundingRateSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const fundingSubscribePromise = fundingLease.ready;
   const fundingSocket = await waitForSocket(BINANCE_USDM_MARKET_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(fundingSocket, "SUBSCRIBE", [
     "btcusdt@markPrice",
@@ -1393,14 +1387,8 @@ test("market update events keep publish-time snapshot status", async () => {
   });
   await fundingSubscribePromise;
 
-  await client.market.unsubscribeL1Book({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
-  await client.market.unsubscribeFundingRate({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  bookLease.close();
+  fundingLease.close();
 
   const l1Event = await nextEvent(l1Iterator);
   const fundingEvent = await nextEvent(fundingIterator);
@@ -1428,7 +1416,7 @@ test("spot funding rate subscriptions fail explicitly", async () => {
   await client.start();
 
   await expect(
-    client.market.subscribeFundingRate({
+    client.market.acquireFundingRateSubscription({
       venue: "binance",
       symbol: "BTC/USDT",
     }),
@@ -1456,7 +1444,7 @@ test("unknown and inactive markets have explicit semantics", async () => {
   expect(client.market.getMarket("binance", "DOGE/USDT")).toBeUndefined();
 
   await expect(
-    client.market.subscribeL1Book({
+    client.market.acquireL1BookSubscription({
       venue: "binance",
       symbol: "DOGE/USDT",
     }),
@@ -1465,7 +1453,7 @@ test("unknown and inactive markets have explicit semantics", async () => {
   });
 
   await expect(
-    client.market.subscribeL1Book({
+    client.market.acquireL1BookSubscription({
       venue: "binance",
       symbol: "ETH/USDT",
     }),
@@ -1484,10 +1472,11 @@ test("watchdog marks stale data and disconnect marks ws_disconnected", async () 
   });
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT",
   });
+  const subscribePromise = l1Lease.ready;
   const socket = await waitForSocket(BINANCE_SPOT_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
 
@@ -1541,10 +1530,11 @@ test("sdk reconnects websocket streams automatically after disconnect", async ()
   });
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
 
   const firstSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(firstSocket, "SUBSCRIBE", [
@@ -1648,7 +1638,8 @@ test("unchanged l1 ticks do not republish status while buffer mode keeps every l
     [Symbol.asyncIterator]();
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book(filter);
+  const l1Lease = await client.market.acquireL1BookSubscription(filter);
+  const subscribePromise = l1Lease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
 
@@ -1715,7 +1706,8 @@ test("l1BookUpdates defaults to latest-wins conflate for slow consumers", async 
   };
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book(filter);
+  const l1Lease = await client.market.acquireL1BookSubscription(filter);
+  const subscribePromise = l1Lease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
   emitBookTicker(socket, "BTCUSDT", "101000.10");
@@ -1759,7 +1751,8 @@ test("market status publishes when comparison fields change", async () => {
     [Symbol.asyncIterator]();
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book(filter);
+  const l1Lease = await client.market.acquireL1BookSubscription(filter);
+  const subscribePromise = l1Lease.ready;
   const firstSocket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(firstSocket, "SUBSCRIBE", [
     "btcusdt@bookTicker",
@@ -1820,7 +1813,7 @@ test("market status publishes when comparison fields change", async () => {
     },
   });
 
-  await client.market.unsubscribeL1Book(filter);
+  l1Lease.close();
   expect(
     await nextMatchingStatus(
       statusIterator,
@@ -1858,10 +1851,11 @@ test("market all and status streams expose public event filtering", async () => 
     [Symbol.asyncIterator]();
 
   await client.start();
-  const subscribePromise = client.market.subscribeL1Book({
+  const l1Lease = await client.market.acquireL1BookSubscription({
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   });
+  const subscribePromise = l1Lease.ready;
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
   await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
 
@@ -1926,10 +1920,7 @@ test("market all and status streams expose public event filtering", async () => 
   });
   expect(await nextEvent(allIterator)).toMatchObject(freshStatus);
 
-  await client.market.unsubscribeL1Book({
-    venue: "binance",
-    symbol: "BTC/USDT:USDT",
-  });
+  l1Lease.close();
   let inactiveStatusEvent: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const event = await nextEvent(statusIterator);

@@ -3,6 +3,7 @@ import {
   createClient,
   type FundingRateUpdatedEvent,
   type L1BookUpdatedEvent,
+  type MarketSubscriptionLease,
 } from "../index.ts";
 
 interface CliOptions {
@@ -42,7 +43,7 @@ interface SmokeResult {
   ignoredOutdatedEvents: number;
   lastObservedVersion: number;
   statusAfterSubscribe: Record<string, unknown>;
-  statusAfterUnsubscribe: Record<string, unknown>;
+  statusAfterRelease: Record<string, unknown>;
   reconnect?: ReconnectSummary;
 }
 
@@ -56,7 +57,7 @@ interface FundingSmokeResult {
   ignoredOutdatedEvents: number;
   lastObservedVersion: number;
   statusAfterSubscribe: Record<string, unknown>;
-  statusAfterUnsubscribe: Record<string, unknown>;
+  statusAfterRelease: Record<string, unknown>;
   reconnect?: ReconnectSummary;
 }
 
@@ -407,17 +408,18 @@ async function smokeSymbol(options: {
     .l1BookUpdates(key)
     [Symbol.asyncIterator]();
   const socketIndex = TrackedWebSocket.instances.length;
+  let l1Lease: MarketSubscriptionLease | undefined;
 
   try {
     const subscribeStartedAt = Date.now();
-    await options.client.market.subscribeL1Book(key);
-    const subscribeLatencyMs = Date.now() - subscribeStartedAt;
-
+    l1Lease = await options.client.market.acquireL1BookSubscription(key);
     const socket = await waitForTrackedSocket(
       socketIndex,
       5_000,
       `Timed out waiting for tracked websocket for ${options.symbol}`,
     );
+    await l1Lease.ready;
+    const subscribeLatencyMs = Date.now() - subscribeStartedAt;
     const initialBook = options.client.market.getL1Book(key);
     const statusAfterSubscribe = options.client.market.getMarketStatus(key);
     if (!initialBook || !statusAfterSubscribe) {
@@ -526,10 +528,11 @@ async function smokeSymbol(options: {
       lastObservedVersion = soak.lastVersion;
     }
 
-    await options.client.market.unsubscribeL1Book(key);
-    const statusAfterUnsubscribe = options.client.market.getMarketStatus(key);
-    if (!statusAfterUnsubscribe) {
-      throw new Error(`Missing status after unsubscribe for ${options.symbol}`);
+    l1Lease.close();
+    l1Lease = undefined;
+    const statusAfterRelease = options.client.market.getMarketStatus(key);
+    if (!statusAfterRelease) {
+      throw new Error(`Missing status after lease close for ${options.symbol}`);
     }
 
     return {
@@ -555,10 +558,11 @@ async function smokeSymbol(options: {
       ignoredOutdatedEvents,
       lastObservedVersion,
       statusAfterSubscribe: cloneStatus(statusAfterSubscribe),
-      statusAfterUnsubscribe: cloneStatus(statusAfterUnsubscribe),
+      statusAfterRelease: cloneStatus(statusAfterRelease),
       reconnect,
     };
   } finally {
+    l1Lease?.close();
     await iterator.return?.();
   }
 }
@@ -605,20 +609,22 @@ async function smokeFundingRateAttempt(options: {
     .fundingRateUpdates(key)
     [Symbol.asyncIterator]();
   const socketIndex = TrackedWebSocket.instances.length;
+  let fundingLease: MarketSubscriptionLease | undefined;
 
   try {
     const subscribeStartedAt = Date.now();
-    const subscribePromise = options.client.market.subscribeFundingRate(key);
+    fundingLease =
+      await options.client.market.acquireFundingRateSubscription(key);
     const socket = await waitForTrackedSocket(
       socketIndex,
       5_000,
       `Timed out waiting for tracked funding websocket for ${options.symbol}`,
     );
     try {
-      await subscribePromise;
+      await fundingLease.ready;
     } catch (error) {
       throw new Error(
-        `Funding subscription failed for ${options.symbol}: ${
+        `Funding lease ready failed for ${options.symbol}: ${
           error instanceof Error ? error.message : String(error)
         }; attempt=${options.attempt}/${FUNDING_SUBSCRIBE_ATTEMPTS}; socket=${JSON.stringify(
           summarizeSocket(socket),
@@ -735,12 +741,13 @@ async function smokeFundingRateAttempt(options: {
       lastObservedVersion = soak.lastVersion;
     }
 
-    await options.client.market.unsubscribeFundingRate(key);
-    const statusAfterUnsubscribe =
+    fundingLease.close();
+    fundingLease = undefined;
+    const statusAfterRelease =
       options.client.market.getFundingRate(key)?.status;
-    if (!statusAfterUnsubscribe) {
+    if (!statusAfterRelease) {
       throw new Error(
-        `Missing funding status after unsubscribe for ${options.symbol}`,
+        `Missing funding status after lease close for ${options.symbol}`,
       );
     }
 
@@ -770,11 +777,11 @@ async function smokeFundingRateAttempt(options: {
       ignoredOutdatedEvents,
       lastObservedVersion,
       statusAfterSubscribe: cloneStatus(statusAfterSubscribe),
-      statusAfterUnsubscribe: cloneStatus(statusAfterUnsubscribe),
+      statusAfterRelease: cloneStatus(statusAfterRelease),
       reconnect,
     };
   } finally {
-    await options.client.market.unsubscribeFundingRate(key);
+    fundingLease?.close();
     await iterator.return?.();
   }
 }

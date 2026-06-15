@@ -352,10 +352,11 @@ test("signing clock offset does not change market freshness receivedAt", async (
     await waitForValue(() => (serverTimeCalls >= 5 ? true : undefined));
 
     const beforeSubscribe = Date.now();
-    const subscribePromise = client.market.subscribeL1Book({
+    const l1Lease = await client.market.acquireL1BookSubscription({
       venue: "binance",
       symbol: "BTC/USDT:USDT",
     });
+    const subscribePromise = l1Lease.ready;
 
     const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
     await waitForBinanceControlFrame(socket, "SUBSCRIBE", [

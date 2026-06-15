@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 49
+- **Total Sessions**: 50
 - **Last Active**: 2026-06-15
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1747 | Active |
+| `journal-1.md` | ~1780 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 50 | 2026-06-15 | Binance ACCOUNT_CONFIG_UPDATE 杠杆更新 | `94d3452` | `feat/binance-account-config-leverage` |
 | 49 | 2026-06-15 | Market subscription lease API | `f05af49`, `95ff8bd`, `b348f04`, `ce7b505` | `main` |
 | 48 | 2026-06-14 | Public market history queries | `8fb896f`, `7005723`, `b90e3b2`, `10aa860` | `feat/new_public_methods` |
 | 47 | 2026-06-14 | 实现 public raw trades 查询 | `5711f3d` | `feat/new_public_methods` |

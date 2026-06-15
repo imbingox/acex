@@ -1745,3 +1745,36 @@ Implemented client.fee manager for account-scoped symbol fee rates, migrated fee
 ### Next Steps
 
 - None - task complete
+
+
+## Session 50: Binance ACCOUNT_CONFIG_UPDATE 杠杆更新
+
+**Date**: 2026-06-15
+**Task**: Binance ACCOUNT_CONFIG_UPDATE 杠杆更新
+**Branch**: `feat/binance-account-config-leverage`
+
+### Summary
+
+实现 Binance PAPI 私有 WS ACCOUNT_CONFIG_UPDATE 事件处理，使用 ac.s/ac.l 更新已有仓位 leverage，并补充单元/集成测试与文档规范。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `94d3452` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

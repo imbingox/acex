@@ -15,51 +15,56 @@ bun add @imbingox/acex
 ### 行情（无需凭证）
 
 ```ts
-import { createClient } from "@imbingox/acex";
+import { createClient, type MarketSubscriptionLease } from "@imbingox/acex";
 
 const client = createClient();
-await client.start();
+let l1Lease: MarketSubscriptionLease | undefined;
+let fundingLease: MarketSubscriptionLease | undefined;
 
-const l1Lease = await client.market.acquireL1BookSubscription({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-await l1Lease.ready;
+try {
+  await client.start();
 
-const book = client.market.getL1Book({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-const books = client.market.getL1Books("BTC/USDT:USDT");
-console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
-console.log(`venues=${books.length}`);
-console.log(`book freshness=${book?.status.freshness}`);
+  l1Lease = await client.market.acquireL1BookSubscription({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  await l1Lease.ready;
 
-const fundingLease = await client.market.acquireFundingRateSubscription({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-await fundingLease.ready;
+  const book = client.market.getL1Book({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const books = client.market.getL1Books("BTC/USDT:USDT");
+  console.log(`bid=${book?.bidPrice} ask=${book?.askPrice}`);
+  console.log(`venues=${books.length}`);
+  console.log(`book freshness=${book?.status.freshness}`);
 
-const funding = client.market.getFundingRate({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-});
-const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
-console.log(`funding=${funding?.fundingRate}`);
-console.log(`funding venues=${fundingRates.length}`);
+  fundingLease = await client.market.acquireFundingRateSubscription({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  await fundingLease.ready;
 
-for await (const event of client.market.events.l1BookUpdates({
-  venue: "binance",
-  symbol: "BTC/USDT:USDT",
-})) {
-  console.log(event.snapshot.bidPrice);
-  break;
+  const funding = client.market.getFundingRate({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+  const fundingRates = client.market.getFundingRates("BTC/USDT:USDT");
+  console.log(`funding=${funding?.fundingRate}`);
+  console.log(`funding venues=${fundingRates.length}`);
+
+  for await (const event of client.market.events.l1BookUpdates({
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  })) {
+    console.log(event.snapshot.bidPrice);
+    break;
+  }
+} finally {
+  l1Lease?.close();
+  fundingLease?.close();
+  await client.stop();
 }
-
-l1Lease.close();
-fundingLease.close();
-await client.stop();
 ```
 
 ### 同一个 client 同时使用 Binance + Juplend

@@ -15,6 +15,7 @@
     "historical-funding-rate",
     "include-package-release-docs",
     "market-catalog-reload",
+    "market-subscription-leases",
     "market-ws-connection-multiplexing",
     "observability-onmetric",
     "open-order-unknown-ttl",

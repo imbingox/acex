@@ -84,6 +84,8 @@ interface MarketRecord {
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
   fundingRateStream?: StreamHandle;
+  l1BookStreamReady: boolean;
+  fundingRateStreamReady: boolean;
   l1BookLeases: Set<MarketSubscriptionLeaseState>;
   fundingRateLeases: Set<MarketSubscriptionLeaseState>;
   lastPublishedStatusKey?: MarketStatusPublicationKey;
@@ -688,8 +690,10 @@ export class MarketManagerImpl
 
       record.l1BookStream?.close();
       record.l1BookStream = undefined;
+      record.l1BookStreamReady = false;
       record.fundingRateStream?.close();
       record.fundingRateStream = undefined;
+      record.fundingRateStreamReady = false;
       record.l1Freshness = record.l1Book ? "stale" : undefined;
       record.fundingRateFreshness = record.fundingRate ? "stale" : undefined;
       this.syncL1BookStatus(record, now, "inactive");
@@ -1186,6 +1190,8 @@ export class MarketManagerImpl
       symbol: input.symbol,
       l1BookSubscribed: false,
       fundingRateSubscribed: false,
+      l1BookStreamReady: false,
+      fundingRateStreamReady: false,
       l1BookLeases: new Set(),
       fundingRateLeases: new Set(),
       status: freezeMarketStatus({
@@ -1216,10 +1222,6 @@ export class MarketManagerImpl
     }
     this.recomputeAndPublishStatus(record);
 
-    if (record.l1Book) {
-      state.resolveReady();
-    }
-
     try {
       this.startL1BookStreamIfNeeded(record, market);
     } catch (error) {
@@ -1227,6 +1229,10 @@ export class MarketManagerImpl
         rejectPendingReady: false,
       });
       throw error;
+    }
+
+    if (record.l1BookStreamReady && record.l1Book) {
+      state.resolveReady();
     }
 
     return this.createMarketSubscriptionLease(record, state);
@@ -1248,10 +1254,6 @@ export class MarketManagerImpl
     }
     this.recomputeAndPublishStatus(record);
 
-    if (record.fundingRate) {
-      state.resolveReady();
-    }
-
     try {
       this.startFundingRateStreamIfNeeded(record, market);
     } catch (error) {
@@ -1259,6 +1261,10 @@ export class MarketManagerImpl
         rejectPendingReady: false,
       });
       throw error;
+    }
+
+    if (record.fundingRateStreamReady && record.fundingRate) {
+      state.resolveReady();
     }
 
     return this.createMarketSubscriptionLease(record, state);
@@ -1309,6 +1315,7 @@ export class MarketManagerImpl
   private deactivateL1BookSubscription(record: MarketRecord): void {
     record.l1BookStream?.close();
     record.l1BookStream = undefined;
+    record.l1BookStreamReady = false;
     record.l1BookSubscribed = false;
     record.l1Freshness = undefined;
     record.l1Reason = undefined;
@@ -1319,6 +1326,7 @@ export class MarketManagerImpl
   private deactivateFundingRateSubscription(record: MarketRecord): void {
     record.fundingRateStream?.close();
     record.fundingRateStream = undefined;
+    record.fundingRateStreamReady = false;
     record.fundingRateSubscribed = false;
     record.fundingRateFreshness = undefined;
     record.fundingRateReason = undefined;
@@ -1334,6 +1342,7 @@ export class MarketManagerImpl
       return;
     }
 
+    record.l1BookStreamReady = false;
     const stream = this.createL1BookStream(record, market);
     record.l1BookStream = stream;
     void this.monitorL1BookStreamReady(record, market, stream);
@@ -1347,6 +1356,7 @@ export class MarketManagerImpl
       return;
     }
 
+    record.fundingRateStreamReady = false;
     const stream = this.createFundingRateStream(record, market);
     record.fundingRateStream = stream;
     void this.monitorFundingRateStreamReady(record, market, stream);
@@ -1363,6 +1373,7 @@ export class MarketManagerImpl
         return;
       }
 
+      record.l1BookStreamReady = true;
       this.resolvePendingLeases(record.l1BookLeases);
     } catch (error) {
       if (record.l1BookStream !== stream) {
@@ -1390,6 +1401,7 @@ export class MarketManagerImpl
         return;
       }
 
+      record.fundingRateStreamReady = true;
       this.resolvePendingLeases(record.fundingRateLeases);
     } catch (error) {
       if (record.fundingRateStream !== stream) {
@@ -1416,8 +1428,10 @@ export class MarketManagerImpl
     stream.close();
     if (channel === "l1Book") {
       record.l1BookStream = undefined;
+      record.l1BookStreamReady = false;
     } else {
       record.fundingRateStream = undefined;
+      record.fundingRateStreamReady = false;
     }
 
     const timeoutError = this.createMarketStreamTimeoutError(market, error);

@@ -660,6 +660,128 @@ test("MarketManager initial stream failure rejects pending leases and allows a f
   ).toMatchObject({ bidPrice: "103.1", version: 1 });
 });
 
+test("MarketManager L1 reacquire after close waits for the new stream before ready", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const firstLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const firstStream = await waitForValue(() => okxAdapter.l1BookStreams[0]);
+  firstStream.emitUpdate({
+    bidPrice: "103.1",
+    bidSize: "6",
+    askPrice: "103.2",
+    askSize: "7",
+    receivedAt: 1710000000300,
+  });
+  await firstLease.ready;
+  firstLease.close();
+
+  expect(
+    manager.getL1Book({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ bidPrice: "103.1" });
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const reacquiredLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  await expectPending(reacquiredLease.ready, 10);
+  const readyFailure = reacquiredLease.ready.catch((error) => error);
+  const failedStream = await waitForValue(() => okxAdapter.l1BookStreams[1]);
+
+  failedStream.rejectReady(new Error("fresh l1 failed"));
+
+  expect(await readyFailure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(failedStream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const recoveredLease = await manager.acquireL1BookSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const recoveredStream = await waitForValue(() => okxAdapter.l1BookStreams[2]);
+  recoveredStream.emitUpdate({
+    bidPrice: "104.1",
+    bidSize: "8",
+    askPrice: "104.2",
+    askSize: "9",
+    receivedAt: 1710000000400,
+  });
+  await recoveredLease.ready;
+  expect(okxAdapter.l1BookStreams).toHaveLength(3);
+});
+
+test("MarketManager funding reacquire after close waits for the new stream before ready", async () => {
+  const okxAdapter = new FakeOkxMarketAdapter();
+  const manager = new MarketManagerImpl(
+    new StubMarketContext(),
+    new Map<Venue, MarketAdapter>([[okxAdapter.venue, okxAdapter]]),
+  );
+
+  const firstLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const firstStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[0],
+  );
+  firstStream.emitUpdate({
+    fundingRate: "0.0001",
+    receivedAt: 1710000000300,
+  });
+  await firstLease.ready;
+  firstLease.close();
+
+  expect(
+    manager.getFundingRate({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ fundingRate: "0.0001" });
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const reacquiredLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  await expectPending(reacquiredLease.ready, 10);
+  const readyFailure = reacquiredLease.ready.catch((error) => error);
+  const failedStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[1],
+  );
+
+  failedStream.rejectReady(new Error("fresh funding failed"));
+
+  expect(await readyFailure).toMatchObject({ code: "MARKET_STREAM_TIMEOUT" });
+  expect(failedStream.closeCalls).toBe(1);
+  expect(
+    manager.getMarketStatus({ venue: "okx", symbol: "BTC/USDT:USDT" }),
+  ).toMatchObject({ activity: "inactive", ready: false });
+
+  const recoveredLease = await manager.acquireFundingRateSubscription({
+    venue: "okx",
+    symbol: "BTC/USDT:USDT",
+  });
+  const recoveredStream = await waitForValue(
+    () => okxAdapter.fundingRateStreams[2],
+  );
+  recoveredStream.emitUpdate({
+    fundingRate: "0.0002",
+    receivedAt: 1710000000400,
+  });
+  await recoveredLease.ready;
+  expect(okxAdapter.fundingRateStreams).toHaveLength(3);
+});
+
 test("MarketManager pending leases survive client stop and resolve after restart", async () => {
   const okxAdapter = new FakeOkxMarketAdapter();
   const manager = new MarketManagerImpl(

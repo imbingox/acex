@@ -204,8 +204,12 @@ const lease = await client.market.acquireL1BookSubscription({
   venue: "binance",
   symbol,
 });
-await lease.ready;
-const snapshot = client.market.getL1Book({ venue: "binance", symbol });
+try {
+  await lease.ready;
+  const snapshot = client.market.getL1Book({ venue: "binance", symbol });
+} finally {
+  lease.close();
+}
 ```
 
 如果首条数据迟迟不到，`lease.ready` 会 reject，SDK 会自动释放该 lease。稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。行情多路复用连接健康时，单个 symbol 长时间没有新盘口推送不会被标记为 `stale`；这通常表示盘口未变化，若需要 per-symbol 活跃度请用 `lastReceivedAt` 自行计算 age。

@@ -9,6 +9,7 @@
     "binance-account-config-leverage",
     "binance-order-trades",
     "binance-rate-limit-topology",
+    "binance-risk-leverage-account-events",
     "binance-tradfi-public-market",
     "cancel-all-response-shape",
     "event-bus-resume-streams",

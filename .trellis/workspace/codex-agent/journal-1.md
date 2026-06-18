@@ -1778,3 +1778,36 @@ Implemented client.fee manager for account-scoped symbol fee rates, migrated fee
 ### Next Steps
 
 - None - task complete
+
+
+## Session 51: Binance riskLeverage websocket updates
+
+**Date**: 2026-06-18
+**Task**: Binance riskLeverage websocket updates
+**Branch**: `main`
+
+### Summary
+
+Implemented Binance riskLeverage updates from ACCOUNT_UPDATE and riskLevelChange, fixed zero-exposure REST risk leverage, updated docs/specs, and added integration coverage.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `937d503` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

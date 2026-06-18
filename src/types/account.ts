@@ -162,6 +162,7 @@ export interface RiskLevelChangedEvent extends AccountEventBase {
   riskRatio?: string;
   netEquity?: string;
   riskEquity?: string;
+  riskLeverage?: string;
   maintenanceMargin?: string;
   exchangeTs?: number;
   receivedAt: number;

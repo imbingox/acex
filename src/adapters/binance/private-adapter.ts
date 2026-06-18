@@ -518,7 +518,7 @@ function calculateRiskLeverage(
   }, new BigNumber(0));
 
   return grossExposure.isZero()
-    ? undefined
+    ? "0"
     : grossExposure.dividedBy(riskEquityValue).toString(10);
 }
 

@@ -70,6 +70,48 @@ function isZeroDecimal(value: string): boolean {
   return new BigNumber(value).isZero();
 }
 
+function calculateSnapshotRiskLeverage(
+  riskEquity: string | undefined,
+  positions: Iterable<PositionSnapshot>,
+): string | undefined {
+  if (!riskEquity) {
+    return undefined;
+  }
+
+  const riskEquityValue = new BigNumber(riskEquity);
+  if (!riskEquityValue.isFinite() || riskEquityValue.isZero()) {
+    return undefined;
+  }
+
+  let grossExposure = new BigNumber(0);
+  for (const position of positions) {
+    const size = new BigNumber(position.size);
+    if (!size.isFinite()) {
+      return undefined;
+    }
+    if (size.isZero()) {
+      continue;
+    }
+
+    if (!position.markPrice) {
+      return undefined;
+    }
+
+    const markPrice = new BigNumber(position.markPrice);
+    if (!markPrice.isFinite()) {
+      return undefined;
+    }
+
+    grossExposure = grossExposure.plus(
+      size.multipliedBy(markPrice).absoluteValue(),
+    );
+  }
+
+  return grossExposure.isZero()
+    ? "0"
+    : grossExposure.dividedBy(riskEquityValue).toString(10);
+}
+
 function isZeroBalance(balance: BalanceSnapshot): boolean {
   return (
     isZeroDecimal(balance.free) &&
@@ -391,6 +433,7 @@ export class AccountManagerImpl
     let risk = previous.risk;
 
     let latestAppliedAt = 0;
+    let appliedSizePositionUpdate = false;
     for (const balance of update.balances ?? []) {
       if (
         !shouldApplyWatermarkedUpdate(balances[balance.asset], balance, {
@@ -447,6 +490,9 @@ export class AccountManagerImpl
         positions.set(key, nextPosition);
       }
 
+      if (position.size !== undefined) {
+        appliedSizePositionUpdate = true;
+      }
       latestAppliedAt = Math.max(latestAppliedAt, nextPosition.receivedAt);
       this.accountBus.publish({
         type: "position.updated",
@@ -458,14 +504,30 @@ export class AccountManagerImpl
       });
     }
 
+    let riskUpdate = update.risk;
+    if (options.requestStartedAt === undefined && appliedSizePositionUpdate) {
+      const riskLeverage = calculateSnapshotRiskLeverage(
+        riskUpdate?.riskEquity ?? previous.risk?.riskEquity,
+        positions.values(),
+      );
+      if (riskLeverage !== undefined) {
+        riskUpdate = {
+          ...riskUpdate,
+          riskLeverage,
+          exchangeTs: riskUpdate?.exchangeTs ?? update.exchangeTs,
+          receivedAt: riskUpdate?.receivedAt ?? update.receivedAt,
+        };
+      }
+    }
+
     if (
-      update.risk &&
-      shouldApplyWatermarkedUpdate(previous.risk, update.risk, {
+      riskUpdate &&
+      shouldApplyWatermarkedUpdate(previous.risk, riskUpdate, {
         requestStartedAt: options.requestStartedAt,
         source: options.requestStartedAt === undefined ? "stream" : "rest",
       })
     ) {
-      risk = this.createRisk(accountId, venue, update.risk, previous.risk);
+      risk = this.createRisk(accountId, venue, riskUpdate, previous.risk);
       latestAppliedAt = Math.max(latestAppliedAt, risk.receivedAt);
       this.accountBus.publish({
         type: "risk.updated",
@@ -511,6 +573,12 @@ export class AccountManagerImpl
       return;
     }
 
+    const previous =
+      record.snapshot ?? this.createEmptySnapshot(accountId, venue);
+    const riskLeverage = calculateSnapshotRiskLeverage(
+      event.riskEquity ?? previous.risk?.riskEquity,
+      previous.positions,
+    );
     const riskEvent: RiskLevelChangedEvent = {
       type: "account.risk_level_change",
       accountId,
@@ -519,6 +587,7 @@ export class AccountManagerImpl
       riskRatio: event.riskRatio,
       netEquity: event.netEquity,
       riskEquity: event.riskEquity,
+      riskLeverage,
       maintenanceMargin: event.maintenanceMargin,
       exchangeTs: event.exchangeTs,
       receivedAt: event.receivedAt,
@@ -526,13 +595,12 @@ export class AccountManagerImpl
     };
     this.accountBus.publish(riskEvent);
 
-    const previous =
-      record.snapshot ?? this.createEmptySnapshot(accountId, venue);
     const riskUpdate: RawRiskUpdate = {
       riskLevel: event.riskLevel,
       riskRatio: event.riskRatio,
       netEquity: event.netEquity,
       riskEquity: event.riskEquity,
+      riskLeverage,
       maintenanceMargin: event.maintenanceMargin,
       exchangeTs: event.exchangeTs,
       receivedAt: event.receivedAt,

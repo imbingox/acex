@@ -220,6 +220,16 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
       unrealizedPnl: new BigNumber("25.50").toFixed(),
     },
   });
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "risk.updated",
+    snapshot: {
+      riskLeverage: new BigNumber("0.020")
+        .multipliedBy("101000.20")
+        .dividedBy("1400.75")
+        .toFixed(),
+      exchangeTs: accountUpdateTs,
+    },
+  });
   expect(client.account.getBalance("main-binance", "USDT")).toMatchObject({
     total: new BigNumber("1300.50").toFixed(),
   });
@@ -230,6 +240,54 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
     }),
   ).toMatchObject({
     size: new BigNumber("0.020").toFixed(),
+  });
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLeverage: new BigNumber("0.020")
+      .multipliedBy("101000.20")
+      .dividedBy("1400.75")
+      .toFixed(),
+  });
+
+  const closePositionTs = accountUpdateTs + 1;
+  socket.emitJson({
+    e: "ACCOUNT_UPDATE",
+    E: closePositionTs,
+    T: closePositionTs,
+    a: {
+      P: [
+        {
+          s: "BTCUSDT",
+          pa: "0",
+          ep: "100100.10",
+          up: "0",
+          ps: "BOTH",
+        },
+      ],
+    },
+  });
+
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "position.updated",
+    symbol: "BTC/USDT:USDT",
+    snapshot: {
+      size: "0",
+    },
+  });
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "risk.updated",
+    snapshot: {
+      riskLeverage: "0",
+      exchangeTs: closePositionTs,
+    },
+  });
+  expect(
+    client.account.getPosition({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).toBeUndefined();
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLeverage: "0",
   });
 
   socket.disconnect();
@@ -246,6 +304,97 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   expect(client.account.getAccountStatus("main-binance")).toMatchObject({
     runtimeStatus: "healthy",
     reason: undefined,
+  });
+
+  await iterator.return?.();
+});
+
+test("Binance ACCOUNT_UPDATE does not derive risk leverage without mark price", async () => {
+  installBinancePrivateAccountInfra({
+    umPositions: [
+      {
+        symbol: "BTCUSDT",
+        positionAmt: "0.010",
+        entryPrice: "100000.10",
+        unRealizedProfit: "10.50",
+        liquidationPrice: "80000.00",
+        leverage: "5",
+        notional: "1010.002",
+        positionSide: "BOTH",
+        updateTime: 1710000000200,
+      },
+    ],
+  });
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      venues: {
+        binance: {
+          riskPollIntervalMs: 10_000,
+          privateReconcileIntervalMs: 0,
+        },
+      },
+    },
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "account.snapshot_replaced",
+  });
+  const initialRiskLeverage =
+    client.account.getRiskSnapshot("main-binance")?.riskLeverage;
+
+  socket.emitJson({
+    e: "ACCOUNT_UPDATE",
+    E: 1710000000500,
+    T: 1710000000500,
+    a: {
+      P: [
+        {
+          s: "BTCUSDT",
+          pa: "0.020",
+          ep: "100100.10",
+          up: "25.50",
+          ps: "BOTH",
+        },
+      ],
+    },
+  });
+
+  expect(await nextEvent(iterator)).toMatchObject({
+    type: "position.updated",
+    symbol: "BTC/USDT:USDT",
+    snapshot: {
+      size: new BigNumber("0.020").toFixed(),
+    },
+  });
+  await expect(nextEvent(iterator, 30)).rejects.toThrow(
+    "Timed out waiting for event",
+  );
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLeverage: initialRiskLeverage,
   });
 
   await iterator.return?.();
@@ -334,6 +483,9 @@ test("Binance ACCOUNT_CONFIG_UPDATE updates existing position leverage", async (
   ).toMatchObject({
     size: new BigNumber("0.010").toFixed(),
     leverage: "25",
+  });
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLeverage: new BigNumber("1010.002").dividedBy("1400.75").toFixed(),
   });
 
   await iterator.return?.();
@@ -451,6 +603,10 @@ test("Binance PAPI riskLevelChange publishes account event and backfills risk sn
     riskRatio: new BigNumber("1.9999999900").toFixed(),
     netEquity: new BigNumber("30.2341672800").toFixed(),
     riskEquity: new BigNumber("28.1000").toFixed(),
+    riskLeverage: new BigNumber("0.010")
+      .multipliedBy("101000.20")
+      .dividedBy("28.1000")
+      .toFixed(),
     maintenanceMargin: new BigNumber("15.1170837100").toFixed(),
     exchangeTs: 1710000000500,
   });
@@ -466,6 +622,10 @@ test("Binance PAPI riskLevelChange publishes account event and backfills risk sn
       riskRatio: new BigNumber("1.9999999900").toFixed(),
       netEquity: new BigNumber("30.2341672800").toFixed(),
       riskEquity: new BigNumber("28.1000").toFixed(),
+      riskLeverage: new BigNumber("0.010")
+        .multipliedBy("101000.20")
+        .dividedBy("28.1000")
+        .toFixed(),
       maintenanceMargin: new BigNumber("15.1170837100").toFixed(),
       exchangeTs: 1710000000500,
     },
@@ -475,6 +635,10 @@ test("Binance PAPI riskLevelChange publishes account event and backfills risk sn
     riskRatio: new BigNumber("1.9999999900").toFixed(),
     netEquity: new BigNumber("30.2341672800").toFixed(),
     riskEquity: new BigNumber("28.1000").toFixed(),
+    riskLeverage: new BigNumber("0.010")
+      .multipliedBy("101000.20")
+      .dividedBy("28.1000")
+      .toFixed(),
     maintenanceMargin: new BigNumber("15.1170837100").toFixed(),
     receivedAt: riskLevelEvent.receivedAt,
   });
@@ -1227,6 +1391,9 @@ test("Binance full private reconcile removes stale balances and positions", asyn
     200,
     "full private reconcile did not remove stale account records",
   );
+  expect(client.account.getRiskSnapshot("main-binance")).toMatchObject({
+    riskLeverage: "0",
+  });
 
   expect(client.account.getBalances("main-binance")).toEqual([
     expect.objectContaining({

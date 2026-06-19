@@ -12,14 +12,15 @@
 - [6. AccountManager](#6-accountmanager)
 - [7. OrderManager](#7-ordermanager)
 - [8. FeeManager](#8-feemanager)
-- [9. 健康与错误事件](#9-健康与错误事件)
-- [10. 数据类型速查](#10-数据类型速查)
-- [11. 错误处理](#11-错误处理)
-- [12. 当前限制](#12-当前限制)
+- [9. RiskLimitManager](#9-risklimitmanager)
+- [10. 健康与错误事件](#10-健康与错误事件)
+- [11. 数据类型速查](#11-数据类型速查)
+- [12. 错误处理](#12-错误处理)
+- [13. 当前限制](#13-当前限制)
 
 ## 1. 当前能力
 
-`@imbingox/acex` 是状态型多 venue SDK。调用方创建一个 `AcexClient`，通过 `market` / `account` / `order` / `fee` 四个 manager 读取最新快照、消费事件流、执行命令和查询手续费费率；SDK 内部维护本地缓存、ready barrier、WebSocket 生命周期、自动重连、REST timeout / retry / 错误脱敏和 reactive rate limiter。
+`@imbingox/acex` 是状态型多 venue SDK。调用方创建一个 `AcexClient`，通过 `market` / `account` / `order` / `fee` / `riskLimit` 五个 manager 读取最新快照、消费事件流、执行命令、查询手续费费率和交易所硬风控限制；SDK 内部维护本地缓存、ready barrier、WebSocket 生命周期、自动重连、REST timeout / retry / 错误脱敏和 reactive rate limiter。
 
 当前 runtime 落地：
 
@@ -30,6 +31,8 @@
 | `okx` / `bybit` / `gate` | 类型占位 | 类型占位 | 类型占位 |
 
 FeeManager 当前可对 Binance `swap` 通过 PAPI UM `commissionRate` 读取账号级真实费率；其他 venue 或 Binance spot/future 先返回默认费率。
+
+RiskLimitManager 当前可对 Binance PAPI UM 读取 leverage bracket / notional tier，缓存按账户全量后台刷新，并支持设置 symbol leverage。其他 venue 会明确抛 `VENUE_NOT_SUPPORTED`。
 
 ## 2. 快速接入
 
@@ -110,7 +113,33 @@ const openOrders = client.order.getOpenOrders("main-binance");
 
 Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护；默认每 60s 还会用 `/papi/v1/balance`、`/papi/v1/account`、`/papi/v1/um/positionRisk` 和订单 REST 接口做 private reconcile。Binance 全账户 `/papi/v1/um/openOrders` 不带 symbol 时 request weight 较高，默认 60s 是保守值。读取余额、仓位或风险数据时必须订阅 `client.account.subscribeAccount()`；`client.order.subscribeOrders()` 只维护订单缓存，即使底层复用同一条 private WS，也不会维护 account 仓位缓存。
 
-### 2.4 注册 Juplend 只读账户
+### 2.4 读取 Binance 风控档位并设置杠杆
+
+```ts
+const cached = client.riskLimit.getSymbolRiskLimit({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+if (cached.tiers.source === "missing" || cached.tiers.stale) {
+  await client.riskLimit.fetchRiskLimits({ accountId: "main-binance" });
+}
+
+const snapshot = client.riskLimit.getSymbolRiskLimit({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+const leverage = await client.riskLimit.setSymbolLeverage({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+  leverage: "4",
+});
+```
+
+`getSymbolRiskLimit()` 只读本地缓存，不发 REST；未命中时返回 `tiers.source: "missing"` / `stale: true`。client 启动后会按账户周期性全量刷新 risk limit cache；需要等待最新交易所数据时调用 `fetchRiskLimits()` 或 `fetchSymbolRiskLimit()`。
+
+### 2.5 注册 Juplend 只读账户
 
 ```ts
 const client = createClient({
@@ -164,7 +193,7 @@ await client.registerAccount({
 
 Juplend 不需要私钥，不支持 supply / borrow / repay / withdraw。`accountId` 是 SDK 内的逻辑账户名，不是钱包地址。
 
-### 2.5 下单和撤单
+### 2.6 下单和撤单
 
 ```ts
 const order = await client.order.createOrder({
@@ -281,10 +310,13 @@ const client = createClient({
       },
     },
   },
+  riskLimit: {
+    refreshIntervalMs: 5 * 60 * 1000,
+  },
 });
 ```
 
-`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `account.venues.binance.riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`account.venues.binance.privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。Juplend 只使用 `account.venues.juplend.pollIntervalMs` 驱动 adapter polling，不继承 Binance 的 reconcile/risk polling 默认。`onMetric` 是同步可观测性钩子；callback 抛错会被 SDK 吞掉，不会打断下单、订阅或事件发布流程。未传 `onMetric` 时，热路径不会计算 latency 或构造 tags。`sandbox`、`logger`、`logLevel` 目前是预留位。
+`clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；risk limit 设置杠杆请求使用 `priority:"risk"`。响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `account.venues.binance.riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`account.venues.binance.privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`riskLimit.refreshIntervalMs` 默认 5 分钟，用于账户级 leverage bracket / notional tier 全量后台刷新。Juplend 只使用 `account.venues.juplend.pollIntervalMs` 驱动 adapter polling，不继承 Binance 的 reconcile/risk polling 默认。`onMetric` 是同步可观测性钩子；callback 抛错会被 SDK 吞掉，不会打断下单、订阅或事件发布流程。未传 `onMetric` 时，热路径不会计算 latency 或构造 tags。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
 ### 4.1.1 Metrics
 
@@ -663,7 +695,60 @@ const fresh = await client.fee.fetchSymbolFeeRate({
 - Binance 当前只对 `swap` 使用 PAPI UM `commissionRate` 真实刷新；`spot` / `future` 先返回默认值，显式 `fetchSymbolFeeRate()` 会抛 `VENUE_NOT_SUPPORTED`。
 - 远端查询失败会包装为 `FEE_RATE_FETCH_FAILED`；后台刷新失败保留旧真实值或默认值，并通过 `client.events.errors()` 发布 `source: "fee"`。
 
-## 9. 健康与错误事件
+## 9. RiskLimitManager
+
+```ts
+interface RiskLimitManager {
+  getSymbolRiskLimit(input: GetSymbolRiskLimitInput): SymbolRiskLimitSnapshot;
+  getSymbolRiskLimits(accountId?: string): SymbolRiskLimitSnapshot[];
+  fetchSymbolRiskLimit(
+    input: GetSymbolRiskLimitInput,
+  ): Promise<SymbolRiskLimitSnapshot>;
+  fetchRiskLimits(
+    input: FetchRiskLimitsInput,
+  ): Promise<SymbolRiskLimitSnapshot[]>;
+  setSymbolLeverage(
+    input: SetSymbolLeverageInput,
+  ): Promise<SymbolLeverageUpdate>;
+}
+```
+
+RiskLimitManager 查询的是交易所硬风控限制：leverage bracket、notional tier、当前账户 / symbol 的 notional coefficient，以及最近一次 SDK 设置杠杆的交易所回包。它不维护仓位、挂单或真实当前杠杆；真实当前杠杆仍以 `AccountManager` 的 `PositionSnapshot.leverage` 为准。
+
+```ts
+const cached = client.riskLimit.getSymbolRiskLimit({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+if (cached.tiers.source === "missing" || cached.tiers.stale) {
+  await client.riskLimit.fetchRiskLimits({ accountId: "main-binance" });
+}
+
+const fresh = await client.riskLimit.fetchSymbolRiskLimit({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+});
+
+const leverage = await client.riskLimit.setSymbolLeverage({
+  accountId: "main-binance",
+  symbol: "BTC/USDT:USDT",
+  leverage: "4",
+});
+```
+
+- `getSymbolRiskLimit()` 是同步本地读取；未命中会返回 `tiers.source: "missing"`、`tiers.stale: true`、`tiers.items: []`，不会发起 REST 请求。
+- client 启动后，已注册账户会按 `CreateClientOptions.riskLimit.refreshIntervalMs` 做账户级全量后台刷新；默认 5 分钟。后台刷新调用交易所全量 endpoint 并批量写入该账户的 symbol cache。
+- `fetchSymbolRiskLimit()` 立即远端查询单个 symbol，成功后写回缓存。
+- `fetchRiskLimits()` 立即远端全量刷新账户下所有返回的 symbol，成功后批量写回缓存。
+- `setSymbolLeverage()` 先做本地输入校验；leverage 必须是 1 到 125 的整数。成功后只更新 `snapshot.leverage.lastSet`，不会把旧的 `snapshot.tiers.stale` 改成 `false`。
+- `snapshot.leverage.lastSet` 只表示本 SDK 最近一次 `setSymbolLeverage()` 成功回包，不代表账户真实当前杠杆。账户真实当前杠杆仍由 `AccountManager.position.leverage` 通过 private account stream / account refresh 维护。
+- 凭证更新会把该账户已有 tier cache 降级为 missing/stale；旧 in-flight 结果不会写回。凭证更新后的显式 `fetchRiskLimits()` 会用新 generation 发起新请求，不复用旧请求。
+- 账户移除会清理该账户全部 risk limit cache。
+- Binance PAPI UM 当前使用 `GET /papi/v1/um/leverageBracket` 和 `POST /papi/v1/um/leverage`；两个 endpoint request weight 都是 1。`notionalCoef` 映射为 `snapshot.tiers.notionalCoefficient`，设置杠杆回包里的 `maxNotionalValue` 映射为 `SymbolLeverageUpdate.maxNotionalValue`。
+- 远端查询失败会包装为 `RISK_LIMIT_FETCH_FAILED`；设置杠杆失败会包装为 `LEVERAGE_SET_FAILED`；无凭证会抛 `CREDENTIALS_MISSING`；非 Binance 或未实现 venue 会抛 `VENUE_NOT_SUPPORTED`。
+
+## 10. 健康与错误事件
 
 ```ts
 const health = client.getHealth();
@@ -684,7 +769,7 @@ for await (const error of client.events.errors({ maxBuffer: 20_000 })) {
 
 `getHealth()` 聚合 client、market、account、order 的当前状态。`events.health(filter, options?)` 只返回满足 filter 的事件；如果事件没有 filter 请求的字段，会被过滤掉。`events.health()` 与 `events.errors()` 只支持 `{ maxBuffer?: number }`，默认 buffer 上限同样是 `10_000`；`errors()` 自身溢出时只丢弃最旧错误事件，不再发布新的 overflow 错误，避免递归。
 
-## 10. 数据类型速查
+## 11. 数据类型速查
 
 以下类型均从 `@imbingox/acex` 根入口导出；以 package public types 为准。这里列常用形状，完整字段可由 TypeScript 自动补全。
 
@@ -843,6 +928,10 @@ interface CreateClientOptions {
         Partial<Record<MarketType, { maker: string; taker: string }>>
       >
     >;
+  };
+  riskLimit?: {
+    /** ms; defaults to 5 minutes */
+    refreshIntervalMs?: number;
   };
 }
 
@@ -1306,6 +1395,57 @@ interface SymbolFeeRate {
   receivedAt: number;
 }
 
+interface GetSymbolRiskLimitInput {
+  accountId: string;
+  symbol: string;
+}
+
+interface FetchRiskLimitsInput {
+  accountId: string;
+}
+
+interface SetSymbolLeverageInput {
+  accountId: string;
+  symbol: string;
+  leverage: string;
+}
+
+interface RiskLimitTier {
+  tier: number;
+  initialLeverage: string;
+  notionalFloor?: string;
+  notionalCap?: string;
+  maintenanceMarginRatio?: string;
+  cumulativeMaintenanceAmount?: string;
+}
+
+interface SymbolLeverageUpdate {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  leverage: string;
+  maxNotionalValue?: string;
+  receivedAt: number;
+}
+
+interface SymbolRiskLimitSnapshot {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  tiers: {
+    source: "missing" | "venue";
+    stale: boolean;
+    receivedAt?: number;
+    items: RiskLimitTier[];
+    maxInitialLeverage?: string;
+    notionalCoefficient?: string;
+  };
+  leverage: {
+    lastSet?: SymbolLeverageUpdate;
+  };
+  updatedAt: number;
+}
+
 interface OrderSnapshot {
   accountId: string;
   venue: Venue;
@@ -1384,7 +1524,7 @@ type OrderTradeEvent = {
 };
 ```
 
-## 11. 错误处理
+## 12. 错误处理
 
 可预期错误统一抛 `AcexError`：
 
@@ -1447,13 +1587,16 @@ try {
 | `ACCOUNT_NOT_FOUND` | accountId 未注册或已移除 |
 | `CREDENTIALS_MISSING` | private 订阅或下单缺凭证 |
 | `FEE_RATE_FETCH_FAILED` | 单 symbol 手续费费率远端查询失败 |
+| `RISK_LIMIT_FETCH_FAILED` | risk limit / leverage bracket 远端查询失败 |
+| `RISK_LIMIT_INPUT_INVALID` | risk limit 本地输入校验失败，例如 leverage 不是 1 到 125 的整数 |
+| `LEVERAGE_SET_FAILED` | 设置 symbol leverage REST 失败或交易所拒绝 |
 | `ORDER_BOOTSTRAP_FAILED` | open orders bootstrap 失败 |
 | `ORDER_INPUT_INVALID` | 本地订单输入校验失败 |
 | `ORDER_CREATE_FAILED` | 下单 REST 失败或交易所拒单 |
 | `ORDER_CANCEL_FAILED` | 撤单失败 |
 | `ORDER_CANCEL_ALL_FAILED` | 批量撤单失败 |
 
-## 12. 当前限制
+## 13. 当前限制
 
 - market/order runtime 当前只支持 `binance`
 - account runtime 支持 `binance` 和只读 `juplend`
@@ -1461,6 +1604,8 @@ try {
 - Funding Rate 仅支持 Binance 永续合约，包括 Binance TradFi Perps
 - Binance order 命令固定走 PAPI UM，venue 级 `order.supported = true` 不代表 spot、COIN-M 或交割合约都能下单
 - Binance fee 真实远端刷新当前只覆盖 `swap`；spot / future 返回默认费率，显式 fetch 抛 `VENUE_NOT_SUPPORTED`
+- Binance risk limit 当前只覆盖 PAPI UM leverage bracket / set leverage；不覆盖 spot、COIN-M 或交割合约，也不计算下单前剩余名义价值
+- `client.riskLimit.getSymbolRiskLimit()` 只读缓存，不保证首次调用已有交易所数据；需要强一致时调用显式 `fetchRiskLimits()` / `fetchSymbolRiskLimit()`
 - `cancelAllOrders()` 必须带 `symbol`，不支持账户级全撤
 - `createOrder()` 不支持条件单、改单
 - SDK 不自动纠偏订单精度；下游应使用 `normalizeOrderInput()`

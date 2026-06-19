@@ -53,7 +53,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
     "@changesets/cli": "^2.31.0",
-    "@mindfoldhq/trellis": "^0.4.0",
+    "@mindfoldhq/trellis": "^0.6.3",
     "@types/bun": "latest",
     "typescript": "^6.0.2"
   },

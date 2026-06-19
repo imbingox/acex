@@ -95,7 +95,7 @@ def _collect_git_repo_info(name: str, rel_path: str, repo_dir: Path) -> dict | N
     branch = branch_out.strip() or "unknown"
 
     _, status_out, _ = run_git(["status", "--porcelain"], cwd=repo_dir)
-    changes = len([line for line in status_out.splitlines() if line.strip()])
+    changes = len([l for l in status_out.splitlines() if l.strip()])
 
     _, log_out, _ = run_git(["log", "--oneline", "-5"], cwd=repo_dir)
 
@@ -412,7 +412,7 @@ def _get_update_hint(repo_root: Path) -> str | None:
 
     return (
         f"Trellis update available: {current_version} -> {latest_version}, "
-        f"run npm install -g {_PACKAGE_NAME}@latest"
+        "run trellis upgrade"
     )
 
 

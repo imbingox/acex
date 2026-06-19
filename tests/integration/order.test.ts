@@ -171,6 +171,28 @@ function unsetDebugVenueErrorNormalizer(client: object, venue: string): void {
   }
 }
 
+function unsetDebugRiskLimitMethods(client: object, venue: string): void {
+  const privateAdapters = Reflect.get(client, "privateAdapters");
+  if (!(privateAdapters instanceof Map)) {
+    throw new Error("Expected debug private adapter map");
+  }
+
+  const adapter: unknown = privateAdapters.get(venue);
+  if (!adapter || typeof adapter !== "object") {
+    throw new Error(`Expected debug private adapter for ${venue}`);
+  }
+
+  for (const method of [
+    "fetchSymbolRiskLimit",
+    "fetchRiskLimits",
+    "setSymbolLeverage",
+  ] as const) {
+    if (!Reflect.set(adapter, method, undefined)) {
+      throw new Error(`Failed to unset debug risk limit method: ${method}`);
+    }
+  }
+}
+
 async function createSubscribedOrderClient(options: {
   maxClosedOrdersPerSymbol?: number;
 }): Promise<{
@@ -623,7 +645,7 @@ test("risk limit manager fetches Binance PAPI UM tiers and sets leverage", async
     ],
     leverageUpdate: {
       symbol: "BTCUSDT",
-      leverage: 4,
+      leverage: 7,
       maxNotionalValue: "500000.0000",
     },
   });
@@ -688,14 +710,14 @@ test("risk limit manager fetches Binance PAPI UM tiers and sets leverage", async
     client.riskLimit.setSymbolLeverage({
       accountId: "main-binance",
       symbol: "BTC/USDT:USDT",
-      leverage: "4",
+      leverage: "5",
     }),
   );
   expect(leverage).toMatchObject({
     accountId: "main-binance",
     venue: "binance",
     symbol: "BTC/USDT:USDT",
-    leverage: "4",
+    leverage: "5",
     maxNotionalValue: "500000",
     receivedAt: 1710000002000,
   });
@@ -714,7 +736,7 @@ test("risk limit manager fetches Binance PAPI UM tiers and sets leverage", async
     },
     leverage: {
       lastSet: {
-        leverage: "4",
+        leverage: "5",
         maxNotionalValue: "500000",
       },
     },
@@ -739,7 +761,7 @@ test("risk limit manager fetches Binance PAPI UM tiers and sets leverage", async
   );
   expect(leverageRequest?.apiKey).toBe("key");
   expect(leverageRequest?.url.searchParams.get("symbol")).toBe("BTCUSDT");
-  expect(leverageRequest?.url.searchParams.get("leverage")).toBe("4");
+  expect(leverageRequest?.url.searchParams.get("leverage")).toBe("5");
 });
 
 test("risk limit manager rejects invalid leverage before Binance REST", async () => {
@@ -800,6 +822,43 @@ test("risk limit manager rejects missing Binance credentials before REST", async
     code: "CREDENTIALS_MISSING",
   });
   expect(requests).toHaveLength(0);
+});
+
+test("risk limit manager rejects unsupported operations before missing credentials", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient();
+  unsetDebugRiskLimitMethods(client, "binance");
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+  });
+  await client.start();
+
+  await expect(
+    client.riskLimit.fetchSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
+  await expect(
+    client.riskLimit.fetchRiskLimits({
+      accountId: "main-binance",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
+  await expect(
+    client.riskLimit.setSymbolLeverage({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      leverage: "4",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+  });
 });
 
 test("risk limit manager wraps Binance risk limit failures with public error details", async () => {

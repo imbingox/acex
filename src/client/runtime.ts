@@ -416,13 +416,14 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       );
     }
 
-    this.registeredAccounts.set(input.accountId, {
+    const account: RegisteredAccountRecord = {
       accountId: input.accountId,
       venue: input.venue,
       credentials: input.credentials,
       options: input.options as Record<string, unknown> | undefined,
-    });
-    this.riskLimitManager.onAccountRegistered(input.accountId, input.venue);
+    };
+    this.registeredAccounts.set(input.accountId, account);
+    this.registerRiskLimitAccountIfSupported(account);
 
     return {
       accountId: input.accountId,
@@ -445,7 +446,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
     account.credentials = mergeCredentials(account.credentials, credentials);
     this.feeManager.onCredentialsUpdated(accountId, account.venue);
-    this.riskLimitManager.onCredentialsUpdated(accountId, account.venue);
+    this.updateRiskLimitAccountIfSupported(account);
 
     if (this.status !== "running") {
       return;
@@ -721,11 +722,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     input: GetSymbolRiskLimitInput,
   ): Promise<RawSymbolRiskLimit> {
     this.assertStarted();
-    const account = this.getRiskLimitAccount(
-      input.accountId,
-      input.symbol,
-      "risk limit queries",
-    );
+    const account = this.getRegisteredAccount(input.accountId);
     const adapter = this.getPrivateAdapter(account.venue);
     if (!adapter.fetchSymbolRiskLimit) {
       throw this.createError(
@@ -738,6 +735,12 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         },
       );
     }
+    this.assertRiskLimitCredentials(
+      account,
+      input.symbol,
+      "risk limit queries",
+      adapter,
+    );
 
     const request: FetchSymbolRiskLimitRequest = {
       symbol: input.symbol,
@@ -751,11 +754,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
   fetchRiskLimits(input: FetchRiskLimitsInput): Promise<RawSymbolRiskLimit[]> {
     this.assertStarted();
-    const account = this.getRiskLimitAccount(
-      input.accountId,
-      undefined,
-      "risk limit queries",
-    );
+    const account = this.getRegisteredAccount(input.accountId);
     const adapter = this.getPrivateAdapter(account.venue);
     if (!adapter.fetchRiskLimits) {
       throw this.createError(
@@ -767,6 +766,12 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         },
       );
     }
+    this.assertRiskLimitCredentials(
+      account,
+      undefined,
+      "risk limit queries",
+      adapter,
+    );
 
     const request: FetchRiskLimitsRequest = {};
 
@@ -780,11 +785,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     input: SetSymbolLeverageInput,
   ): Promise<RawSymbolLeverageUpdate> {
     this.assertStarted();
-    const account = this.getRiskLimitAccount(
-      input.accountId,
-      input.symbol,
-      "symbol leverage changes",
-    );
+    const account = this.getRegisteredAccount(input.accountId);
     const adapter = this.getPrivateAdapter(account.venue);
     if (!adapter.setSymbolLeverage) {
       throw this.createError(
@@ -797,6 +798,12 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         },
       );
     }
+    this.assertRiskLimitCredentials(
+      account,
+      input.symbol,
+      "symbol leverage changes",
+      adapter,
+    );
 
     const request: SetSymbolLeverageRequest = {
       symbol: input.symbol,
@@ -975,13 +982,46 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     return tracked;
   }
 
-  private getRiskLimitAccount(
-    accountId: string,
+  private registerRiskLimitAccountIfSupported(
+    account: RegisteredAccountRecord,
+  ): void {
+    if (!this.shouldManageRiskLimits(account)) {
+      return;
+    }
+
+    this.riskLimitManager.onAccountRegistered(account.accountId, account.venue);
+  }
+
+  private updateRiskLimitAccountIfSupported(
+    account: RegisteredAccountRecord,
+  ): void {
+    if (!this.shouldManageRiskLimits(account)) {
+      return;
+    }
+
+    this.riskLimitManager.onCredentialsUpdated(
+      account.accountId,
+      account.venue,
+    );
+  }
+
+  private shouldManageRiskLimits(account: RegisteredAccountRecord): boolean {
+    const adapter = this.privateAdapters.get(account.venue);
+    return (
+      adapter?.fetchRiskLimits !== undefined &&
+      hasPrivateCredentials(
+        account.credentials,
+        adapter.accountCapabilities.credentialsRequired,
+      )
+    );
+  }
+
+  private assertRiskLimitCredentials(
+    account: RegisteredAccountRecord,
     symbol: string | undefined,
     operation: string,
-  ): RegisteredAccountRecord {
-    const account = this.getRegisteredAccount(accountId);
-    const adapter = this.getPrivateAdapter(account.venue);
+    adapter: PrivateUserDataAdapter,
+  ): void {
     if (
       !hasPrivateCredentials(
         account.credentials,
@@ -990,11 +1030,9 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     ) {
       throw this.createError(
         "CREDENTIALS_MISSING",
-        `Account credentials are required for ${operation}: ${accountId}`,
-        { accountId, venue: account.venue, symbol },
+        `Account credentials are required for ${operation}: ${account.accountId}`,
+        { accountId: account.accountId, venue: account.venue, symbol },
       );
     }
-
-    return account;
   }
 }

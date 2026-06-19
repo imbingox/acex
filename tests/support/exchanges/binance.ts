@@ -935,12 +935,17 @@ export function installBinancePrivateAccountInfra(options?: {
               },
             );
           }
-          return jsonResponse(
-            options?.leverageUpdate ?? {
-              ...binanceFixtures.papi.leverageUpdate,
+          {
+            const leverageUpdate =
+              options?.leverageUpdate &&
+              typeof options.leverageUpdate === "object"
+                ? (options.leverageUpdate as Record<string, unknown>)
+                : binanceFixtures.papi.leverageUpdate;
+            return jsonResponse({
+              ...leverageUpdate,
               leverage: url.searchParams.get("leverage") ?? 4,
-            },
-          );
+            });
+          }
         case "DELETE /papi/v1/um/order":
           return jsonResponse(
             options?.cancelOrder ?? {

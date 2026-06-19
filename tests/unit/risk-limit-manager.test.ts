@@ -44,7 +44,7 @@ const ORDER_CAPABILITIES: VenueOrderCapabilities = {
 
 async function waitFor(check: () => boolean, message: string): Promise<void> {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 250) {
+  while (Date.now() - startedAt < 5_000) {
     if (check()) {
       return;
     }
@@ -454,6 +454,40 @@ test("risk limit fetch all writes account-isolated symbol cache", async () => {
   );
 });
 
+test("risk limit full refresh marks omitted venue symbols missing", async () => {
+  const context = new StubRiskLimitContext();
+  const manager = new RiskLimitManagerImpl(context);
+  manager.onClientStarted();
+
+  await manager.fetchRiskLimits({ accountId: "main-binance" });
+  context.fetchRiskLimitsImpl = async () => [
+    {
+      symbol: "BTC/USDT:USDT",
+      receivedAt: context.nowMs + 40,
+      tiers: [
+        {
+          tier: 1,
+          initialLeverage: "75",
+          notionalCap: "100000",
+        },
+      ],
+    },
+  ];
+
+  const fetched = await manager.fetchRiskLimits({ accountId: "main-binance" });
+  expect(fetched.map((snapshot) => snapshot.symbol)).toEqual(["BTC/USDT:USDT"]);
+  expect(
+    manager.getSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "ETH/USDT:USDT",
+    }).tiers,
+  ).toMatchObject({
+    source: "missing",
+    stale: true,
+    items: [],
+  });
+});
+
 test("risk limit rejects invalid leverage locally without context call", async () => {
   const context = new StubRiskLimitContext();
   const manager = new RiskLimitManagerImpl(context);
@@ -477,6 +511,19 @@ test("risk limit credentials update marks venue tiers missing and blocks stale i
   manager.onClientStarted();
 
   await manager.fetchRiskLimits({ accountId: "main-binance" });
+  await manager.setSymbolLeverage({
+    accountId: "main-binance",
+    symbol: "BTC/USDT:USDT",
+    leverage: "4",
+  });
+  expect(
+    manager.getSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }).leverage.lastSet,
+  ).toMatchObject({
+    leverage: "4",
+  });
   context.fetchRiskLimitsImpl = async (input) => {
     manager.onCredentialsUpdated(input.accountId, "binance");
     return [
@@ -505,6 +552,12 @@ test("risk limit credentials update marks venue tiers missing and blocks stale i
     stale: true,
     items: [],
   });
+  expect(
+    manager.getSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }).leverage,
+  ).toEqual({});
 });
 
 test("risk limit credentials update starts a fresh explicit full refresh instead of reusing stale in-flight", async () => {

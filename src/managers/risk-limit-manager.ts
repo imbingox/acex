@@ -347,6 +347,7 @@ export class RiskLimitManagerImpl
 
       record.generation = state.generation;
       record.tiers = missingTiersFacet();
+      record.leverage = {};
       record.updatedAt = now;
       record.nextRefreshAt = now;
     }
@@ -372,7 +373,7 @@ export class RiskLimitManagerImpl
       tiers: missingTiersFacet(),
       leverage: {},
       updatedAt: now,
-      generation: this.currentGeneration(accountId, venue, now),
+      generation: this.currentGeneration(accountId),
       nextRefreshAt: now,
     };
     this.records.set(key, record);
@@ -399,19 +400,13 @@ export class RiskLimitManagerImpl
     return state;
   }
 
-  private currentGeneration(
-    accountId: string,
-    venue?: Venue,
-    now = this.context.now(),
-  ): number {
+  private currentGeneration(accountId: string): number {
     const state = this.accounts.get(accountId);
     if (state) {
       return state.generation;
     }
 
-    return venue
-      ? this.getOrCreateAccountState(accountId, venue, now).generation
-      : 0;
+    return 0;
   }
 
   private refreshStaleness(record: RiskLimitRecord, now: number): void {
@@ -608,6 +603,14 @@ export class RiskLimitManagerImpl
     }
 
     state.nextRefreshAt = now + this.refreshIntervalMs;
+    const freshSymbols = new Set(rawLimits.map((raw) => raw.symbol));
+    this.invalidateMissingVenueTiers(
+      state,
+      freshSymbols,
+      generation,
+      runGeneration,
+      now,
+    );
     for (const raw of rawLimits) {
       const record = this.getOrCreateRecord(
         state.accountId,
@@ -641,6 +644,29 @@ export class RiskLimitManagerImpl
     };
     record.updatedAt = now;
     record.nextRefreshAt = now + this.refreshIntervalMs;
+  }
+
+  private invalidateMissingVenueTiers(
+    state: RiskLimitAccountState,
+    freshSymbols: ReadonlySet<string>,
+    generation: number,
+    runGeneration: number,
+    now: number,
+  ): void {
+    for (const record of this.records.values()) {
+      if (
+        record.accountId !== state.accountId ||
+        record.tiers.source !== "venue" ||
+        freshSymbols.has(record.symbol) ||
+        !this.canApply(record, generation, runGeneration)
+      ) {
+        continue;
+      }
+
+      record.tiers = missingTiersFacet();
+      record.updatedAt = now;
+      record.nextRefreshAt = now + this.refreshIntervalMs;
+    }
   }
 
   private fetchRawSymbolRiskLimit(

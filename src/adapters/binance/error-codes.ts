@@ -13,6 +13,7 @@ const BINANCE_WOULD_TAKE_CODES = new Set(["-5022"]);
 const BINANCE_FILTER_VIOLATION_CODES = new Set([
   "-4131",
   "-2025",
+  "-2027",
   "-1111",
   "-4002",
   "-4004",

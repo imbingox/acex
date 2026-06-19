@@ -23,7 +23,10 @@ export type AcexErrorCode =
   | "ORDER_CANCEL_ALL_FAILED"
   | "ORDER_CANCEL_FAILED"
   | "ORDER_CREATE_FAILED"
-  | "ORDER_INPUT_INVALID";
+  | "ORDER_INPUT_INVALID"
+  | "RISK_LIMIT_FETCH_FAILED"
+  | "RISK_LIMIT_INPUT_INVALID"
+  | "LEVERAGE_SET_FAILED";
 
 export type AcexErrorTransportKind =
   | "timeout"

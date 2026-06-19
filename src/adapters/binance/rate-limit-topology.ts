@@ -41,9 +41,11 @@ export const BINANCE_RATE_LIMIT_PLANS = {
   papiAccount: "binance:papi:account",
   papiPositionRisk: "binance:papi:position-risk",
   papiCommissionRate: "binance:papi:commission-rate",
+  papiLeverageBracket: "binance:papi:leverage-bracket",
   papiQueryOrder: "binance:papi:query-order",
   papiOpenOrdersSymbol: "binance:papi:open-orders:symbol",
   papiOpenOrdersAll: "binance:papi:open-orders:all",
+  papiSetLeverage: "binance:papi:set-leverage",
   papiNewOrder: "binance:papi:new-order",
   papiCancelOrder: "binance:papi:cancel-order",
   papiCancelAllOrders: "binance:papi:cancel-all-orders",
@@ -182,6 +184,11 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       20,
     ),
     requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiLeverageBracket,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      1,
+    ),
+    requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.papiQueryOrder,
       BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
       1,
@@ -220,6 +227,12 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
       1,
       "cancel",
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiSetLeverage,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      1,
+      "risk",
     ),
     requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.papiListenKey,
@@ -295,6 +308,8 @@ export function getBinancePapiRateLimitPlanId(
       return BINANCE_RATE_LIMIT_PLANS.papiPositionRisk;
     case "GET /papi/v1/um/commissionRate":
       return BINANCE_RATE_LIMIT_PLANS.papiCommissionRate;
+    case "GET /papi/v1/um/leverageBracket":
+      return BINANCE_RATE_LIMIT_PLANS.papiLeverageBracket;
     case "GET /papi/v1/um/order":
       return BINANCE_RATE_LIMIT_PLANS.papiQueryOrder;
     case "GET /papi/v1/um/openOrders":
@@ -303,6 +318,8 @@ export function getBinancePapiRateLimitPlanId(
         : BINANCE_RATE_LIMIT_PLANS.papiOpenOrdersAll;
     case "POST /papi/v1/um/order":
       return BINANCE_RATE_LIMIT_PLANS.papiNewOrder;
+    case "POST /papi/v1/um/leverage":
+      return BINANCE_RATE_LIMIT_PLANS.papiSetLeverage;
     case "DELETE /papi/v1/um/order":
       return BINANCE_RATE_LIMIT_PLANS.papiCancelOrder;
     case "DELETE /papi/v1/um/allOpenOrders":

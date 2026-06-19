@@ -7,11 +7,16 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  FetchRiskLimitsRequest,
   FetchSymbolFeeRateRequest,
+  FetchSymbolRiskLimitRequest,
   MarketAdapter,
   PrivateUserDataAdapter,
   RawOrderUpdate,
   RawSymbolFeeRate,
+  RawSymbolLeverageUpdate,
+  RawSymbolRiskLimit,
+  SetSymbolLeverageRequest,
 } from "../adapters/types.ts";
 import {
   AcexError,
@@ -28,6 +33,7 @@ import { AccountManagerImpl } from "../managers/account-manager.ts";
 import { FeeManagerImpl } from "../managers/fee-manager.ts";
 import { MarketManagerImpl } from "../managers/market-manager.ts";
 import { OrderManagerImpl } from "../managers/order-manager.ts";
+import { RiskLimitManagerImpl } from "../managers/risk-limit-manager.ts";
 import {
   type AccountCredentials,
   type AccountManager,
@@ -45,7 +51,9 @@ import {
   type CreateClientOptions,
   type CreateOrderInput,
   type FeeManager,
+  type FetchRiskLimitsInput,
   type GetSymbolFeeRateInput,
+  type GetSymbolRiskLimitInput,
   type HealthEvent,
   type HealthEventFilter,
   type JuplendAccountRuntimeOptions,
@@ -58,6 +66,8 @@ import {
   type RateLimiter,
   type RegisterAccountInput,
   type RegisterAccountResult,
+  type RiskLimitManager,
+  type SetSymbolLeverageInput,
   type StopOptions,
   type TimeProvider,
   type Venue,
@@ -275,6 +285,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   readonly account: AccountManager;
   readonly order: OrderManager;
   readonly fee: FeeManager;
+  readonly riskLimit: RiskLimitManager;
   readonly events: ClientEventStreams;
 
   private status: ClientStatus = "idle";
@@ -288,11 +299,13 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private readonly accountManager: AccountManagerImpl;
   private readonly orderManager: OrderManagerImpl;
   private readonly feeManager: FeeManagerImpl;
+  private readonly riskLimitManager: RiskLimitManagerImpl;
   private readonly marketAdapters: Map<Venue, MarketAdapter>;
   private readonly privateAdapters: Map<Venue, PrivateUserDataAdapter>;
   private readonly privateCoordinator: PrivateSubscriptionCoordinator;
   private readonly adapterLifecycles: VenueAdapterLifecycle[];
   private readonly inFlightOrderCommands = new Set<Promise<unknown>>();
+  private readonly inFlightRiskLimitCommands = new Set<Promise<unknown>>();
   private readonly onMetric: OnMetric | undefined;
 
   constructor(options: CreateClientOptions = {}) {
@@ -340,6 +353,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.accountManager = new AccountManagerImpl(this);
     this.orderManager = new OrderManagerImpl(this, options.order);
     this.feeManager = new FeeManagerImpl(this, options.fee);
+    this.riskLimitManager = new RiskLimitManagerImpl(this, options.riskLimit);
     this.privateCoordinator = new PrivateSubscriptionCoordinator(
       this,
       privateAdapters,
@@ -353,6 +367,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.account = this.accountManager;
     this.order = this.orderManager;
     this.fee = this.feeManager;
+    this.riskLimit = this.riskLimitManager;
     this.events = new ClientEventStreamsImpl(
       this.healthBus,
       this.errorBus,
@@ -407,6 +422,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       credentials: input.credentials,
       options: input.options as Record<string, unknown> | undefined,
     });
+    this.riskLimitManager.onAccountRegistered(input.accountId, input.venue);
 
     return {
       accountId: input.accountId,
@@ -429,6 +445,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
 
     account.credentials = mergeCredentials(account.credentials, credentials);
     this.feeManager.onCredentialsUpdated(accountId, account.venue);
+    this.riskLimitManager.onCredentialsUpdated(accountId, account.venue);
 
     if (this.status !== "running") {
       return;
@@ -454,6 +471,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.accountManager.onAccountRemoved(accountId, now);
     this.orderManager.onAccountRemoved(accountId, now);
     this.feeManager.onAccountRemoved(accountId, now);
+    this.riskLimitManager.onAccountRemoved(accountId, now);
     this.registeredAccounts.delete(accountId);
   }
 
@@ -473,6 +491,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.accountManager.onClientStarted();
     this.orderManager.onClientStarted();
     this.feeManager.onClientStarted();
+    this.riskLimitManager.onClientStarted();
     this.privateCoordinator.onClientStarted();
   }
 
@@ -500,6 +519,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       this.accountManager.onClientStopping(now);
       this.orderManager.onClientStopping(now);
       this.feeManager.onClientStopping(now);
+      this.riskLimitManager.onClientStopping(now);
 
       this.setClientStatus("stopped");
     } finally {
@@ -697,6 +717,100 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     });
   }
 
+  fetchSymbolRiskLimit(
+    input: GetSymbolRiskLimitInput,
+  ): Promise<RawSymbolRiskLimit> {
+    this.assertStarted();
+    const account = this.getRiskLimitAccount(
+      input.accountId,
+      input.symbol,
+      "risk limit queries",
+    );
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (!adapter.fetchSymbolRiskLimit) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support symbol risk limit queries: ${account.venue}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    const request: FetchSymbolRiskLimitRequest = {
+      symbol: input.symbol,
+    };
+
+    return adapter.fetchSymbolRiskLimit(account.credentials ?? {}, request, {
+      ...account.options,
+      accountId: account.accountId,
+    });
+  }
+
+  fetchRiskLimits(input: FetchRiskLimitsInput): Promise<RawSymbolRiskLimit[]> {
+    this.assertStarted();
+    const account = this.getRiskLimitAccount(
+      input.accountId,
+      undefined,
+      "risk limit queries",
+    );
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (!adapter.fetchRiskLimits) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support risk limit queries: ${account.venue}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+        },
+      );
+    }
+
+    const request: FetchRiskLimitsRequest = {};
+
+    return adapter.fetchRiskLimits(account.credentials ?? {}, request, {
+      ...account.options,
+      accountId: account.accountId,
+    });
+  }
+
+  setSymbolLeverage(
+    input: SetSymbolLeverageInput,
+  ): Promise<RawSymbolLeverageUpdate> {
+    this.assertStarted();
+    const account = this.getRiskLimitAccount(
+      input.accountId,
+      input.symbol,
+      "symbol leverage changes",
+    );
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (!adapter.setSymbolLeverage) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support symbol leverage changes: ${account.venue}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    const request: SetSymbolLeverageRequest = {
+      symbol: input.symbol,
+      leverage: input.leverage,
+    };
+
+    return this.trackRiskLimitCommand(
+      adapter.setSymbolLeverage(account.credentials ?? {}, request, {
+        ...account.options,
+        accountId: account.accountId,
+      }),
+    );
+  }
+
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,
@@ -761,6 +875,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
   private async drainInFlightStop(timeoutMs: number): Promise<void> {
     const inFlight = [
       ...this.inFlightOrderCommands,
+      ...this.inFlightRiskLimitCommands,
       ...this.privateCoordinator.getInFlightOperations(),
     ];
     if (inFlight.length === 0) {
@@ -850,5 +965,36 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     }
 
     return adapter;
+  }
+
+  private trackRiskLimitCommand<T>(promise: Promise<T>): Promise<T> {
+    const tracked = promise.finally(() => {
+      this.inFlightRiskLimitCommands.delete(tracked);
+    });
+    this.inFlightRiskLimitCommands.add(tracked);
+    return tracked;
+  }
+
+  private getRiskLimitAccount(
+    accountId: string,
+    symbol: string | undefined,
+    operation: string,
+  ): RegisteredAccountRecord {
+    const account = this.getRegisteredAccount(accountId);
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (
+      !hasPrivateCredentials(
+        account.credentials,
+        adapter.accountCapabilities.credentialsRequired,
+      )
+    ) {
+      throw this.createError(
+        "CREDENTIALS_MISSING",
+        `Account credentials are required for ${operation}: ${accountId}`,
+        { accountId, venue: account.venue, symbol },
+      );
+    }
+
+    return account;
   }
 }

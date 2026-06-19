@@ -5,6 +5,8 @@ import type {
   RawOrderUpdate,
   RawRiskLevelChange,
   RawSymbolFeeRate,
+  RawSymbolLeverageUpdate,
+  RawSymbolRiskLimit,
 } from "../adapters/types.ts";
 import type { VenueErrorReason } from "../errors.ts";
 import type {
@@ -13,13 +15,16 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  FetchRiskLimitsInput,
   GetSymbolFeeRateInput,
+  GetSymbolRiskLimitInput,
   HealthEvent,
   MarketDefinition,
   MetricType,
   OrderSnapshot,
   PrivateRuntimeReason,
   PrivateRuntimeStatus,
+  SetSymbolLeverageInput,
   Venue,
   VenueOrderCapabilities,
 } from "../types/index.ts";
@@ -54,6 +59,13 @@ export interface ClientContext {
   cancelOrder(input: CancelOrderInput): Promise<RawOrderUpdate>;
   cancelAllOrders(input: CancelAllOrdersInput): Promise<RawOrderUpdate[]>;
   fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate>;
+  fetchSymbolRiskLimit?(
+    input: GetSymbolRiskLimitInput,
+  ): Promise<RawSymbolRiskLimit>;
+  fetchRiskLimits?(input: FetchRiskLimitsInput): Promise<RawSymbolRiskLimit[]>;
+  setSymbolLeverage?(
+    input: SetSymbolLeverageInput,
+  ): Promise<RawSymbolLeverageUpdate>;
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,

@@ -26,6 +26,17 @@ const accountScope: RateLimitScope = {
   endpointKey: "GET /papi/v1/account",
 };
 
+function findBinancePlan(planId: string): RateLimitTopology["plans"][number] {
+  const plan = BINANCE_RATE_LIMIT_TOPOLOGY.plans.find(
+    (entry) => entry.id === planId,
+  );
+  if (!plan) {
+    throw new Error(`Missing Binance rate-limit plan: ${planId}`);
+  }
+
+  return plan;
+}
+
 test("ReactiveRateLimiter tracks Binance header usage parsed at the venue layer", () => {
   const limiter = new ReactiveRateLimiter({ now: () => 1_000 });
   const headers = new Headers({
@@ -236,6 +247,37 @@ test("Binance public market endpoints map to request-weight plans", () => {
   expect(
     getBinancePublicMarketRateLimitPlanId("GET", "/dapi/v1/fundingRate"),
   ).toBe(BINANCE_RATE_LIMIT_PLANS.dapiFundingRateHistory);
+});
+
+test("Binance PAPI risk limit endpoints map to one-unit request-weight plans", () => {
+  expect(
+    getBinancePapiRateLimitPlanId("GET", "/papi/v1/um/leverageBracket"),
+  ).toBe(BINANCE_RATE_LIMIT_PLANS.papiLeverageBracket);
+  expect(getBinancePapiRateLimitPlanId("POST", "/papi/v1/um/leverage")).toBe(
+    BINANCE_RATE_LIMIT_PLANS.papiSetLeverage,
+  );
+
+  expect(findBinancePlan(BINANCE_RATE_LIMIT_PLANS.papiLeverageBracket)).toEqual(
+    expect.objectContaining({
+      costs: [
+        {
+          bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+          cost: 1,
+        },
+      ],
+    }),
+  );
+  expect(findBinancePlan(BINANCE_RATE_LIMIT_PLANS.papiSetLeverage)).toEqual(
+    expect.objectContaining({
+      priority: "risk",
+      costs: [
+        {
+          bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+          cost: 1,
+        },
+      ],
+    }),
+  );
 });
 
 test("BudgetRateLimiter falls back to endpoint scope for unknown plans", async () => {

@@ -338,6 +338,48 @@ const binanceFixtures = {
       makerCommissionRate: "0.00020000",
       takerCommissionRate: "0.00050000",
     },
+    leverageBrackets: [
+      {
+        symbol: "BTCUSDT",
+        notionalCoef: "1.5000",
+        brackets: [
+          {
+            bracket: 1,
+            initialLeverage: 125,
+            notionalFloor: "0",
+            notionalCap: "50000",
+            maintMarginRatio: "0.0040",
+            cum: "0",
+          },
+          {
+            bracket: 2,
+            initialLeverage: 50,
+            notionalFloor: "50000",
+            notionalCap: "250000",
+            maintMarginRatio: "0.0050",
+            cum: "50",
+          },
+        ],
+      },
+      {
+        symbol: "ETHUSDT",
+        brackets: [
+          {
+            bracket: 1,
+            initialLeverage: 100,
+            notionalFloor: "0",
+            notionalCap: "25000",
+            maintMarginRatio: "0.0050",
+            cum: "0",
+          },
+        ],
+      },
+    ],
+    leverageUpdate: {
+      symbol: "BTCUSDT",
+      leverage: 4,
+      maxNotionalValue: "500000",
+    },
   },
   publicTrades: {
     aggTrades: [
@@ -543,6 +585,11 @@ export function installBinancePrivateAccountInfra(options?: {
   commissionRate?: unknown;
   beforeCommissionRateResponse?: () => void;
   failCommissionRate?: boolean;
+  leverageBrackets?: unknown;
+  leverageBracketResponses?: unknown[];
+  failLeverageBracket?: boolean;
+  leverageUpdate?: unknown;
+  failSetLeverage?: boolean;
   failQueryOrder?: boolean;
   networkErrorQueryOrder?: boolean;
   networkErrorQueryOrderCount?: number;
@@ -562,6 +609,7 @@ export function installBinancePrivateAccountInfra(options?: {
   let balanceRequestCount = 0;
   let openOrdersRequestCount = 0;
   let queryOrderRequestCount = 0;
+  let leverageBracketRequestCount = 0;
   let listenKeyRequestCount = 0;
   let listenKeyKeepAliveFailureCount = 0;
 
@@ -585,6 +633,22 @@ export function installBinancePrivateAccountInfra(options?: {
       }
 
       return (order as { symbol?: unknown }).symbol === symbol;
+    });
+  };
+  const filterLeverageBracketsBySymbol = (
+    response: unknown,
+    symbol: string | null,
+  ): unknown => {
+    if (!symbol || !Array.isArray(response)) {
+      return response;
+    }
+
+    return response.filter((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return false;
+      }
+
+      return (entry as { symbol?: unknown }).symbol === symbol;
     });
   };
 
@@ -820,6 +884,24 @@ export function installBinancePrivateAccountInfra(options?: {
           return jsonResponse(
             options?.commissionRate ?? binanceFixtures.papi.commissionRate,
           );
+        case "GET /papi/v1/um/leverageBracket":
+          if (options?.failLeverageBracket) {
+            return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+              status: 401,
+              statusText: "Unauthorized",
+            });
+          }
+          return jsonResponse(
+            filterLeverageBracketsBySymbol(
+              nextResponse(
+                options?.leverageBracketResponses,
+                options?.leverageBrackets ??
+                  binanceFixtures.papi.leverageBrackets,
+                leverageBracketRequestCount++,
+              ),
+              url.searchParams.get("symbol"),
+            ),
+          );
         case "POST /papi/v1/um/order":
           if (options?.createOrderDelayMs) {
             await Bun.sleep(options.createOrderDelayMs);
@@ -843,6 +925,27 @@ export function installBinancePrivateAccountInfra(options?: {
               updateTime: 1710000000400,
             },
           );
+        case "POST /papi/v1/um/leverage":
+          if (options?.failSetLeverage) {
+            return textResponse(
+              '{"code":-2027,"msg":"Exceeded the maximum allowable position at current leverage."}',
+              {
+                status: 400,
+                statusText: "Bad Request",
+              },
+            );
+          }
+          {
+            const leverageUpdate =
+              options?.leverageUpdate &&
+              typeof options.leverageUpdate === "object"
+                ? (options.leverageUpdate as Record<string, unknown>)
+                : binanceFixtures.papi.leverageUpdate;
+            return jsonResponse({
+              ...leverageUpdate,
+              leverage: url.searchParams.get("leverage") ?? 4,
+            });
+          }
         case "DELETE /papi/v1/um/order":
           return jsonResponse(
             options?.cancelOrder ?? {

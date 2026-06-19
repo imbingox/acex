@@ -3,4 +3,5 @@ export * from "./client.ts";
 export * from "./fee.ts";
 export * from "./market.ts";
 export * from "./order.ts";
+export * from "./risk-limit.ts";
 export * from "./shared.ts";

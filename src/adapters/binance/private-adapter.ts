@@ -26,7 +26,9 @@ import type {
   CancelOrderRequest,
   CreateOrderRequest,
   FetchOrderRequest,
+  FetchRiskLimitsRequest,
   FetchSymbolFeeRateRequest,
+  FetchSymbolRiskLimitRequest,
   PrivateStreamCallbacks,
   PrivateStreamOptions,
   PrivateUserDataAdapter,
@@ -39,6 +41,9 @@ import type {
   RawRiskLevelChange,
   RawRiskUpdate,
   RawSymbolFeeRate,
+  RawSymbolLeverageUpdate,
+  RawSymbolRiskLimit,
+  SetSymbolLeverageRequest,
   StreamHandle,
 } from "../types.ts";
 import { CatalogUnavailableError, isSymbolMappingError } from "../types.ts";
@@ -121,6 +126,27 @@ interface BinancePapiUmCommissionRate {
   symbol?: string;
   makerCommissionRate?: string;
   takerCommissionRate?: string;
+}
+
+interface BinancePapiUmLeverageBracketItem {
+  bracket?: number;
+  initialLeverage?: number | string;
+  notionalFloor?: number | string;
+  notionalCap?: number | string;
+  maintMarginRatio?: number | string;
+  cum?: number | string;
+}
+
+interface BinancePapiUmLeverageBracket {
+  symbol?: string;
+  notionalCoef?: number | string;
+  brackets?: BinancePapiUmLeverageBracketItem[];
+}
+
+interface BinancePapiUmLeverageUpdate {
+  symbol?: string;
+  leverage?: number | string;
+  maxNotionalValue?: number | string;
 }
 
 interface BinanceListenKeyResponse {
@@ -854,6 +880,76 @@ function mapCommissionRate(
   };
 }
 
+function mapRiskLimitTier(
+  input: BinancePapiUmLeverageBracketItem,
+): RawSymbolRiskLimit["tiers"][number] | undefined {
+  if (input.bracket === undefined || input.initialLeverage === undefined) {
+    return undefined;
+  }
+
+  return {
+    tier: input.bracket,
+    initialLeverage: `${input.initialLeverage}`,
+    notionalFloor: canonicalString(input.notionalFloor),
+    notionalCap: canonicalString(input.notionalCap),
+    maintenanceMarginRatio: canonicalString(input.maintMarginRatio),
+    cumulativeMaintenanceAmount: canonicalString(input.cum),
+  };
+}
+
+function mapRiskLimitBracket(
+  catalog: BinanceMarketCatalog,
+  input: BinancePapiUmLeverageBracket,
+  receivedAt: number,
+): RawSymbolRiskLimit | undefined {
+  if (!input.symbol || !Array.isArray(input.brackets)) {
+    return undefined;
+  }
+
+  const symbol = catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, input.symbol);
+  if (!symbol) {
+    return undefined;
+  }
+
+  return {
+    symbol,
+    tiers: input.brackets.flatMap((bracket) => {
+      const mapped = mapRiskLimitTier(bracket);
+      return mapped ? [mapped] : [];
+    }),
+    notionalCoefficient: canonicalString(input.notionalCoef),
+    receivedAt,
+  };
+}
+
+function normalizeRiskLimitBracketsResponse(
+  response: BinancePapiUmLeverageBracket | BinancePapiUmLeverageBracket[],
+): BinancePapiUmLeverageBracket[] {
+  return Array.isArray(response) ? response : [response];
+}
+
+function mapLeverageUpdate(
+  catalog: BinanceMarketCatalog,
+  response: BinancePapiUmLeverageUpdate,
+  fallbackSymbol: string,
+  receivedAt: number,
+): RawSymbolLeverageUpdate {
+  const symbol = response.symbol
+    ? (catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, response.symbol) ??
+      fallbackSymbol)
+    : fallbackSymbol;
+  if (response.leverage === undefined) {
+    throw new Error("Binance PAPI leverage response is missing leverage");
+  }
+
+  return {
+    symbol,
+    leverage: `${response.leverage}`,
+    maxNotionalValue: canonicalString(response.maxNotionalValue),
+    receivedAt,
+  };
+}
+
 function missingUmPositionVenueIds(
   catalog: BinanceMarketCatalog,
   positions: BinancePapiUmPosition[],
@@ -877,6 +973,20 @@ function missingOpenOrderVenueIds(
       order.symbol &&
       !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, order.symbol)
         ? [order.symbol]
+        : [],
+    ),
+  );
+}
+
+function missingRiskLimitVenueIds(
+  catalog: BinanceMarketCatalog,
+  brackets: BinancePapiUmLeverageBracket[],
+): string[] {
+  return uniqueStrings(
+    brackets.flatMap((entry) =>
+      entry.symbol &&
+      !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, entry.symbol)
+        ? [entry.symbol]
         : [],
     ),
   );
@@ -1210,6 +1320,89 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     const receivedAt = Date.now();
 
     return mapCommissionRate(response, request.symbol, receivedAt);
+  }
+
+  async fetchSymbolRiskLimit(
+    credentials: AccountCredentials,
+    request: FetchSymbolRiskLimitRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolRiskLimit> {
+    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const response = await this.signedRequest<
+      BinancePapiUmLeverageBracket | BinancePapiUmLeverageBracket[]
+    >(
+      "GET",
+      "/papi/v1/um/leverageBracket",
+      credentials,
+      accountOptions,
+      {
+        symbol,
+      },
+      SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+    );
+    const receivedAt = Date.now();
+    const mapped = await this.mapRiskLimitBracketsWithCatalogRefresh(
+      normalizeRiskLimitBracketsResponse(response),
+      receivedAt,
+    );
+    const riskLimit = mapped.find((entry) => entry.symbol === request.symbol);
+    if (!riskLimit) {
+      throw new Error(
+        "Binance PAPI leverageBracket response did not contain the requested symbol",
+      );
+    }
+
+    return riskLimit;
+  }
+
+  async fetchRiskLimits(
+    credentials: AccountCredentials,
+    _request: FetchRiskLimitsRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolRiskLimit[]> {
+    await this.ensureUsdmCatalog();
+    const response = await this.signedRequest<BinancePapiUmLeverageBracket[]>(
+      "GET",
+      "/papi/v1/um/leverageBracket",
+      credentials,
+      accountOptions,
+      undefined,
+      SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+    );
+    const receivedAt = Date.now();
+
+    return await this.mapRiskLimitBracketsWithCatalogRefresh(
+      response,
+      receivedAt,
+    );
+  }
+
+  async setSymbolLeverage(
+    credentials: AccountCredentials,
+    request: SetSymbolLeverageRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolLeverageUpdate> {
+    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const response = await this.signedRequest<BinancePapiUmLeverageUpdate>(
+      "POST",
+      "/papi/v1/um/leverage",
+      credentials,
+      accountOptions,
+      {
+        symbol,
+        leverage: request.leverage,
+      },
+      NO_RETRY_POLICY,
+      "risk",
+    );
+    const receivedAt = Date.now();
+
+    return mapLeverageUpdate(
+      this.marketCatalog,
+      response,
+      request.symbol,
+      receivedAt,
+    );
   }
 
   async createOrder(
@@ -1957,6 +2150,27 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       receivedAt,
     );
     return mapped[0];
+  }
+
+  private async mapRiskLimitBracketsWithCatalogRefresh(
+    brackets: BinancePapiUmLeverageBracket[],
+    receivedAt: number,
+  ): Promise<RawSymbolRiskLimit[]> {
+    let missing = missingRiskLimitVenueIds(this.marketCatalog, brackets);
+    if (missing.length > 0) {
+      await this.refreshUsdmCatalogAfterMiss(missing);
+      missing = missingRiskLimitVenueIds(this.marketCatalog, brackets);
+      this.reportSymbolMappingMisses(missing);
+    }
+
+    return brackets.flatMap((bracket) => {
+      const mapped = mapRiskLimitBracket(
+        this.marketCatalog,
+        bracket,
+        receivedAt,
+      );
+      return mapped ? [mapped] : [];
+    });
   }
 
   private async signedRequest<T>(

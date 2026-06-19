@@ -37,6 +37,7 @@ Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, 
 | [Market Subscription Leases](./market-subscription-leases.md) | Market websocket per-consumer lease API、ready/close 语义、L1/funding 独立 ref-count、client stop/start 恢复规则 | Active |
 | [Order Execution](./order-execution.md) | Binance PAPI UM 交易命令 contract、持仓模式约束、验证点 | Active |
 | [Release Publishing](./release-publishing.md) | Changesets release PR、Trusted Publishing、beta 发布策略 | Active |
+| [Risk Limit Manager](./risk-limit-manager.md) | 账户级 risk limit 缓存、Binance PAPI UM leverage bracket / leverage 设置、facet 语义与测试要求 | Active |
 | [Type Safety](./type-safety.md) | 类型定义位置、显式返回类型、避免宽化和循环引用 | Active |
 | [Venue Capabilities](./venue-capabilities.md) | venue 级 runtime capability 查询 contract、静态能力表语义、返回值 clone 要求 | Active |
 | [Venue Lending](./venue-lending.md) | DEX 借贷只读账户视图、lending facet、riskRatio 与 polling adapter 语义 | Active |

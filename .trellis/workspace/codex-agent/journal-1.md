@@ -1811,3 +1811,38 @@ Implemented Binance riskLeverage updates from ACCOUNT_UPDATE and riskLevelChange
 ### Next Steps
 
 - None - task complete
+
+
+## Session 52: RiskLimitManager implementation
+
+**Date**: 2026-06-19
+**Task**: RiskLimitManager implementation
+**Branch**: `feat/risk-limit-manager`
+
+### Summary
+
+新增 client.riskLimit、Binance PAPI UM leverage bracket / set leverage 支持、缓存语义、测试、API 文档和 Trellis spec。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2707f5b` | (see git log) |
+| `5d0d349` | (see git log) |
+| `0907771` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

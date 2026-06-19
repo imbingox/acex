@@ -351,6 +351,10 @@ export interface FeeRuntimeOptions {
   >;
 }
 
+export interface RiskLimitRuntimeOptions {
+  refreshIntervalMs?: number;
+}
+
 export interface CreateClientOptions {
   sandbox?: boolean;
   /** Request/signing clock override; local receivedAt/freshness clocks stay independent. */
@@ -364,6 +368,7 @@ export interface CreateClientOptions {
   account?: AccountRuntimeOptions;
   order?: OrderRuntimeOptions;
   fee?: FeeRuntimeOptions;
+  riskLimit?: RiskLimitRuntimeOptions;
 }
 
 export interface AccountCredentials {

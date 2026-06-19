@@ -15,6 +15,7 @@ import type {
   OrderManager,
   OrderStatusChangedEvent,
 } from "./order.ts";
+import type { RiskLimitManager } from "./risk-limit.ts";
 import type {
   AccountCredentials,
   AcexInternalError,
@@ -142,6 +143,7 @@ export interface AcexClient {
   readonly account: AccountManager;
   readonly order: OrderManager;
   readonly fee: FeeManager;
+  readonly riskLimit: RiskLimitManager;
   readonly events: ClientEventStreams;
 
   getStatus(): ClientStatus;

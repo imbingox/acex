@@ -406,6 +406,40 @@ export interface RawSymbolFeeRate {
   receivedAt: number;
 }
 
+export interface FetchSymbolRiskLimitRequest {
+  symbol: string;
+}
+
+export type FetchRiskLimitsRequest = Record<never, never>;
+
+export interface SetSymbolLeverageRequest {
+  symbol: string;
+  leverage: string;
+}
+
+export interface RawRiskLimitTier {
+  tier: number;
+  initialLeverage: string;
+  notionalFloor?: string;
+  notionalCap?: string;
+  maintenanceMarginRatio?: string;
+  cumulativeMaintenanceAmount?: string;
+}
+
+export interface RawSymbolRiskLimit {
+  symbol: string;
+  tiers: RawRiskLimitTier[];
+  notionalCoefficient?: string;
+  receivedAt: number;
+}
+
+export interface RawSymbolLeverageUpdate {
+  symbol: string;
+  leverage: string;
+  maxNotionalValue?: string;
+  receivedAt: number;
+}
+
 export interface PrivateStreamCallbacks {
   onAccountSnapshot(snapshot: RawAccountBootstrap): void;
   onAccountUpdate(update: RawAccountUpdate): void;
@@ -464,6 +498,21 @@ export interface PrivateUserDataAdapter {
     request: FetchSymbolFeeRateRequest,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawSymbolFeeRate>;
+  fetchSymbolRiskLimit?(
+    credentials: AccountCredentials,
+    request: FetchSymbolRiskLimitRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolRiskLimit>;
+  fetchRiskLimits?(
+    credentials: AccountCredentials,
+    request: FetchRiskLimitsRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolRiskLimit[]>;
+  setSymbolLeverage?(
+    credentials: AccountCredentials,
+    request: SetSymbolLeverageRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawSymbolLeverageUpdate>;
   createOrder(
     credentials: AccountCredentials,
     request: CreateOrderRequest,

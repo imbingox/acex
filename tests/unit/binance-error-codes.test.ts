@@ -20,6 +20,7 @@ test("normalizeBinanceErrorCode maps PAPI UM codes to stable reasons", () => {
 
   expect(normalizeBinanceErrorCode("-4131")).toBe("filter_violation");
   expect(normalizeBinanceErrorCode("-2025")).toBe("filter_violation");
+  expect(normalizeBinanceErrorCode("-2027")).toBe("filter_violation");
   expect(normalizeBinanceErrorCode("-1111")).toBe("filter_violation");
   expect(normalizeBinanceErrorCode("-4002")).toBe("filter_violation");
   expect(normalizeBinanceErrorCode("-4004")).toBe("filter_violation");

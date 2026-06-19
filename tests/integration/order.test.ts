@@ -602,6 +602,287 @@ test("fee manager wraps Binance fee rate failures with public error details", as
   expect((failure as AcexError).details?.orderState).toBeUndefined();
 });
 
+test("risk limit manager fetches Binance PAPI UM tiers and sets leverage", async () => {
+  let now = 1710000001000;
+  const requests = installBinancePrivateAccountInfra({
+    leverageBrackets: [
+      {
+        symbol: "BTCUSDT",
+        notionalCoef: "1.5000",
+        brackets: [
+          {
+            bracket: 1,
+            initialLeverage: 125,
+            notionalFloor: "0",
+            notionalCap: "50000",
+            maintMarginRatio: "0.0040",
+            cum: "0",
+          },
+        ],
+      },
+    ],
+    leverageUpdate: {
+      symbol: "BTCUSDT",
+      leverage: 4,
+      maxNotionalValue: "500000.0000",
+    },
+  });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+    options: {
+      timestamp: 1710000000000,
+      recvWindow: 5000,
+    },
+  });
+  await client.start();
+
+  const withMockedNow = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      return await operation();
+    } finally {
+      Date.now = originalDateNow;
+    }
+  };
+
+  const riskLimit = await withMockedNow(async () =>
+    client.riskLimit.fetchSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  );
+
+  expect(riskLimit).toMatchObject({
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    tiers: {
+      source: "venue",
+      stale: false,
+      receivedAt: 1710000001000,
+      maxInitialLeverage: "125",
+      notionalCoefficient: "1.5",
+      items: [
+        {
+          tier: 1,
+          initialLeverage: "125",
+          notionalFloor: "0",
+          notionalCap: "50000",
+          maintenanceMarginRatio: "0.004",
+          cumulativeMaintenanceAmount: "0",
+        },
+      ],
+    },
+  });
+
+  now = 1710000002000;
+  const leverage = await withMockedNow(async () =>
+    client.riskLimit.setSymbolLeverage({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      leverage: "4",
+    }),
+  );
+  expect(leverage).toMatchObject({
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+    leverage: "4",
+    maxNotionalValue: "500000",
+    receivedAt: 1710000002000,
+  });
+
+  const cached = await withMockedNow(async () =>
+    client.riskLimit.getSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    }),
+  );
+  expect(cached).toMatchObject({
+    tiers: {
+      source: "venue",
+      stale: false,
+      notionalCoefficient: "1.5",
+    },
+    leverage: {
+      lastSet: {
+        leverage: "4",
+        maxNotionalValue: "500000",
+      },
+    },
+  });
+
+  const bracketRequest = requests.find(
+    (entry) =>
+      entry.method === "GET" &&
+      entry.url.pathname === "/papi/v1/um/leverageBracket",
+  );
+  expect(bracketRequest?.apiKey).toBe("key");
+  expect(bracketRequest?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+  expect(bracketRequest?.url.searchParams.get("timestamp")).toBe(
+    "1710000000000",
+  );
+  expect(bracketRequest?.url.searchParams.get("recvWindow")).toBe("5000");
+  expect(bracketRequest?.url.searchParams.get("signature")).toBeTruthy();
+
+  const leverageRequest = requests.find(
+    (entry) =>
+      entry.method === "POST" && entry.url.pathname === "/papi/v1/um/leverage",
+  );
+  expect(leverageRequest?.apiKey).toBe("key");
+  expect(leverageRequest?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+  expect(leverageRequest?.url.searchParams.get("leverage")).toBe("4");
+});
+
+test("risk limit manager rejects invalid leverage before Binance REST", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  for (const leverage of ["0", "4.5", "126"]) {
+    await expect(
+      client.riskLimit.setSymbolLeverage({
+        accountId: "main-binance",
+        symbol: "BTC/USDT:USDT",
+        leverage,
+      }),
+    ).rejects.toMatchObject({
+      code: "RISK_LIMIT_INPUT_INVALID",
+    });
+  }
+
+  expect(
+    requests.some((entry) => entry.url.pathname === "/papi/v1/um/leverage"),
+  ).toBe(false);
+});
+
+test("risk limit manager rejects missing Binance credentials before REST", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+  });
+  await client.start();
+
+  await expect(
+    client.riskLimit.fetchRiskLimits({
+      accountId: "main-binance",
+    }),
+  ).rejects.toMatchObject({
+    code: "CREDENTIALS_MISSING",
+  });
+  await expect(
+    client.riskLimit.setSymbolLeverage({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      leverage: "4",
+    }),
+  ).rejects.toMatchObject({
+    code: "CREDENTIALS_MISSING",
+  });
+  expect(requests).toHaveLength(0);
+});
+
+test("risk limit manager wraps Binance risk limit failures with public error details", async () => {
+  installBinancePrivateAccountInfra({ failLeverageBracket: true });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.riskLimit
+    .fetchSymbolRiskLimit({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+    })
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
+    code: "RISK_LIMIT_FETCH_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      venueError: {
+        code: "-2015",
+        message: "Invalid API-key",
+        reason: "unknown",
+      },
+      transport: {
+        kind: "http",
+        status: 401,
+      },
+    },
+  });
+});
+
+test("risk limit manager wraps Binance leverage failures with public error details", async () => {
+  installBinancePrivateAccountInfra({ failSetLeverage: true });
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const failure = await client.riskLimit
+    .setSymbolLeverage({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      leverage: "4",
+    })
+    .catch((error) => error);
+
+  expect(failure).toMatchObject({
+    code: "LEVERAGE_SET_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+      venueError: {
+        code: "-2027",
+        message: "Exceeded the maximum allowable position at current leverage.",
+        reason: "filter_violation",
+      },
+      transport: {
+        kind: "http",
+        status: 400,
+      },
+    },
+  });
+});
+
 test("order trades stream publishes Binance per-trade fee, maker flag, realized pnl, and seq", async () => {
   const { client, socket } = await createSubscribedOrderClient({});
   const iterator = client.order.events
@@ -4574,5 +4855,26 @@ test("Juplend order commands are rejected before adapter command methods", async
   ).rejects.toMatchObject({
     code: "VENUE_NOT_SUPPORTED",
     message: "Venue does not support symbol fee rate queries for swap: juplend",
+  });
+
+  await expect(
+    client.riskLimit.fetchSymbolRiskLimit({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    message: "Venue does not support symbol risk limit queries: juplend",
+  });
+
+  await expect(
+    client.riskLimit.setSymbolLeverage({
+      accountId: "jup-loop-a",
+      symbol: "SOL/USDC",
+      leverage: "4",
+    }),
+  ).rejects.toMatchObject({
+    code: "VENUE_NOT_SUPPORTED",
+    message: "Venue does not support symbol leverage changes: juplend",
   });
 });

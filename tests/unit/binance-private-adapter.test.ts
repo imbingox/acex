@@ -214,6 +214,101 @@ test("BinancePrivateAdapter normalizes REST open order types and preserves rawTy
   ]);
 });
 
+test("BinancePrivateAdapter maps PAPI UM leverage brackets", async () => {
+  const requestedUrls: URL[] = [];
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/um/leverageBracket"
+      ) {
+        requestedUrls.push(url);
+        return jsonResponse([
+          {
+            symbol: "BTCUSDT",
+            notionalCoef: "1.5000",
+            brackets: [
+              {
+                bracket: 1,
+                initialLeverage: 125,
+                notionalFloor: "0",
+                notionalCap: "50000",
+                maintMarginRatio: "0.0040",
+                cum: "0",
+              },
+            ],
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const snapshot = await adapter.fetchSymbolRiskLimit?.(
+    { apiKey: "key", secret: "secret" },
+    { symbol: "BTC/USDT:USDT" },
+  );
+
+  expect(snapshot).toMatchObject({
+    symbol: "BTC/USDT:USDT",
+    notionalCoefficient: "1.5",
+    tiers: [
+      {
+        tier: 1,
+        initialLeverage: "125",
+        notionalFloor: "0",
+        notionalCap: "50000",
+        maintenanceMarginRatio: "0.004",
+        cumulativeMaintenanceAmount: "0",
+      },
+    ],
+  });
+  expect(requestedUrls[0]?.searchParams.get("symbol")).toBe("BTCUSDT");
+});
+
+test("BinancePrivateAdapter sets PAPI UM leverage", async () => {
+  const requestedUrls: URL[] = [];
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/um/leverage"
+      ) {
+        requestedUrls.push(url);
+        return jsonResponse({
+          symbol: "BTCUSDT",
+          leverage: 4,
+          maxNotionalValue: "500000.0000",
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const update = await adapter.setSymbolLeverage?.(
+    { apiKey: "key", secret: "secret" },
+    { symbol: "BTC/USDT:USDT", leverage: "4" },
+  );
+
+  expect(update).toMatchObject({
+    symbol: "BTC/USDT:USDT",
+    leverage: "4",
+    maxNotionalValue: "500000",
+  });
+  expect(requestedUrls[0]?.searchParams.get("symbol")).toBe("BTCUSDT");
+  expect(requestedUrls[0]?.searchParams.get("leverage")).toBe("4");
+});
+
 test("BinancePrivateAdapter normalizes websocket order types and preserves rawType", async () => {
   FakeWebSocket.reset();
   Object.defineProperty(globalThis, "WebSocket", {

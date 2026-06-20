@@ -49,6 +49,36 @@ export type OrderType =
   | "trailing_stop_market"
   | "unknown";
 
+export type BinanceMarginSideEffectType =
+  | "no_side_effect"
+  | "margin_buy"
+  | "auto_repay"
+  | "auto_borrow_repay";
+
+export interface UmOrderOptions {
+  reduceOnly?: boolean;
+  positionSide?: PositionSide;
+}
+
+export interface MarginOrderOptions {
+  sideEffectType?: BinanceMarginSideEffectType;
+  autoRepayAtCancel?: boolean;
+}
+
+export type CreateOrderProductOptions =
+  | {
+      um?: UmOrderOptions;
+      margin?: never;
+    }
+  | {
+      margin?: MarginOrderOptions;
+      um?: never;
+    }
+  | {
+      um?: undefined;
+      margin?: undefined;
+    };
+
 export interface SubscribeOrdersInput {
   accountId: string;
 }
@@ -70,20 +100,22 @@ interface CreateOrderInputBase {
   side: OrderSide;
   amount: string;
   clientOrderId?: string;
-  reduceOnly?: boolean;
-  positionSide?: PositionSide;
 }
 
-export interface CreateLimitOrderInput extends CreateOrderInputBase {
+interface CreateLimitOrderFields extends CreateOrderInputBase {
   type: "limit";
   price: string;
   postOnly?: boolean;
 }
 
-export interface CreateMarketOrderInput extends CreateOrderInputBase {
+interface CreateMarketOrderFields extends CreateOrderInputBase {
   type: "market";
 }
 
+export type CreateLimitOrderInput = CreateLimitOrderFields &
+  CreateOrderProductOptions;
+export type CreateMarketOrderInput = CreateMarketOrderFields &
+  CreateOrderProductOptions;
 export type CreateOrderInput = CreateLimitOrderInput | CreateMarketOrderInput;
 
 export interface CancelOrderInput {

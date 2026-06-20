@@ -81,7 +81,7 @@ test("client exposes venue runtime capabilities without starting", () => {
     account: {
       snapshot: "supported",
       updates: "websocket",
-      lending: "unsupported",
+      lending: "supported",
     },
     order: {
       supported: true,

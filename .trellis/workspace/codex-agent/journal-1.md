@@ -1846,3 +1846,38 @@ Implemented Binance riskLeverage updates from ACCOUNT_UPDATE and riskLevelChange
 ### Next Steps
 
 - None - task complete
+
+
+## Session 53: Binance PAPI margin order routing
+
+**Date**: 2026-06-20
+**Task**: Binance PAPI margin order routing
+**Branch**: `feat/binance-papi-margin-orders`
+
+### Summary
+
+实现 Binance PAPI UM 与 margin 订单按 market catalog 路由，新增 margin 私有流映射、账户 partial lending 合并、cancelAll live smoke 修正，并补充测试、文档和 code-spec。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `076db02` | (see git log) |
+| `1ffb347` | (see git log) |
+| `f21c373` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

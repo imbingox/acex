@@ -2331,6 +2331,60 @@ test("createOrder rejects invalid caller-provided clientOrderId before REST", as
   ).toBe(false);
 });
 
+test("createOrder rejects Binance product option mismatches before REST", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+
+  const spotFailure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT",
+      side: "buy",
+      type: "market",
+      amount: "0.010",
+      um: {
+        reduceOnly: true,
+      },
+    })
+    .catch((error) => error);
+  const swapFailure = await client.order
+    .createOrder({
+      accountId: "main-binance",
+      symbol: "BTC/USDT:USDT",
+      side: "buy",
+      type: "market",
+      amount: "0.010",
+      margin: {
+        sideEffectType: "margin_buy",
+      },
+    })
+    .catch((error) => error);
+
+  for (const failure of [spotFailure, swapFailure]) {
+    expect(failure).toBeInstanceOf(AcexError);
+    expect((failure as AcexError).code).toBe("ORDER_INPUT_INVALID");
+    expect((failure as AcexError).details?.orderState).toBe("not_placed");
+  }
+  expect(
+    requests.some(
+      (entry) =>
+        entry.method === "POST" &&
+        (entry.url.pathname === "/papi/v1/um/order" ||
+          entry.url.pathname === "/papi/v1/margin/order"),
+    ),
+  ).toBe(false);
+});
+
 test("createOrder propagates command ack write failures", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient();

@@ -926,17 +926,25 @@ export class AccountManagerImpl
       seq: (previous?.seq ?? 0) + 1,
       lending: input.lending
         ? {
-            supplied: toCanonical(input.lending.supplied),
-            borrowed: toCanonical(input.lending.borrowed),
-            interest: toCanonical(input.lending.interest),
-            netAsset: toCanonical(input.lending.netAsset),
+            supplied: toCanonical(
+              input.lending.supplied ?? previous?.lending?.supplied ?? "0",
+            ),
+            borrowed: toCanonical(
+              input.lending.borrowed ?? previous?.lending?.borrowed ?? "0",
+            ),
+            interest: toCanonical(
+              input.lending.interest ?? previous?.lending?.interest ?? "0",
+            ),
+            netAsset: toCanonical(
+              input.lending.netAsset ?? previous?.lending?.netAsset ?? "0",
+            ),
             supplyAPY:
               input.lending.supplyAPY === undefined
-                ? undefined
+                ? previous?.lending?.supplyAPY
                 : toCanonical(input.lending.supplyAPY),
             borrowAPY:
               input.lending.borrowAPY === undefined
-                ? undefined
+                ? previous?.lending?.borrowAPY
                 : toCanonical(input.lending.borrowAPY),
           }
         : previous?.lending,

@@ -959,6 +959,81 @@ test("immediate private reconcile requests are coalesced with one dirty replay",
   expect(adapter.fetchOpenOrdersCalls).toBe(2);
 });
 
+test("margin private reconcile requests are debounced and preserve stream status", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  adapter.fetchOpenOrdersCalls = 0;
+  adapter.blockOpenOrders = true;
+  orderConsumer.reconcilePreserveStatus = [];
+
+  const started = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("margin_open_order_loss");
+  adapter.callbacks?.requestReconcile?.("margin_liability_change");
+  adapter.callbacks?.requestReconcile?.("margin_open_order_loss");
+
+  await Bun.sleep(50);
+  expect(adapter.fetchOpenOrdersCalls).toBe(0);
+
+  await waitFor(started, "delayed margin reconcile", 1_500);
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(20);
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+  expect(orderConsumer.reconcilePreserveStatus).toEqual([true]);
+});
+
+test("immediate private reconcile cancels pending delayed margin reconcile", async () => {
+  const context = new StubContext();
+  const adapter = new ManualReconcileBinanceAdapter();
+  const orderConsumer = new StubOrderConsumer();
+  const coordinator = new PrivateSubscriptionCoordinator(
+    context,
+    [adapter],
+    new StubAccountConsumer(),
+    orderConsumer,
+    binanceRuntimeOptions({
+      privateReconcileIntervalMs: 0,
+    }),
+  );
+
+  await coordinator.subscribeOrderFeed("main-binance");
+  expect(adapter.callbacks?.requestReconcile).toBeDefined();
+  adapter.fetchOpenOrdersCalls = 0;
+  adapter.blockOpenOrders = true;
+  orderConsumer.reconcilePreserveStatus = [];
+
+  adapter.callbacks?.requestReconcile?.("margin_open_order_loss");
+  await Bun.sleep(50);
+  expect(adapter.fetchOpenOrdersCalls).toBe(0);
+
+  const immediateStarted = new Promise<void>((resolve) => {
+    adapter.fetchOpenOrdersStartedResolvers.push(resolve);
+  });
+  adapter.callbacks?.requestReconcile?.("symbol_mapping_miss");
+  await waitFor(immediateStarted, "immediate reconcile");
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+
+  adapter.releaseOpenOrders.shift()?.();
+  await Bun.sleep(1_200);
+
+  expect(adapter.fetchOpenOrdersCalls).toBe(1);
+  expect(orderConsumer.reconcilePreserveStatus).toEqual([false]);
+});
+
 test("risk level changes are forwarded only when account data is subscribed", async () => {
   const context = new StubContext();
   const adapter = new ManualReconcileBinanceAdapter();

@@ -309,6 +309,98 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   await iterator.return?.();
 });
 
+test("Binance margin liability updates merge partial lending fields without accumulating", async () => {
+  installBinancePrivateAccountInfra();
+  const client = createClient({
+    account: {
+      streamOpenTimeoutMs: 50,
+      streamReconnectDelayMs: 5,
+      streamReconnectMaxDelayMs: 5,
+      venues: {
+        binance: {
+          privateReconcileIntervalMs: 0,
+          riskPollIntervalMs: 60_000,
+        },
+      },
+    },
+  });
+  const iterator = client.account.events
+    .updates({
+      accountId: "main-binance",
+      venue: "binance",
+    })
+    [Symbol.asyncIterator]();
+
+  await client.registerAccount({
+    accountId: "main-binance",
+    venue: "binance",
+    credentials: {
+      apiKey: "key",
+      secret: "secret",
+    },
+  });
+  await client.start();
+  const subscribePromise = client.account.subscribeAccount({
+    accountId: "main-binance",
+  });
+  const socket = await waitForSocket(PAPI_ACCOUNT_WS_URL);
+  await subscribePromise;
+  await nextAccountEventOfType(iterator, "account.snapshot_replaced");
+
+  const firstLiabilityTs = Date.now();
+  socket.emitJson({
+    e: "liabilityChange",
+    E: firstLiabilityTs,
+    a: "USDT",
+    i: "0.25",
+    l: "5.25",
+    T: firstLiabilityTs,
+  });
+  const firstUpdate = await nextAccountEventOfType(iterator, "balance.updated");
+  expect(firstUpdate.snapshot).toMatchObject({
+    asset: "USDT",
+    free: new BigNumber("1000.25").toFixed(),
+    used: new BigNumber("250.25").toFixed(),
+    total: new BigNumber("1250.50").toFixed(),
+    lending: {
+      supplied: "0",
+      borrowed: "5.25",
+      interest: "0.25",
+      netAsset: "0",
+    },
+  });
+
+  const secondLiabilityTs = firstLiabilityTs + 1;
+  socket.emitJson({
+    e: "liabilityChange",
+    E: secondLiabilityTs,
+    a: "USDT",
+    l: "6.5",
+    T: secondLiabilityTs,
+  });
+  const secondUpdate = await nextAccountEventOfType(
+    iterator,
+    "balance.updated",
+  );
+  expect(secondUpdate.snapshot).toMatchObject({
+    asset: "USDT",
+    lending: {
+      supplied: "0",
+      borrowed: "6.5",
+      interest: "0.25",
+      netAsset: "0",
+    },
+  });
+  expect(client.account.getBalance("main-binance", "USDT")?.lending).toEqual({
+    supplied: "0",
+    borrowed: "6.5",
+    interest: "0.25",
+    netAsset: "0",
+  });
+
+  await iterator.return?.();
+});
+
 test("Binance ACCOUNT_UPDATE does not derive risk leverage without mark price", async () => {
   installBinancePrivateAccountInfra({
     umPositions: [

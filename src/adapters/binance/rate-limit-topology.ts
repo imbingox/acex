@@ -45,10 +45,16 @@ export const BINANCE_RATE_LIMIT_PLANS = {
   papiQueryOrder: "binance:papi:query-order",
   papiOpenOrdersSymbol: "binance:papi:open-orders:symbol",
   papiOpenOrdersAll: "binance:papi:open-orders:all",
+  papiMarginQueryOrder: "binance:papi:margin:query-order",
+  papiMarginOpenOrdersSymbol: "binance:papi:margin:open-orders:symbol",
+  papiMarginOpenOrdersAll: "binance:papi:margin:open-orders:all",
   papiSetLeverage: "binance:papi:set-leverage",
   papiNewOrder: "binance:papi:new-order",
   papiCancelOrder: "binance:papi:cancel-order",
   papiCancelAllOrders: "binance:papi:cancel-all-orders",
+  papiMarginNewOrder: "binance:papi:margin:new-order",
+  papiMarginCancelOrder: "binance:papi:margin:cancel-order",
+  papiMarginCancelAllOrders: "binance:papi:margin:cancel-all-orders",
   papiListenKey: "binance:papi:listen-key",
 } as const;
 
@@ -203,12 +209,40 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
       40,
     ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiMarginQueryOrder,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      10,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiMarginOpenOrdersSymbol,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      10,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiMarginOpenOrdersAll,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      40,
+    ),
     {
       id: BINANCE_RATE_LIMIT_PLANS.papiNewOrder,
       costs: [
         {
           bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
           cost: 0,
+        },
+        {
+          bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiOrders1m,
+          cost: 1,
+        },
+      ],
+    },
+    {
+      id: BINANCE_RATE_LIMIT_PLANS.papiMarginNewOrder,
+      costs: [
+        {
+          bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+          cost: 1,
         },
         {
           bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiOrders1m,
@@ -224,6 +258,18 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
     ),
     requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.papiCancelAllOrders,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      1,
+      "cancel",
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiMarginCancelOrder,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      1,
+      "cancel",
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiMarginCancelAllOrders,
       BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
       1,
       "cancel",
@@ -316,14 +362,26 @@ export function getBinancePapiRateLimitPlanId(
       return queryParams?.symbol
         ? BINANCE_RATE_LIMIT_PLANS.papiOpenOrdersSymbol
         : BINANCE_RATE_LIMIT_PLANS.papiOpenOrdersAll;
+    case "GET /papi/v1/margin/order":
+      return BINANCE_RATE_LIMIT_PLANS.papiMarginQueryOrder;
+    case "GET /papi/v1/margin/openOrders":
+      return queryParams?.symbol
+        ? BINANCE_RATE_LIMIT_PLANS.papiMarginOpenOrdersSymbol
+        : BINANCE_RATE_LIMIT_PLANS.papiMarginOpenOrdersAll;
     case "POST /papi/v1/um/order":
       return BINANCE_RATE_LIMIT_PLANS.papiNewOrder;
+    case "POST /papi/v1/margin/order":
+      return BINANCE_RATE_LIMIT_PLANS.papiMarginNewOrder;
     case "POST /papi/v1/um/leverage":
       return BINANCE_RATE_LIMIT_PLANS.papiSetLeverage;
     case "DELETE /papi/v1/um/order":
       return BINANCE_RATE_LIMIT_PLANS.papiCancelOrder;
     case "DELETE /papi/v1/um/allOpenOrders":
       return BINANCE_RATE_LIMIT_PLANS.papiCancelAllOrders;
+    case "DELETE /papi/v1/margin/order":
+      return BINANCE_RATE_LIMIT_PLANS.papiMarginCancelOrder;
+    case "DELETE /papi/v1/margin/allOpenOrders":
+      return BINANCE_RATE_LIMIT_PLANS.papiMarginCancelAllOrders;
     case "POST /papi/v1/listenKey":
     case "PUT /papi/v1/listenKey":
     case "DELETE /papi/v1/listenKey":

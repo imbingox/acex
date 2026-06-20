@@ -2,6 +2,7 @@ import type { VenueErrorReason } from "../errors.ts";
 import type {
   AccountCredentials,
   CreateOrderType,
+  MarginOrderOptions,
   MarketDefinition,
   OrderSide,
   OrderStatus,
@@ -9,6 +10,7 @@ import type {
   PositionSide,
   RiskAlertLevel,
   RiskLevel,
+  UmOrderOptions,
   Venue,
   VenueAccountCapabilities,
   VenueMarketCapabilities,
@@ -69,6 +71,37 @@ export class CatalogUnavailableError extends Error {
   }
 }
 
+export class OrderInputValidationError extends Error {
+  readonly isAcexOrderInputValidationError = true;
+  readonly isAcexOrderPreflightError = true;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "OrderInputValidationError";
+  }
+}
+
+export class UnsupportedSymbolProductError extends Error {
+  readonly isAcexOrderPreflightError = true;
+  readonly venue: Venue;
+  readonly family: string;
+  readonly symbol: string;
+
+  constructor(input: {
+    readonly venue: Venue;
+    readonly family: string;
+    readonly symbol: string;
+  }) {
+    super(
+      `${input.venue} private orders do not support product line ${input.family}: ${input.symbol}`,
+    );
+    this.name = "UnsupportedSymbolProductError";
+    this.venue = input.venue;
+    this.family = input.family;
+    this.symbol = input.symbol;
+  }
+}
+
 export function isSymbolMappingError(
   error: unknown,
 ): error is SymbolMappingError {
@@ -91,10 +124,37 @@ export function isCatalogUnavailableError(
   );
 }
 
+export function isOrderInputValidationError(
+  error: unknown,
+): error is OrderInputValidationError {
+  return (
+    error instanceof OrderInputValidationError ||
+    (isRecord(error) &&
+      error.name === "OrderInputValidationError" &&
+      error.isAcexOrderInputValidationError === true)
+  );
+}
+
+export function isUnsupportedSymbolProductError(
+  error: unknown,
+): error is UnsupportedSymbolProductError {
+  return (
+    error instanceof UnsupportedSymbolProductError ||
+    (isRecord(error) &&
+      error.name === "UnsupportedSymbolProductError" &&
+      error.isAcexOrderPreflightError === true)
+  );
+}
+
 export function isOrderPreflightError(error: unknown): boolean {
   let current = error;
   for (let depth = 0; depth < 4; depth += 1) {
-    if (isSymbolMappingError(current) || isCatalogUnavailableError(current)) {
+    if (
+      isSymbolMappingError(current) ||
+      isCatalogUnavailableError(current) ||
+      isOrderInputValidationError(current) ||
+      isUnsupportedSymbolProductError(current)
+    ) {
       return true;
     }
 
@@ -260,10 +320,10 @@ export interface RawBalanceUpdate {
 }
 
 export interface RawLendingBalanceUpdate {
-  supplied: string;
-  borrowed: string;
-  interest: string;
-  netAsset: string;
+  supplied?: string;
+  borrowed?: string;
+  interest?: string;
+  netAsset?: string;
   supplyAPY?: string;
   borrowAPY?: string;
 }
@@ -381,8 +441,8 @@ export interface CreateOrderRequest {
   price?: string;
   postOnly?: boolean;
   clientOrderId?: string;
-  reduceOnly?: boolean;
-  positionSide?: PositionSide;
+  um?: UmOrderOptions;
+  margin?: MarginOrderOptions;
 }
 
 export interface CancelOrderRequest {
@@ -440,6 +500,12 @@ export interface RawSymbolLeverageUpdate {
   receivedAt: number;
 }
 
+export type PrivateReconcileReason =
+  | "symbol_mapping_miss"
+  | "margin_balance_delta"
+  | "margin_liability_change"
+  | "margin_open_order_loss";
+
 export interface PrivateStreamCallbacks {
   onAccountSnapshot(snapshot: RawAccountBootstrap): void;
   onAccountUpdate(update: RawAccountUpdate): void;
@@ -448,7 +514,7 @@ export interface PrivateStreamCallbacks {
   onFreshnessChange(freshness: "stale", reason: "heartbeat_timeout"): void;
   onDisconnected(): void;
   onReconnected(): void;
-  requestReconcile?(reason: "symbol_mapping_miss"): void;
+  requestReconcile?(reason: PrivateReconcileReason): void;
   onError(error: Error): void;
 }
 

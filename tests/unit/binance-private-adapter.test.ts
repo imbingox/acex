@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { BinanceMarketCatalog } from "../../src/adapters/binance/market-catalog.ts";
 import { BinancePrivateAdapter } from "../../src/adapters/binance/private-adapter.ts";
 import {
+  OrderInputValidationError,
   type RawAccountUpdate,
   type RawRiskLevelChange,
   SymbolMappingError,
@@ -15,6 +16,7 @@ import {
 } from "../support/test-utils.ts";
 
 const USDM_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
+const SPOT_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo";
 const PAPI_REST_BASE_URL = "https://papi.binance.com";
 const PAPI_WS_URL = "wss://fstream.binance.com/pm/ws/test-listen-key";
 
@@ -40,6 +42,24 @@ function usdmExchangeInfo(extraSymbols: unknown[] = []) {
         filters: [
           { filterType: "PRICE_FILTER", tickSize: "0.10" },
           { filterType: "LOT_SIZE", minQty: "0.001", stepSize: "0.001" },
+        ],
+      },
+      ...extraSymbols,
+    ],
+  };
+}
+
+function spotExchangeInfo(extraSymbols: unknown[] = []) {
+  return {
+    symbols: [
+      {
+        symbol: "BTCUSDT",
+        status: "TRADING",
+        baseAsset: "BTC",
+        quoteAsset: "USDT",
+        filters: [
+          { filterType: "PRICE_FILTER", tickSize: "0.01" },
+          { filterType: "LOT_SIZE", minQty: "0.0001", stepSize: "0.0001" },
         ],
       },
       ...extraSymbols,
@@ -171,6 +191,9 @@ test("BinancePrivateAdapter normalizes REST open order types and preserves rawTy
       if (url.toString() === USDM_EXCHANGE_INFO_URL) {
         return jsonResponse(usdmExchangeInfo());
       }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(spotExchangeInfo());
+      }
       if (
         url.origin === PAPI_REST_BASE_URL &&
         `${url.pathname}` === "/papi/v1/um/openOrders"
@@ -189,6 +212,12 @@ test("BinancePrivateAdapter normalizes REST open order types and preserves rawTy
             type: "LIMIT_MAKER",
           },
         ]);
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/margin/openOrders"
+      ) {
+        return jsonResponse([]);
       }
 
       throw new Error(`Unexpected URL: ${url.toString()}`);
@@ -212,6 +241,298 @@ test("BinancePrivateAdapter normalizes REST open order types and preserves rawTy
     { orderId: "3", type: "stop_market", rawType: "STOP_MARKET" },
     { orderId: "4", type: "unknown", rawType: "LIMIT_MAKER" },
   ]);
+});
+
+test("BinancePrivateAdapter routes spot createOrder to PAPI margin order endpoint", async () => {
+  const requests: URL[] = [];
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(spotExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/margin/order"
+      ) {
+        requests.push(url);
+        return jsonResponse({
+          symbol: "BTCUSDT",
+          orderId: 9201,
+          clientOrderId: "cid-margin-9201",
+          side: "BUY",
+          type: "LIMIT",
+          status: "NEW",
+          price: "1.00",
+          origQty: "2",
+          executedQty: "0",
+          cummulativeQuoteQty: "0",
+          transactTime: 1710000000250,
+        });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const update = await adapter.createOrder(
+    { apiKey: "key", secret: "secret" },
+    {
+      symbol: "BTC/USDT",
+      side: "buy",
+      type: "limit",
+      price: "1.00",
+      amount: "2",
+      clientOrderId: "cid-margin-9201",
+      margin: {
+        sideEffectType: "auto_borrow_repay",
+        autoRepayAtCancel: false,
+      },
+    },
+  );
+
+  expect(update).toMatchObject({
+    symbol: "BTC/USDT",
+    status: "open",
+    orderId: "9201",
+  });
+  expect(update.reduceOnly).toBeUndefined();
+  expect(update.positionSide).toBeUndefined();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.searchParams.get("symbol")).toBe("BTCUSDT");
+  expect(requests[0]?.searchParams.get("sideEffectType")).toBe(
+    "AUTO_BORROW_REPAY",
+  );
+  expect(requests[0]?.searchParams.get("autoRepayAtCancel")).toBe("false");
+  expect(requests[0]?.searchParams.get("reduceOnly")).toBeNull();
+  expect(requests[0]?.searchParams.get("positionSide")).toBeNull();
+});
+
+test("BinancePrivateAdapter rejects product option mismatches before REST", async () => {
+  let marginPosts = 0;
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(spotExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/margin/order"
+      ) {
+        marginPosts += 1;
+        return jsonResponse({});
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const error = await adapter
+    .createOrder(
+      { apiKey: "key", secret: "secret" },
+      {
+        symbol: "BTC/USDT",
+        side: "buy",
+        type: "market",
+        amount: "2",
+        um: {
+          reduceOnly: true,
+        },
+      },
+    )
+    .catch((caught: unknown) => caught);
+
+  expect(error).toBeInstanceOf(OrderInputValidationError);
+  expect(marginPosts).toBe(0);
+});
+
+test("BinancePrivateAdapter merges UM and margin open order snapshots", async () => {
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(spotExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/um/openOrders"
+      ) {
+        return jsonResponse([successfulOrderResponse("BTCUSDT")]);
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/margin/openOrders"
+      ) {
+        return jsonResponse([
+          {
+            symbol: "BTCUSDT",
+            orderId: 9301,
+            clientOrderId: "cid-margin-9301",
+            side: "SELL",
+            type: "LIMIT",
+            status: "NEW",
+            price: "2.00",
+            origQty: "3",
+            executedQty: "1",
+            updateTime: 1710000000260,
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const snapshot = await adapter.fetchOpenOrders?.({
+    apiKey: "key",
+    secret: "secret",
+  });
+
+  expect(snapshot?.orders).toMatchObject([
+    {
+      symbol: "BTC/USDT:USDT",
+      orderId: "9101",
+      positionSide: "net",
+    },
+    {
+      symbol: "BTC/USDT",
+      orderId: "9301",
+    },
+  ]);
+  expect(snapshot?.orders[1]?.positionSide).toBeUndefined();
+  expect(snapshot?.orders[0]?.receivedAt).toBe(snapshot?.snapshotReceivedAt);
+  expect(snapshot?.orders[1]?.receivedAt).toBe(snapshot?.snapshotReceivedAt);
+});
+
+test("BinancePrivateAdapter routes spot fetch and cancel commands to PAPI margin endpoints", async () => {
+  const requests: Array<{
+    method: string;
+    path: string;
+    symbol: string | null;
+  }> = [];
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input, init) => {
+      const url = new URL(input.toString());
+      const method = init?.method ?? "GET";
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(spotExchangeInfo());
+      }
+      if (url.origin !== PAPI_REST_BASE_URL) {
+        throw new Error(`Unexpected URL: ${url.toString()}`);
+      }
+
+      requests.push({
+        method,
+        path: url.pathname,
+        symbol: url.searchParams.get("symbol"),
+      });
+
+      if (`${method} ${url.pathname}` === "GET /papi/v1/margin/order") {
+        return jsonResponse({
+          symbol: "BTCUSDT",
+          orderId: 9401,
+          clientOrderId: "cid-margin-9401",
+          side: "BUY",
+          type: "LIMIT",
+          status: "FILLED",
+          price: "1.00",
+          origQty: "2",
+          executedQty: "2",
+          updateTime: 1710000000270,
+        });
+      }
+      if (`${method} ${url.pathname}` === "DELETE /papi/v1/margin/order") {
+        return jsonResponse({
+          symbol: "BTCUSDT",
+          orderId: 9401,
+          clientOrderId: "cid-margin-9401",
+          side: "BUY",
+          type: "LIMIT",
+          status: "CANCELED",
+          price: "1.00",
+          origQty: "2",
+          executedQty: "0",
+          updateTime: 1710000000280,
+        });
+      }
+      if (`${method} ${url.pathname}` === "GET /papi/v1/margin/openOrders") {
+        return jsonResponse([
+          {
+            symbol: "BTCUSDT",
+            orderId: 9402,
+            clientOrderId: "cid-margin-9402",
+            side: "SELL",
+            type: "LIMIT",
+            status: "NEW",
+            price: "2.00",
+            origQty: "3",
+            executedQty: "0",
+            updateTime: 1710000000290,
+          },
+        ]);
+      }
+      if (
+        `${method} ${url.pathname}` === "DELETE /papi/v1/margin/allOpenOrders"
+      ) {
+        return jsonResponse({ code: 200, msg: "done" });
+      }
+
+      throw new Error(`Unexpected URL: ${method} ${url.toString()}`);
+    },
+  });
+
+  const fetched = await adapter.fetchOrder?.(
+    { apiKey: "key", secret: "secret" },
+    { symbol: "BTC/USDT", orderId: "9401" },
+  );
+  const canceled = await adapter.cancelOrder(
+    { apiKey: "key", secret: "secret" },
+    { symbol: "BTC/USDT", orderId: "9401" },
+  );
+  const canceledAll = await adapter.cancelAllOrders(
+    { apiKey: "key", secret: "secret" },
+    { symbol: "BTC/USDT" },
+  );
+
+  expect(fetched).toMatchObject({
+    symbol: "BTC/USDT",
+    orderId: "9401",
+    status: "filled",
+  });
+  expect(canceled).toMatchObject({
+    symbol: "BTC/USDT",
+    orderId: "9401",
+    status: "canceled",
+  });
+  expect(canceledAll).toMatchObject([
+    {
+      symbol: "BTC/USDT",
+      orderId: "9402",
+      status: "canceled",
+    },
+  ]);
+  expect(
+    requests.map((request) => `${request.method} ${request.path}`),
+  ).toEqual([
+    "GET /papi/v1/margin/order",
+    "DELETE /papi/v1/margin/order",
+    "GET /papi/v1/margin/openOrders",
+    "DELETE /papi/v1/margin/allOpenOrders",
+  ]);
+  expect(requests.every((request) => request.symbol === "BTCUSDT")).toBe(true);
 });
 
 test("BinancePrivateAdapter maps PAPI UM leverage brackets", async () => {
@@ -583,6 +904,202 @@ test("BinancePrivateAdapter maps ACCOUNT_CONFIG_UPDATE leverage updates", async 
     undefined,
     undefined,
   ]);
+  handle.close();
+});
+
+test("BinancePrivateAdapter maps margin executionReport order and trade updates", async () => {
+  FakeWebSocket.reset();
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(spotExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/listenKey"
+      ) {
+        return jsonResponse({ listenKey: "test-listen-key" });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+  const updates: unknown[] = [];
+
+  const handle = adapter.createPrivateStream(
+    { apiKey: "key", secret: "secret" },
+    {
+      onAccountSnapshot(): void {},
+      onAccountUpdate(): void {},
+      onRiskLevelChange(): void {},
+      onOrderUpdate(update): void {
+        updates.push(update);
+      },
+      onFreshnessChange(): void {},
+      onDisconnected(): void {},
+      onReconnected(): void {},
+      onError(error): void {
+        throw error;
+      },
+    },
+    streamOptions,
+  );
+
+  const socket = await waitForSocket(PAPI_WS_URL);
+  await handle.ready;
+  socket.emitJson({
+    e: "executionReport",
+    E: 1710000000300,
+    s: "BTCUSDT",
+    i: 9501,
+    c: "cid-margin-9501",
+    S: "BUY",
+    o: "LIMIT",
+    x: "TRADE",
+    X: "FILLED",
+    p: "1.00",
+    q: "2",
+    z: "2",
+    t: 8101,
+    l: "2",
+    L: "1.00",
+    n: "0",
+    N: "USDT",
+    m: false,
+    T: 1710000000310,
+  });
+
+  await waitForCondition(() => updates.length === 1);
+  expect(updates[0]).toMatchObject({
+    symbol: "BTC/USDT",
+    status: "filled",
+    orderId: "9501",
+    clientOrderId: "cid-margin-9501",
+    trade: {
+      tradeId: "8101",
+      fee: { cost: "0", asset: "USDT" },
+      maker: false,
+    },
+  });
+  expect((updates[0] as { reduceOnly?: unknown }).reduceOnly).toBeUndefined();
+  expect(
+    (updates[0] as { positionSide?: unknown }).positionSide,
+  ).toBeUndefined();
+  expect(
+    (updates[0] as { trade?: { realizedPnl?: unknown } }).trade?.realizedPnl,
+  ).toBeUndefined();
+  handle.close();
+});
+
+test("BinancePrivateAdapter maps margin balance and liability stream events", async () => {
+  FakeWebSocket.reset();
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/listenKey"
+      ) {
+        return jsonResponse({ listenKey: "test-listen-key" });
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+  const updates: RawAccountUpdate[] = [];
+  const reconcileReasons: string[] = [];
+
+  const handle = adapter.createPrivateStream(
+    { apiKey: "key", secret: "secret" },
+    {
+      onAccountSnapshot(): void {},
+      onAccountUpdate(update): void {
+        updates.push(update);
+      },
+      onRiskLevelChange(): void {},
+      onOrderUpdate(): void {},
+      onFreshnessChange(): void {},
+      onDisconnected(): void {},
+      onReconnected(): void {},
+      requestReconcile(reason): void {
+        reconcileReasons.push(reason);
+      },
+      onError(error): void {
+        throw error;
+      },
+    },
+    streamOptions,
+  );
+
+  const socket = await waitForSocket(PAPI_WS_URL);
+  await handle.ready;
+  socket.emitJson({
+    e: "outboundAccountPosition",
+    E: 1710000000400,
+    u: 1710000000390,
+    B: [{ a: "USDT", f: "10.5", l: "1.25" }],
+  });
+  socket.emitJson({
+    e: "balanceUpdate",
+    E: 1710000000410,
+    a: "USDT",
+    d: "1.00",
+    T: 1710000000411,
+  });
+  socket.emitJson({
+    e: "liabilityChange",
+    E: 1710000000420,
+    a: "USDT",
+    p: "5",
+    i: "0.25",
+    l: "5.25",
+    T: 1710000000421,
+  });
+  socket.emitJson({
+    e: "openOrderLoss",
+    E: 1710000000430,
+  });
+
+  await waitForCondition(() => updates.length === 2);
+  expect(updates[0]).toMatchObject({
+    balances: [
+      {
+        asset: "USDT",
+        free: "10.5",
+        used: "1.25",
+        total: "11.75",
+      },
+    ],
+  });
+  expect(updates[1]).toMatchObject({
+    balances: [
+      {
+        asset: "USDT",
+        lending: {
+          borrowed: "5.25",
+          interest: "0.25",
+        },
+      },
+    ],
+  });
+  expect(reconcileReasons).toEqual(["margin_open_order_loss"]);
   handle.close();
 });
 
@@ -1151,6 +1668,9 @@ test("BinancePrivateAdapter cooldown limits repeated bad-symbol refresh and reco
       catalogRequests += 1;
       return jsonResponse(usdmExchangeInfo());
     }
+    if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+      return jsonResponse(spotExchangeInfo());
+    }
     if (
       url.origin === PAPI_REST_BASE_URL &&
       `${url.pathname}` === "/papi/v1/listenKey"
@@ -1351,6 +1871,9 @@ test("BinancePrivateAdapter rejects command catalog misses after one refresh wit
     if (url.toString() === USDM_EXCHANGE_INFO_URL) {
       catalogRequests += 1;
       return jsonResponse(usdmExchangeInfo());
+    }
+    if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+      return jsonResponse(spotExchangeInfo());
     }
     if (
       url.origin === PAPI_REST_BASE_URL &&

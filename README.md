@@ -2,7 +2,7 @@
 
 `acex` 是一个面向交易场景的 **状态型** 多交易所 SDK。调用方持有一个 `AcexClient`，通过统一的 `market` / `account` / `order` manager 读取最新快照、消费增量事件、执行下单撤单命令；SDK 内部负责本地缓存、ready barrier、websocket 生命周期和自动重连，调用方不需要自己处理。
 
-当前 MVP 落地 Binance（Spot + USDⓈ-M + COIN-M 行情，含 Binance TradFi Perps public market data；PAPI UM 私有链路）以及 Juplend（Jupiter Lend 只读借贷账户视图）。
+当前 MVP 落地 Binance（Spot + USDⓈ-M + COIN-M 行情，含 Binance TradFi Perps public market data；PAPI UM / margin 私有链路）以及 Juplend（Jupiter Lend 只读借贷账户视图）。
 
 ## 安装
 
@@ -174,12 +174,12 @@ const capabilities = client.listVenueCapabilities();
 ## 当前限制
 
 - 运行时 market/order 能力只支持 `binance`；`okx` / `bybit` / `gate` 仅类型定义
-- 账户视图支持 Binance PAPI UM 与 Juplend 只读借贷账户
+- 账户视图支持 Binance PAPI UM / margin 与 Juplend 只读借贷账户
 - Juplend 只读，不支持订单和链上写操作；仓位数量来自 `@jup-ag/lend-read` 原生 position 数据
 - Funding Rate 仅支持 Binance 永续合约，来自 mark price websocket；支持 Binance TradFi Perps，不支持现货和交割合约
 - `fetchPublicTrades()` 返回 Binance `aggTrades` 聚合成交；`fetchPublicRawTrades()` 走 Binance `historicalTrades`，需要 `market.venues.binance.apiKey` 或 `BINANCE_MARKET_API_KEY`
-- `createOrder()` 只支持 `limit` / `market`；条件单、改单、账户级全撤不支持
-- 双向持仓账户下单时必须显式传 `positionSide`
+- `createOrder()` 只支持 `limit` / `market`；Binance 按 symbol 路由 PAPI UM（如 `BTC/USDT:USDT`）与 PAPI margin（如 `BTC/USDT`），条件单、改单、账户级全撤不支持
+- 双向持仓账户下单时必须显式传 `um.positionSide`
 - `CreateClientOptions` 中 `sandbox` / `logger` / `logLevel` 是预留位
 
 ## 仓库内开发
@@ -233,7 +233,7 @@ bun run test:live:order:soak
 覆盖内容：
 
 - `market`：`loadMarkets()`、`fetchFundingRateHistory()`、`acquireL1BookSubscription()`、`acquireFundingRateSubscription()`、`getL1Book()` / `getL1Books()`、`getFundingRate()` / `getFundingRates()`、对应事件流和可选断线重连（`--disconnect-target funding` 可单独验证资金费率重连）
-- `account`：Binance PAPI UM 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
+- `account`：Binance PAPI UM / margin 账户 bootstrap、余额/仓位/风险投影、private stream 更新和可选重连
 - `juplend`：`@jup-ag/lend-read` + Jup Tokens/Price API 连通性、lending balance facet、账户级 `riskRatio`、支持 `--wallet-address` 聚合或 `--vault-id + --position-id` 单仓直读
 - `order`：open orders bootstrap、`subscribeOrders()`、订单事件投影和可选重连
 

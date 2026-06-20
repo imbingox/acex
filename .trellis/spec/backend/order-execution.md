@@ -1,11 +1,11 @@
 # Order Execution
 
-## Scenario: Binance PAPI UM 交易命令第一版 contract 必须稳定
+## Scenario: Binance PAPI UM / margin 交易命令 contract 必须稳定
 
 ### 1. Scope / Trigger
 
 - Trigger: 新增或修改 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`、调整 Binance private adapter 下单字段、修改订单命令与本地缓存同步语义时。
-- 目标: 保持 public contract、runtime 透传、Binance 持仓模式约束和 live smoke 验证路径一致。
+- 目标: 保持 public contract、runtime 透传、Binance 产品线参数边界、持仓模式约束和 live smoke 验证路径一致。
 
 ### 2. Signatures
 
@@ -20,6 +20,25 @@ export interface OrderManager {
 }
 
 export type CreateOrderInput = CreateLimitOrderInput | CreateMarketOrderInput;
+
+export interface UmOrderOptions {
+  reduceOnly?: boolean;
+  positionSide?: PositionSide;
+}
+
+export interface MarginOrderOptions {
+  sideEffectType?:
+    | "no_side_effect"
+    | "margin_buy"
+    | "auto_repay"
+    | "auto_borrow_repay";
+  autoRepayAtCancel?: boolean;
+}
+
+type CreateOrderProductOptions =
+  | { um?: UmOrderOptions; margin?: never }
+  | { margin?: MarginOrderOptions; um?: never }
+  | { um?: undefined; margin?: undefined };
 
 export interface CancelOrderInput {
   accountId: string;
@@ -54,16 +73,31 @@ Binance 第一版 REST 落点固定为：
 
 ```text
 POST   /papi/v1/um/order
+POST   /papi/v1/margin/order
+GET    /papi/v1/um/order
+GET    /papi/v1/margin/order
+GET    /papi/v1/um/openOrders
+GET    /papi/v1/margin/openOrders
 DELETE /papi/v1/um/order
+DELETE /papi/v1/margin/order
 DELETE /papi/v1/um/allOpenOrders
+DELETE /papi/v1/margin/allOpenOrders
 ```
 
 ### 3. Contracts
 
-#### 3.1 交易命令范围
+#### 3.1 交易命令范围与产品线参数
 
-- 第一版只支持 **Binance PAPI UM**。
+- Binance private order 命令支持 **PAPI UM** 与 **PAPI margin**，由 Binance market catalog 解析后的产品线决定：
+  - swap / USDM symbol（例如 `BTC/USDT:USDT`）走 `/papi/v1/um/*`。
+  - spot symbol（例如 `BTC/USDT`）走 `/papi/v1/margin/*`。
+  - 路由必须使用 `BinanceMarketDefinition.family`、`MarketDefinition.type`、`contract` 等 catalog 元字段；禁止用 `:USDT`、分隔符、字符串后缀等格式猜测产品线。
 - `createOrder()` 只支持 `limit` / `market`。
+- 产品线专属输入必须放在命名空间里：
+  - UM-only: `um.reduceOnly`、`um.positionSide`。
+  - margin-only: `margin.sideEffectType`、`margin.autoRepayAtCancel`。
+  - 顶层 `reduceOnly` / `positionSide` 不属于公共创建订单输入。
+  - 同时传 `um` 与 `margin`，或 symbol 路由与参数块不匹配，必须抛 `ORDER_INPUT_INVALID`，且 `details.orderState = "not_placed"`。
 - `cancelOrder()` 必须带 `accountId + symbol`，并且 `orderId` / `clientOrderId` 至少一项存在。
 - `cancelAllOrders()` 必须带 `accountId + symbol`，不支持账户级全撤。
 
@@ -71,10 +105,10 @@ DELETE /papi/v1/um/allOpenOrders
 
 - SDK **不会替调用方自动推断账户是单向还是双向持仓模式**。
 - 单向持仓模式：
-  - 调用方可以省略 `positionSide`
+  - 调用方可以省略 `um.positionSide`
   - Binance 返回和后续 WS snapshot 应归一成 `positionSide: "net"`
 - 双向持仓模式（hedge mode）：
-  - 调用方必须显式传 `positionSide: "long" | "short"`
+  - 调用方必须显式传 `um.positionSide: "long" | "short"`
   - 省略或传错方向时，交易所会拒单
 
 #### 3.3 REST 结果与本地状态同步
@@ -87,7 +121,7 @@ DELETE /papi/v1/um/allOpenOrders
   - 若两边都有 `exchangeTs`，仍按 `exchangeTs` 单调水位判断，较旧命令 ack 不能覆盖较新 WS / reconcile 状态。
 - 同一订单生命周期合并必须单调：`filled` 数量不得回退；`filled` 被保留为更大历史值时，`remaining` 必须随之重算或等价 clamp，不能继续信任较旧 incoming 的 `remaining`；`filled` / `canceled` / `expired` / `rejected` / `unknown` 等终态不得被后到的低优先级 `open` / `partially_filled` 回退。`unknown` 是 SDK 合成的保守终态；后续若交易所给出更具体的 filled/canceled/expired/rejected 终态，允许继续收敛到真实终态。
 - private WS 后续到来的 `order.updated` / `order.canceled` / `order.filled` 事件，是生命周期变化流，**不是命令 ack 的唯一来源**。
-- Binance private REST reconcile 不能把 `/papi/v1/um/openOrders` 当作订单生命周期真源；它只能作为 current open set 检测。某个本地 open order 从 REST open set 消失时，必须用 `/papi/v1/um/order`（或后续 `allOrders` 窗口回补）证明终态后再发布 `order.filled` / `order.canceled` / `order.rejected` / `order.updated`。
+- Binance private REST reconcile 不能把 `/papi/v1/um/openOrders` 或 `/papi/v1/margin/openOrders` 当作订单生命周期真源；它们只能作为 current open set 检测。某个本地 open order 从 REST open set 消失时，必须按 symbol 路由用 `/papi/v1/um/order` 或 `/papi/v1/margin/order`（或后续 `allOrders` 窗口回补）证明终态后再发布 `order.filled` / `order.canceled` / `order.rejected` / `order.updated`。
 - 如果终态回补返回 filled/canceled/expired/rejected，必须应用真实终态。若 `fetchOrder` 明确返回 `undefined`（例如 Binance -2011/-2013，交易所确认不存在），不得伪造成 filled/canceled/expired；由 OrderManager 按 `CreateClientOptions.order.missingOrderEvictionThreshold`（默认 3）记录连续确认缺失次数，达到阈值后将订单置为 `status: "unknown"`、移入 closed、发布终态订单事件和一次明确 runtime error。网络/超时/限流等 transport 错误不计数，继续按 reconcile 错误路径标记 degraded。
 - 初始 order bootstrap、周期性 reconcile、WS reconnect reconcile 都必须走同一套 open-set + lifecycle backfill 语义，不能再用 openOrders 全量替换直接丢弃已有终态订单。
 
@@ -113,13 +147,19 @@ DELETE /papi/v1/um/allOpenOrders
 
 #### 3.5 `cancelAllOrders()` venue 响应形状与合成语义
 
-- `DELETE /papi/v1/um/allOpenOrders` 的成功响应是 **`{"code": 200, "msg": "..."}` 对象，不是订单数组**（与 fapi 同形；官方文档已核实）。任何按数组解析该响应的实现都是错误的，live 必抛 `TypeError`。
+- `DELETE /papi/v1/um/allOpenOrders` 与 `DELETE /papi/v1/margin/allOpenOrders` 的成功响应是 **`{"code": 200, "msg": "..."}` 对象，不是订单数组**。任何按数组解析该响应的实现都是错误的，live 必抛 `TypeError`。
 - adapter 合成流程固定为三步：
-  1. `GET /papi/v1/um/openOrders?symbol=...` 预取待撤订单（幂等读，可重试）；
-  2. `DELETE /papi/v1/um/allOpenOrders?symbol=...`（不可重试）；响应 `code` 存在且 `${code} !== "200"` 时视为失败；
+  1. 按 symbol route 选择 `GET /papi/v1/um/openOrders?symbol=...` 或 `GET /papi/v1/margin/openOrders?symbol=...` 预取待撤订单（幂等读，可重试）；
+  2. 按相同 route 选择 `DELETE /papi/v1/um/allOpenOrders?symbol=...` 或 `DELETE /papi/v1/margin/allOpenOrders?symbol=...`（不可重试）；响应 `code` 存在且 `${code} !== "200"` 时视为失败；
   3. 把预取订单覆盖为 `status: "canceled"`、`receivedAt` 取 DELETE 成功后的时刻、`exchangeTs: undefined`（合成更新不得伪造交易所时间戳）后返回。
 - 预取为空时仍要执行 DELETE（幂等），并返回 `[]`。
 - 已知取舍：①、② 之间成交的订单会被短暂合成为 canceled，由 WS 终态事件 / reconcile 纠正。
+
+#### 3.6 账户级 open orders 快照
+
+- `fetchOpenOrders()` / `bootstrapOpenOrders()` 没有 symbol 入参时，Binance adapter 必须同时读取 UM 与 margin open orders，并合并为同一个 `RawOpenOrdersSnapshot`。
+- 两个 REST 响应必须共用同一个 `snapshotReceivedAt`，避免上层在同一次 reconcile 里看到两个不同的 bootstrap 时间。
+- UM open order 用 USDM catalog 映射回 `BTC/USDT:USDT` 这类统一 symbol；margin open order 用 spot catalog 映射回 `BTC/USDT` 这类统一 symbol。
 
 ### 4. Validation & Error Matrix
 
@@ -130,11 +170,13 @@ DELETE /papi/v1/um/allOpenOrders
 | 私有凭证缺失 | 直接失败 |
 | `limit` 单缺少 `price` | 本地校验失败，抛 `ORDER_INPUT_INVALID` |
 | `cancelOrder()` 缺少 `orderId` 与 `clientOrderId` | 本地校验失败，抛 `ORDER_INPUT_INVALID` |
-| Binance 双向持仓模式下省略或传错 `positionSide` | 交易所拒单；SDK 对外包装为 `ORDER_CREATE_FAILED` |
+| 同时传 `um` 与 `margin` | 本地校验失败，抛 `ORDER_INPUT_INVALID`，`orderState: "not_placed"` |
+| spot symbol 传 `um` 或 swap symbol 传 `margin` | adapter catalog 路由后抛输入错误，OrderManager 包装为 `ORDER_INPUT_INVALID`，不得发送 REST |
+| Binance 双向持仓模式下省略或传错 `um.positionSide` | 交易所拒单；SDK 对外包装为 `ORDER_CREATE_FAILED` |
 | `price` / `amount` 不满足交易所精度或最小名义金额 | 交易所拒单；SDK 对外包装为对应命令失败 |
 | REST 成功但 WS 更新稍后才到 | 命令先返回规范化 snapshot，本地缓存先更新，后续 WS 再收敛 |
 | `cancelAllOrders()` 在目标 symbol 没有活跃订单 | 返回 `OrderSnapshot[]`，允许为空 |
-| `DELETE um/allOpenOrders` 响应 `code` 存在且非 200/"200" | adapter 抛错，SDK 对外包装为 `ORDER_CANCEL_ALL_FAILED`（HTTP 层失败仍经 `TransportError.rawBody` 透出 `venueError`） |
+| `DELETE um/allOpenOrders` 或 `DELETE margin/allOpenOrders` 响应 `code` 存在且非 200/"200" | adapter 抛错，SDK 对外包装为 `ORDER_CANCEL_ALL_FAILED`（HTTP 层失败仍经 `TransportError.rawBody` 透出 `venueError`） |
 | REST openOrders 缺少本地 open order 且 `queryOrder` 返回 filled/canceled | 应用终态，`getOpenOrders()` 不再返回该订单，`getOrder()` 仍可读终态 |
 | REST openOrders 缺少本地 open order 且单笔查询连续确认 not found/retention miss | 达到阈值后终态化为 `unknown`，移出 open，保留可查询的 closed snapshot，并发布 runtime error；未达阈值时保持 open |
 | REST openOrders 缺少本地 open order 但单笔查询发生网络/超时/限流错误 | 不计入缺失阈值；保留原 open snapshot，order status 标记 `degraded` |
@@ -169,7 +211,25 @@ await client.order.createOrder({
   type: "limit",
   price: "71900.9",
   amount: "0.001",
-  positionSide: "long",
+  um: {
+    positionSide: "long",
+  },
+});
+```
+
+PAPI margin 现货杠杆下单：
+
+```ts
+await client.order.createOrder({
+  accountId: "main-binance",
+  symbol: "BTC/USDT",
+  side: "buy",
+  type: "market",
+  amount: "0.001",
+  margin: {
+    sideEffectType: "auto_borrow_repay",
+    autoRepayAtCancel: true,
+  },
 });
 ```
 
@@ -206,7 +266,7 @@ await client.order.createOrder({
   type: "limit",
   price: "71900.9",
   amount: "0.001",
-  // hedge mode 账户里这里省略了 positionSide
+  // hedge mode 账户里这里省略了 um.positionSide
 });
 ```
 
@@ -224,7 +284,7 @@ if (!openOrderIds.has(localOrder.orderId)) {
 
 问题：
 
-- `/papi/v1/um/openOrders` 只说明订单当前不再 open，不说明最终是 filled、canceled、rejected 还是 expired。
+- `/papi/v1/um/openOrders` / `/papi/v1/margin/openOrders` 只说明订单当前不再 open，不说明最终是 filled、canceled、rejected 还是 expired。
 - 合成错误终态会污染 `getOrder()` 和下游成交/撤单逻辑。
 
 ### 6. Tests Required
@@ -240,8 +300,11 @@ bun run type-check
 
 - `tests/integration/order.test.ts`
   - `createOrder()` 成功时返回规范化 snapshot
+  - `createOrder()` 对 `BTC/USDT:USDT` 走 `/papi/v1/um/order`，对 `BTC/USDT` 走 `/papi/v1/margin/order`
+  - UM-only 参数只从 `um` 读取；margin-only 参数只从 `margin` 读取；产品线不匹配必须是 `ORDER_INPUT_INVALID`
   - `cancelOrder()` / `cancelAllOrders()` 成功时返回规范化 snapshot
-  - `cancelAllOrders()`：预取 GET 与 DELETE 都带 `symbol` query；`{code,msg}` 对象响应被正确解析；返回 snapshot 全部 `canceled` 且仅含目标 symbol；预取为空时返回 `[]` 且 DELETE 仍发出
+  - `fetchOrder()` / `cancelOrder()` / `cancelAllOrders()` 按 symbol route 选择 UM 或 margin endpoint
+  - `cancelAllOrders()`：预取 GET 与 DELETE 都带 `symbol` query；UM 与 margin `{code,msg}` 对象响应被正确解析；返回 snapshot 全部 `canceled` 且仅含目标 symbol；预取为空时返回 `[]` 且 DELETE 仍发出
   - `cancelOrder()` 缺少双标识时本地校验失败
   - 漏 WS 终态时，REST open set 缺口必须触发单笔终态查询，最终 `getOpenOrders()` 清理、`getOrder()` 保留终态。
   - 终态查询连续确认 not found/retention miss 达到 `missingOrderEvictionThreshold` 时，订单终态化为 `unknown`、离开 `getOpenOrders()`、保留在 `getOrder()`，并只发布一次 runtime error；网络错误不推进计数、不驱逐。
@@ -250,11 +313,11 @@ bun run type-check
   - filled 数量不倒退，remaining 与被保留的 filled 数量一致，terminal / 高优先级状态不被低优先级状态回退。
   - createOrder timeout 保留的 pending claim 超过 `pendingClaimTtlMs` 后会在 reconcile 周期用 `fetchOrder(clientOrderId)` 回查；查到订单则入库并清 claim，确认不存在则清 claim 并发 runtime error，transport 错误保留 claim。
 - live smoke
-  - 单向持仓模式：不传 `positionSide`，以偏离 L1 5% 的 `LIMIT` 单真实挂单再撤单
-  - 双向持仓模式：显式传 `positionSide`，跑同样的真实挂撤单
+  - 单向持仓模式：不传 `um.positionSide`，以偏离 L1 5% 的 `LIMIT` 单真实挂单再撤单
+  - 双向持仓模式：显式传 `um.positionSide`，跑同样的真实挂撤单
   - 断言 `order.updated` 和 `order.canceled` 事件都能收到
   - 断言最终 `getOpenOrders()` 中不残留测试单
-  - `--cancel-all`（默认关闭）：挂 2 笔远离盘口 postOnly 单 → `cancelAllOrders()` → 断言返回 ≥2 且 `getOpenOrders()` 清空；目标 symbol 已有挂单时必须拒绝执行
+  - `--cancel-all`（默认关闭）：挂 2 笔远离盘口 postOnly 单 → `cancelAllOrders()` → 断言返回 ≥2 且 `getOpenOrders()` 清空；目标 symbol 已有挂单时必须拒绝执行。全撤合成 ack 缺 `exchangeTs`，若期间有较新的 WS open update 到达，watermark 可以保守拒绝合成 canceled，live smoke 应等待短窗口让 WS cancel / reconcile 收敛后再断言本地 open cache 清空。
 
 > **Warning**: 测试夹具必须按 **venue 官方文档的响应示例** 构造，禁止按现有代码的假设反推。本 scenario 的历史教训：`DELETE um/allOpenOrders` 夹具曾按代码错误假设 mock 成订单数组，186 个测试全绿但 live 必崩。
 
@@ -263,7 +326,7 @@ bun run type-check
 #### Wrong
 
 ```ts
-// 对所有 Binance 账户都盲目省略或硬编码 positionSide
+// 错误：把 UM 参数继续放在顶层，或对所有 Binance 账户都盲目省略 hedge mode 方向
 await client.order.createOrder({
   accountId,
   symbol,
@@ -271,18 +334,20 @@ await client.order.createOrder({
   type: "limit",
   price,
   amount,
+  positionSide: "long",
 });
 ```
 
 问题：
 
 - 单向模式下这可能碰巧可用
-- 但一旦账户切到 hedge mode，就会直接变成交易所拒单
+- 新版 public 输入不会接收顶层 `positionSide`
+- 一旦账户切到 hedge mode，省略 `um.positionSide` 会直接变成交易所拒单
 
 #### Correct
 
 ```ts
-// 调用方先明确账户模式，再决定是否传 positionSide
+// 调用方先明确账户模式，再决定是否传 um.positionSide
 await client.order.createOrder({
   accountId,
   symbol,
@@ -290,7 +355,7 @@ await client.order.createOrder({
   type: "limit",
   price,
   amount,
-  positionSide: isHedgeMode ? "long" : undefined,
+  um: isHedgeMode ? { positionSide: "long" } : undefined,
 });
 ```
 

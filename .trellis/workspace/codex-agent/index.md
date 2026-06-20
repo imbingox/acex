@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 52
-- **Last Active**: 2026-06-19
+- **Total Sessions**: 53
+- **Last Active**: 2026-06-20
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1848 | Active |
+| `journal-1.md` | ~1883 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 53 | 2026-06-20 | Binance PAPI margin order routing | `076db02`, `1ffb347`, `f21c373` | `feat/binance-papi-margin-orders` |
 | 52 | 2026-06-19 | RiskLimitManager implementation | `2707f5b`, `5d0d349`, `0907771` | `feat/risk-limit-manager` |
 | 51 | 2026-06-18 | Binance riskLeverage websocket updates | `937d503` | `main` |
 | 50 | 2026-06-15 | Binance ACCOUNT_CONFIG_UPDATE 杠杆更新 | `94d3452` | `feat/binance-account-config-leverage` |

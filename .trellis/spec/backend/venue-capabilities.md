@@ -55,7 +55,7 @@ interface VenueMarketCapabilities {
 - `market.fundingRateHistory = "supported"` 表示当前 SDK runtime 可通过 `client.market.fetchFundingRateHistory()` 查询历史 funding rate；具体 symbol 仍需是永续合约，spot / dated future 会由 manager 抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 - `market.serverTime = "supported"` 表示当前 SDK runtime 可通过 `client.market.fetchServerTime(venue)` 获取交易所服务器时间、单次 RTT 与 NTP 式时钟偏移估算。Binance 当前测量源固定为 USDⓈ-M REST 集群 `/fapi/v1/time`。
 - `order.supported = true` 才表示可以通过当前 SDK 调 `createOrder()` / `cancelOrder()` / `cancelAllOrders()`。
-- `order.supported = true` 是 venue 级能力，不是 market/symbol 级能力。例如 Binance 当前订单命令固定走 PAPI UM，不能据此推断 Binance spot、COIN-M 或交割合约都可通过 `OrderManager` 下单。
+- `order.supported = true` 是 venue 级能力，不是 market/symbol 级能力。例如 Binance 当前订单命令按 symbol 路由 PAPI UM 与 PAPI margin，不能据此推断 Binance COIN-M、交割合约、条件单或改单都可通过 `OrderManager` 下单。
 - `order.reason` 只在 `order.supported = false` 时使用，常见值：
   - `read_only`: venue 只读，例如 Juplend
   - `not_implemented`: venue 仅类型占位或 runtime 未接入

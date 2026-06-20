@@ -26,7 +26,7 @@
 
 | Venue | Market | Account | Order |
 |---|---|---|---|
-| `binance` | Spot / USDⓈ-M / COIN-M catalog（含 TradFi Perps）；L1 Book；永续 funding rate；历史 funding rate；USDM server time | PAPI UM 私有账户流 + REST risk refresh | PAPI UM `limit` / `market` 下单、撤单、按 symbol 全撤 |
+| `binance` | Spot / USDⓈ-M / COIN-M catalog（含 TradFi Perps）；L1 Book；永续 funding rate；历史 funding rate；USDM server time | PAPI UM / margin 私有账户流 + REST risk refresh | PAPI UM / margin `limit` / `market` 下单、撤单、按 symbol 全撤 |
 | `juplend` | 不支持 | Jupiter Lend 只读账户 polling | 不支持，read-only |
 | `okx` / `bybit` / `gate` | 类型占位 | 类型占位 | 类型占位 |
 
@@ -111,7 +111,7 @@ const risk = client.account.getRiskSnapshot("main-binance");
 const openOrders = client.order.getOpenOrders("main-binance");
 ```
 
-Binance 账户能力当前面向 PAPI UM。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护；默认每 60s 还会用 `/papi/v1/balance`、`/papi/v1/account`、`/papi/v1/um/positionRisk` 和订单 REST 接口做 private reconcile。Binance 全账户 `/papi/v1/um/openOrders` 不带 symbol 时 request weight 较高，默认 60s 是保守值。读取余额、仓位或风险数据时必须订阅 `client.account.subscribeAccount()`；`client.order.subscribeOrders()` 只维护订单缓存，即使底层复用同一条 private WS，也不会维护 account 仓位缓存。
+Binance 账户能力当前面向 PAPI UM / margin。账户风险字段会由私有 WS 事件和 `/papi/v1/account` + `/papi/v1/um/positionRisk` REST refresh 共同维护；默认每 60s 还会用 `/papi/v1/balance`、`/papi/v1/account`、`/papi/v1/um/positionRisk` 和订单 REST 接口做 private reconcile。Binance 全账户 `/papi/v1/um/openOrders` 与 `/papi/v1/margin/openOrders` 不带 symbol 时 request weight 较高，默认 60s 是保守值。读取余额、仓位或风险数据时必须订阅 `client.account.subscribeAccount()`；`client.order.subscribeOrders()` 只维护订单缓存，即使底层复用同一条 private WS，也不会维护 account 仓位缓存。
 
 ### 2.4 读取 Binance 风控档位并设置杠杆
 
@@ -205,7 +205,21 @@ const order = await client.order.createOrder({
   amount: "0.001",
   postOnly: true,
   clientOrderId: "strategy-001",
-  positionSide: "long",
+  um: {
+    positionSide: "long",
+  },
+});
+
+const marginOrder = await client.order.createOrder({
+  accountId: "main-binance",
+  symbol: "BTC/USDT",
+  side: "buy",
+  type: "market",
+  amount: "0.001",
+  margin: {
+    sideEffectType: "auto_borrow_repay",
+    autoRepayAtCancel: true,
+  },
 });
 
 const canceled = await client.order.cancelOrder({
@@ -605,11 +619,14 @@ interface OrderEventStreams {
 ### 7.1 支持范围
 
 - `createOrder()` 支持 `limit` / `market`
-- `limit` 可传 `postOnly: true`，Binance PAPI UM 映射为 `timeInForce=GTX`
+- Binance 按 catalog 解析后的 symbol 产品线自动路由：swap symbol（如 `BTC/USDT:USDT`）走 PAPI UM，spot symbol（如 `BTC/USDT`）走 PAPI margin
+- `limit` 可传 `postOnly: true`，Binance PAPI UM 映射为 `timeInForce=GTX`；margin 路由第一版不支持 `postOnly`
 - 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-<entropy>-<ts>-<seq>`，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
 - `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
 - `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
-- hedge mode 下必须显式传 `positionSide: "long" | "short"`
+- UM hedge mode 下必须显式传 `um.positionSide: "long" | "short"`
+- UM-only 参数放在 `um`，margin-only 参数放在 `margin`；产品线参数与 symbol 不匹配会抛 `ORDER_INPUT_INVALID`
+- Binance private stream 支持 UM `ORDER_TRADE_UPDATE` / `ACCOUNT_UPDATE` / `ACCOUNT_CONFIG_UPDATE`，以及 margin `executionReport`、`outboundAccountPosition`、`balanceUpdate`、`liabilityChange`、`openOrderLoss`；`balanceUpdate` 默认不作为完整余额写入，`liabilityChange.l` 作为当前 total liability 覆盖，`openOrderLoss` 进入合并/节流后的 private reconcile
 
 ### 7.2 精度限制
 
@@ -625,7 +642,7 @@ interface OrderEventStreams {
   - 同时给 `orderId` 与 `clientOrderId` 时，两者都匹配才命中。
   - 已超出保留上限被裁剪的 closed 订单将查不到（返回 `undefined`）。
 
-Order 事件用于消费订单状态变化和 open orders 快照校准。Binance private reconcile 会先用 `/papi/v1/um/openOrders` 校验当前 open set；本地 open order 从 open set 消失时，SDK 会优先查询单笔订单终态并发布 `order.filled` / `order.canceled` 等事件。若单笔查询连续确认订单不存在（默认 3 次，`CreateClientOptions.order.missingOrderEvictionThreshold` 可配置），SDK 会把该订单终态化为 `status: "unknown"`、移出 open 缓存并发布一次 runtime error；网络/超时/限流等 transport 错误不会计入该阈值。`createOrder()` 超时保留的 pending claim 会在 reconcile 周期里按 `CreateClientOptions.order.pendingClaimTtlMs`（默认 90s）过期回查：查到订单则正常入库，确认不存在则清理 claim 并发布 runtime error；无 `fetchOrder` 能力的 venue 会保守保留 claim。
+Order 事件用于消费订单状态变化和 open orders 快照校准。Binance private reconcile 会先合并 `/papi/v1/um/openOrders` 与 `/papi/v1/margin/openOrders` 校验当前 open set；本地 open order 从 open set 消失时，SDK 会优先按 symbol 路由查询单笔订单终态并发布 `order.filled` / `order.canceled` 等事件。若单笔查询连续确认订单不存在（默认 3 次，`CreateClientOptions.order.missingOrderEvictionThreshold` 可配置），SDK 会把该订单终态化为 `status: "unknown"`、移出 open 缓存并发布一次 runtime error；网络/超时/限流等 transport 错误不会计入该阈值。`createOrder()` 超时保留的 pending claim 会在 reconcile 周期里按 `CreateClientOptions.order.pendingClaimTtlMs`（默认 90s）过期回查：查到订单则正常入库，确认不存在则清理 claim 并发布 runtime error；无 `fetchOrder` 能力的 venue 会保守保留 claim。
 
 ```ts
 for await (const event of client.order.events.updates({
@@ -1333,6 +1350,22 @@ interface AccountDataStatus {
 ```
 
 ```ts
+type BinanceMarginSideEffectType =
+  | "no_side_effect"
+  | "margin_buy"
+  | "auto_repay"
+  | "auto_borrow_repay";
+
+interface UmOrderOptions {
+  reduceOnly?: boolean;
+  positionSide?: PositionSide;
+}
+
+interface MarginOrderOptions {
+  sideEffectType?: BinanceMarginSideEffectType;
+  autoRepayAtCancel?: boolean;
+}
+
 type CreateOrderInput =
   | {
       accountId: string;
@@ -1343,8 +1376,8 @@ type CreateOrderInput =
       amount: string;
       postOnly?: boolean;
       clientOrderId?: string;
-      reduceOnly?: boolean;
-      positionSide?: PositionSide;
+      um?: UmOrderOptions;
+      margin?: never;
     }
   | {
       accountId: string;
@@ -1353,8 +1386,30 @@ type CreateOrderInput =
       type: "market";
       amount: string;
       clientOrderId?: string;
-      reduceOnly?: boolean;
-      positionSide?: PositionSide;
+      um?: UmOrderOptions;
+      margin?: never;
+    }
+  | {
+      accountId: string;
+      symbol: string;
+      side: OrderSide;
+      type: "limit";
+      price: string;
+      amount: string;
+      postOnly?: boolean;
+      clientOrderId?: string;
+      margin?: MarginOrderOptions;
+      um?: never;
+    }
+  | {
+      accountId: string;
+      symbol: string;
+      side: OrderSide;
+      type: "market";
+      amount: string;
+      clientOrderId?: string;
+      margin?: MarginOrderOptions;
+      um?: never;
     };
 
 interface CancelOrderInput {
@@ -1460,6 +1515,7 @@ interface OrderSnapshot {
   amount: string;
   filled: string;
   remaining?: string;
+  reduceOnly?: boolean;
   positionSide?: PositionSide;
 }
 
@@ -1602,7 +1658,7 @@ try {
 - account runtime 支持 `binance` 和只读 `juplend`
 - `okx` / `bybit` / `gate` 只在 `Venue` 类型中声明
 - Funding Rate 仅支持 Binance 永续合约，包括 Binance TradFi Perps
-- Binance order 命令固定走 PAPI UM，venue 级 `order.supported = true` 不代表 spot、COIN-M 或交割合约都能下单
+- Binance order 命令按 symbol 路由 PAPI UM 与 PAPI margin；COIN-M、交割合约、margin OCO、条件单和改单不支持
 - Binance fee 真实远端刷新当前只覆盖 `swap`；spot / future 返回默认费率，显式 fetch 抛 `VENUE_NOT_SUPPORTED`
 - Binance risk limit 当前只覆盖 PAPI UM leverage bracket / set leverage；不覆盖 spot、COIN-M 或交割合约，也不计算下单前剩余名义价值
 - `client.riskLimit.getSymbolRiskLimit()` 只读缓存，不保证首次调用已有交易所数据；需要强一致时调用显式 `fetchRiskLimits()` / `fetchSymbolRiskLimit()`

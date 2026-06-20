@@ -1652,6 +1652,14 @@ export class PrivateSubscriptionCoordinator {
       return;
     }
 
+    if (request.source !== "delayed") {
+      if (record.delayedPrivateReconcileTimer) {
+        clearTimeout(record.delayedPrivateReconcileTimer);
+        record.delayedPrivateReconcileTimer = undefined;
+      }
+      record.delayedPrivateReconcileReasons.clear();
+    }
+
     if (record.privateReconcileDirty) {
       record.privateReconcilePendingPreserveStatus =
         record.privateReconcilePendingPreserveStatus && request.preserveStatus;

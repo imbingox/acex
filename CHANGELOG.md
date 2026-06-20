@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 1.0.0-beta.31
+
+### Minor Changes
+
+- f8d16ac: Add Binance PAPI margin order support alongside UM order routing, including margin order options and account/order reconciliation updates.
+
 ## 1.0.0-beta.30
 
 ### Minor Changes

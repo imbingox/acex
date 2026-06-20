@@ -8,6 +8,7 @@
     "acex-error-details",
     "binance-account-config-leverage",
     "binance-order-trades",
+    "binance-papi-margin-orders",
     "binance-rate-limit-topology",
     "binance-risk-leverage-account-events",
     "binance-tradfi-public-market",

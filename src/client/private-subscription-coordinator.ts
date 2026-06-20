@@ -1,5 +1,6 @@
 import type {
   FetchOrderRequest,
+  PrivateReconcileReason,
   PrivateUserDataAdapter,
   RawOpenOrdersSnapshot,
   StreamHandle,
@@ -47,6 +48,9 @@ interface PrivateSubscriptionRecord {
   privateReconcilePendingPreserveStatus: boolean;
   privateReconcilePollRequested: boolean;
   privateReconcilePollGeneration?: number;
+  delayedPrivateReconcileTimer?: ReturnType<typeof setTimeout>;
+  delayedPrivateReconcileReasons: Set<PrivateReconcileReason>;
+  delayedPrivateReconcileLastStartedAt?: number;
   startPromise?: Promise<void>;
 }
 
@@ -64,6 +68,8 @@ const DEFAULT_LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1_000;
 const DEFAULT_PRIVATE_STREAM_STALE_AFTER_MS = 65 * 60_000;
 const DEFAULT_BINANCE_RISK_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_BINANCE_PRIVATE_RECONCILE_INTERVAL_MS = 60_000;
+const DEFAULT_MARGIN_RECONCILE_DEBOUNCE_MS = 1_000;
+const DEFAULT_MARGIN_RECONCILE_MIN_INTERVAL_MS = 5_000;
 const DEFAULT_PENDING_CLAIM_TTL_MS = 90_000;
 const MAX_ORDER_TERMINAL_BACKFILLS_PER_RECONCILE = 20;
 const MAX_ORDER_TERMINAL_BACKFILL_CONCURRENCY = 4;
@@ -118,6 +124,16 @@ function transportReason(
   return isTransportError(error) && error.kind === "rate_limited"
     ? "rate_limited"
     : fallback;
+}
+
+function isDelayedPrivateReconcileReason(
+  reason: PrivateReconcileReason,
+): boolean {
+  return (
+    reason === "margin_balance_delta" ||
+    reason === "margin_liability_change" ||
+    reason === "margin_open_order_loss"
+  );
 }
 
 export class PrivateSubscriptionCoordinator {
@@ -543,6 +559,7 @@ export class PrivateSubscriptionCoordinator {
       privateReconcileDirty: false,
       privateReconcilePendingPreserveStatus: true,
       privateReconcilePollRequested: false,
+      delayedPrivateReconcileReasons: new Set(),
     };
 
     this.records.set(account.accountId, record);
@@ -712,6 +729,11 @@ export class PrivateSubscriptionCoordinator {
       clearTimeout(record.privateReconcileTimer);
       record.privateReconcileTimer = undefined;
     }
+    if (record.delayedPrivateReconcileTimer) {
+      clearTimeout(record.delayedPrivateReconcileTimer);
+      record.delayedPrivateReconcileTimer = undefined;
+    }
+    record.delayedPrivateReconcileReasons.clear();
     record.privateReconcileDirty = false;
     record.privateReconcilePendingPreserveStatus = true;
     record.privateReconcilePollRequested = false;
@@ -1457,8 +1479,12 @@ export class PrivateSubscriptionCoordinator {
           });
           this.requestImmediateReconcile(record);
         },
-        requestReconcile: () => {
-          this.requestImmediateReconcile(record);
+        requestReconcile: (reason) => {
+          if (isDelayedPrivateReconcileReason(reason)) {
+            this.requestDelayedPrivateReconcile(record, reason);
+          } else {
+            this.requestImmediateReconcile(record);
+          }
         },
         onError: (error) => {
           this.context.publishRuntimeError("adapter", error, {
@@ -1564,11 +1590,53 @@ export class PrivateSubscriptionCoordinator {
     });
   }
 
+  private requestDelayedPrivateReconcile(
+    record: PrivateSubscriptionRecord,
+    reason: PrivateReconcileReason,
+  ): void {
+    if (!this.isActive(record) || !this.hasPrivateReconcileCapability(record)) {
+      return;
+    }
+
+    record.delayedPrivateReconcileReasons.add(reason);
+    if (record.delayedPrivateReconcileTimer) {
+      return;
+    }
+
+    const elapsedSinceLast =
+      record.delayedPrivateReconcileLastStartedAt === undefined
+        ? Number.POSITIVE_INFINITY
+        : this.context.now() - record.delayedPrivateReconcileLastStartedAt;
+    const delayMs = Math.max(
+      DEFAULT_MARGIN_RECONCILE_DEBOUNCE_MS,
+      DEFAULT_MARGIN_RECONCILE_MIN_INTERVAL_MS - elapsedSinceLast,
+      0,
+    );
+
+    record.delayedPrivateReconcileTimer = setTimeout(() => {
+      record.delayedPrivateReconcileTimer = undefined;
+      if (
+        !this.isActive(record) ||
+        !this.hasPrivateReconcileCapability(record) ||
+        record.delayedPrivateReconcileReasons.size === 0
+      ) {
+        return;
+      }
+
+      record.delayedPrivateReconcileReasons.clear();
+      record.delayedPrivateReconcileLastStartedAt = this.context.now();
+      this.requestPrivateReconcile(record, {
+        preserveStatus: true,
+        source: "delayed",
+      });
+    }, delayMs);
+  }
+
   private requestPrivateReconcile(
     record: PrivateSubscriptionRecord,
     request: {
       preserveStatus: boolean;
-      source: "immediate" | "poll";
+      source: "immediate" | "poll" | "delayed";
       generation?: number;
     },
   ): void {

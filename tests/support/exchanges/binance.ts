@@ -580,7 +580,10 @@ export function installBinancePrivateAccountInfra(options?: {
   openOrders?: unknown;
   openOrderResponses?: unknown[];
   openOrdersDelayMs?: number;
+  marginOpenOrders?: unknown;
+  marginOpenOrderResponses?: unknown[];
   queryOrder?: unknown;
+  marginQueryOrder?: unknown;
   queryOrderResponses?: unknown[];
   commissionRate?: unknown;
   beforeCommissionRateResponse?: () => void;
@@ -594,8 +597,10 @@ export function installBinancePrivateAccountInfra(options?: {
   networkErrorQueryOrder?: boolean;
   networkErrorQueryOrderCount?: number;
   createOrder?: unknown;
+  marginCreateOrder?: unknown;
   createOrderDelayMs?: number;
   cancelOrder?: unknown;
+  marginCancelOrder?: unknown;
   listenKeys?: string[];
   failListenKeyKeepAliveCount?: number;
 }): FetchRequestRecord[] {
@@ -608,6 +613,7 @@ export function installBinancePrivateAccountInfra(options?: {
   let umPositionRequestCount = 0;
   let balanceRequestCount = 0;
   let openOrdersRequestCount = 0;
+  let marginOpenOrdersRequestCount = 0;
   let queryOrderRequestCount = 0;
   let leverageBracketRequestCount = 0;
   let listenKeyRequestCount = 0;
@@ -670,6 +676,9 @@ export function installBinancePrivateAccountInfra(options?: {
 
       if (url.toString() === USDM_EXCHANGE_INFO_URL) {
         return jsonResponse(binanceFixtures.usdm);
+      }
+      if (url.toString() === SPOT_EXCHANGE_INFO_URL) {
+        return jsonResponse(binanceFixtures.spot);
       }
       if (url.toString() === USDM_SERVER_TIME_URL) {
         return jsonResponse({ serverTime: 1710000000123 });
@@ -833,6 +842,17 @@ export function installBinancePrivateAccountInfra(options?: {
               url.searchParams.get("symbol"),
             ),
           );
+        case "GET /papi/v1/margin/openOrders":
+          return jsonResponse(
+            filterOpenOrdersBySymbol(
+              nextResponse(
+                options?.marginOpenOrderResponses,
+                options?.marginOpenOrders ?? [],
+                marginOpenOrdersRequestCount++,
+              ),
+              url.searchParams.get("symbol"),
+            ),
+          );
         case "GET /papi/v1/um/order":
           if (
             options?.networkErrorQueryOrder ||
@@ -872,6 +892,22 @@ export function installBinancePrivateAccountInfra(options?: {
               },
               queryOrderRequestCount++,
             ),
+          );
+        case "GET /papi/v1/margin/order":
+          return jsonResponse(
+            options?.marginQueryOrder ?? {
+              symbol: "BTCUSDT",
+              orderId: 3001,
+              clientOrderId: "cid-margin-3001",
+              side: "BUY",
+              type: "LIMIT",
+              status: "FILLED",
+              price: "100000.00",
+              origQty: "0.010",
+              executedQty: "0.010",
+              cummulativeQuoteQty: "1000.00",
+              updateTime: 1710000000550,
+            },
           );
         case "GET /papi/v1/um/commissionRate":
           if (options?.failCommissionRate) {
@@ -925,6 +961,23 @@ export function installBinancePrivateAccountInfra(options?: {
               updateTime: 1710000000400,
             },
           );
+        case "POST /papi/v1/margin/order":
+          return jsonResponse(
+            options?.marginCreateOrder ?? {
+              symbol: "BTCUSDT",
+              orderId: 3001,
+              clientOrderId:
+                url.searchParams.get("newClientOrderId") ?? "cid-margin-3001",
+              side: "BUY",
+              type: "LIMIT",
+              status: "NEW",
+              price: "101000.00",
+              origQty: "0.010",
+              executedQty: "0",
+              cummulativeQuoteQty: "0",
+              transactTime: 1710000000450,
+            },
+          );
         case "POST /papi/v1/um/leverage":
           if (options?.failSetLeverage) {
             return textResponse(
@@ -965,10 +1018,31 @@ export function installBinancePrivateAccountInfra(options?: {
               updateTime: 1710000000350,
             },
           );
+        case "DELETE /papi/v1/margin/order":
+          return jsonResponse(
+            options?.marginCancelOrder ?? {
+              symbol: "BTCUSDT",
+              orderId: 3001,
+              clientOrderId: "cid-margin-3001",
+              side: "BUY",
+              type: "LIMIT",
+              status: "CANCELED",
+              price: "100000.00",
+              origQty: "0.010",
+              executedQty: "0",
+              cummulativeQuoteQty: "0",
+              updateTime: 1710000000360,
+            },
+          );
         case "DELETE /papi/v1/um/allOpenOrders":
           return jsonResponse({
             code: 200,
             msg: "The operation of cancel all open order is done.",
+          });
+        case "DELETE /papi/v1/margin/allOpenOrders":
+          return jsonResponse({
+            code: 200,
+            msg: "The operation of cancel all margin open order is done.",
           });
         case "POST /papi/v1/listenKey":
           return jsonResponse({

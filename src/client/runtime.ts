@@ -625,8 +625,8 @@ export class AcexClientImpl implements AcexClient, ClientContext {
       price: input.type === "limit" ? input.price : undefined,
       postOnly: input.type === "limit" ? input.postOnly : undefined,
       clientOrderId: input.clientOrderId,
-      reduceOnly: input.reduceOnly,
-      positionSide: input.positionSide,
+      um: input.um,
+      margin: input.margin,
     };
 
     return this.trackOrderCommand(

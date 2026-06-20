@@ -527,6 +527,20 @@ async function runCancelAllSmoke(options: {
       amount,
     });
 
+    const productOptions =
+      market.contract || market.type !== "spot"
+        ? {
+            postOnly: true,
+            um: {
+              positionSide: options.positionSide,
+            },
+          }
+        : {
+            margin: {
+              sideEffectType: "no_side_effect" as const,
+            },
+          };
+
     cleanupNeeded = true;
     for (let index = 0; index < CANCEL_ALL_TEST_ORDER_COUNT; index += 1) {
       placedOrders.push(
@@ -537,8 +551,7 @@ async function runCancelAllSmoke(options: {
           type: "limit",
           price: normalized.price,
           amount: normalized.amount,
-          postOnly: true,
-          positionSide: options.positionSide,
+          ...productOptions,
         }),
       );
     }
@@ -555,14 +568,34 @@ async function runCancelAllSmoke(options: {
       );
     }
 
-    const remainingOpenOrders = options.client.order.getOpenOrders(
+    let remainingOpenOrders = options.client.order.getOpenOrders(
       options.accountId,
       options.symbol,
     );
     if (remainingOpenOrders.length > 0) {
-      throw new Error(
-        `Expected no open orders after cancel-all for ${options.symbol}, got ${remainingOpenOrders.length}`,
-      );
+      try {
+        remainingOpenOrders = await waitForCondition(
+          () => {
+            const currentOpenOrders = options.client.order.getOpenOrders(
+              options.accountId,
+              options.symbol,
+            );
+            return currentOpenOrders.length === 0
+              ? currentOpenOrders
+              : undefined;
+          },
+          10_000,
+          `Timed out waiting for ${options.symbol} open orders to clear after cancel-all`,
+        );
+      } catch {
+        remainingOpenOrders = options.client.order.getOpenOrders(
+          options.accountId,
+          options.symbol,
+        );
+        throw new Error(
+          `Expected no open orders after cancel-all for ${options.symbol}, got ${remainingOpenOrders.length}`,
+        );
+      }
     }
 
     return {

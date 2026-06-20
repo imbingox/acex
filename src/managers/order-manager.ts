@@ -3,7 +3,10 @@ import type {
   RawOrderTrade,
   RawOrderUpdate,
 } from "../adapters/types.ts";
-import { isOrderPreflightError } from "../adapters/types.ts";
+import {
+  isOrderInputValidationError,
+  isOrderPreflightError,
+} from "../adapters/types.ts";
 import type {
   AccountAwareManager,
   ClientContext,
@@ -271,6 +274,13 @@ export class OrderManagerImpl
           venueClientOrderId,
           localOrderId,
         );
+      }
+      if (isOrderInputValidationError(error)) {
+        throw this.createError("ORDER_INPUT_INVALID", error.message, {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        });
       }
       throw this.wrapCommandError(
         "ORDER_CREATE_FAILED",
@@ -1244,6 +1254,22 @@ export class OrderManagerImpl
       throw this.createError(
         "ORDER_INPUT_INVALID",
         `Limit orders require price: ${input.accountId}`,
+        {
+          accountId: input.accountId,
+          venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    const productOptions = input as { um?: unknown; margin?: unknown };
+    if (
+      productOptions.um !== undefined &&
+      productOptions.margin !== undefined
+    ) {
+      throw this.createError(
+        "ORDER_INPUT_INVALID",
+        `createOrder cannot include both um and margin options: ${input.accountId}`,
         {
           accountId: input.accountId,
           venue,

@@ -10,6 +10,7 @@ import {
 import { createManagedWebSocket } from "../../internal/managed-websocket.ts";
 import type {
   AccountCredentials,
+  BinanceMarginSideEffectType,
   OrderType,
   PositionSide,
   RateLimiter,
@@ -46,9 +47,19 @@ import type {
   SetSymbolLeverageRequest,
   StreamHandle,
 } from "../types.ts";
-import { CatalogUnavailableError, isSymbolMappingError } from "../types.ts";
+import {
+  CatalogUnavailableError,
+  isSymbolMappingError,
+  OrderInputValidationError,
+  SymbolMappingError,
+  UnsupportedSymbolProductError,
+} from "../types.ts";
 import { normalizeBinanceErrorCode } from "./error-codes.ts";
-import { BinanceMarketCatalog } from "./market-catalog.ts";
+import {
+  BinanceMarketCatalog,
+  type BinanceMarketDefinition,
+  type BinanceMarketFamily,
+} from "./market-catalog.ts";
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
 import {
   getBinancePapiRateLimitPlanId,
@@ -103,6 +114,7 @@ interface BinancePapiOpenOrder {
   symbol?: string;
   orderId?: number | string;
   clientOrderId?: string;
+  transactTime?: number;
   side?: string;
   type?: string;
   status?: string;
@@ -110,6 +122,7 @@ interface BinancePapiOpenOrder {
   stopPrice?: string;
   origQty?: string;
   executedQty?: string;
+  cummulativeQuoteQty?: string;
   avgPrice?: string;
   reduceOnly?: boolean;
   positionSide?: string;
@@ -214,6 +227,65 @@ interface BinanceOrderTradeUpdateMessage {
   o?: BinanceOrderTradeUpdatePayload;
 }
 
+interface BinanceMarginExecutionReportMessage {
+  e?: string;
+  E?: number;
+  s?: string;
+  i?: number | string;
+  c?: string;
+  S?: string;
+  o?: string;
+  x?: string;
+  X?: string;
+  p?: string;
+  q?: string;
+  z?: string;
+  L?: string;
+  l?: string;
+  n?: string;
+  N?: string;
+  m?: boolean;
+  T?: number;
+  t?: number | string;
+}
+
+interface BinanceMarginAccountPositionBalance {
+  a?: string;
+  f?: string;
+  l?: string;
+}
+
+interface BinanceMarginOutboundAccountPositionMessage {
+  e?: string;
+  E?: number;
+  u?: number;
+  B?: BinanceMarginAccountPositionBalance[];
+}
+
+interface BinanceMarginBalanceUpdateMessage {
+  e?: string;
+  E?: number;
+  a?: string;
+  d?: string;
+  T?: number;
+}
+
+interface BinanceMarginLiabilityChangeMessage {
+  e?: string;
+  E?: number;
+  a?: string;
+  t?: string;
+  p?: string;
+  i?: string;
+  l?: string;
+  T?: number;
+}
+
+interface BinanceMarginOpenOrderLossMessage {
+  e?: string;
+  E?: number;
+}
+
 interface BinanceListenKeyExpiredMessage {
   e?: string;
   E?: number;
@@ -245,14 +317,24 @@ interface BinanceAccountConfigUpdateMessage {
 type BinancePrivateMessage =
   | BinanceAccountUpdateMessage
   | BinanceOrderTradeUpdateMessage
+  | BinanceMarginExecutionReportMessage
+  | BinanceMarginOutboundAccountPositionMessage
+  | BinanceMarginBalanceUpdateMessage
+  | BinanceMarginLiabilityChangeMessage
+  | BinanceMarginOpenOrderLossMessage
   | BinanceListenKeyExpiredMessage
   | BinanceRiskLevelChangeMessage
   | BinanceAccountConfigUpdateMessage;
 
+interface SymbolMappingMiss {
+  readonly family: BinanceMarketFamily;
+  readonly venueId: string;
+}
+
 interface QuarantinedPrivateMessage {
   readonly message: BinancePrivateMessage;
   readonly receivedAt: number;
-  readonly venueIds: string[];
+  readonly misses: SymbolMappingMiss[];
 }
 
 const BINANCE_PAPI_REST_BASE_URL = "https://papi.binance.com";
@@ -260,6 +342,7 @@ const BINANCE_PAPI_WS_BASE_URL = "wss://fstream.binance.com/pm/ws";
 const DEFAULT_RECV_WINDOW = 5_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 10_000;
 const BINANCE_PRIVATE_SYMBOL_FAMILY = "usdm" as const;
+const BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY = "spot" as const;
 const MAX_SYMBOL_MAPPING_QUARANTINE = 64;
 const SINGLE_ATTEMPT_IDEMPOTENT_POLICY: HttpRetryPolicy = {
   idempotent: true,
@@ -277,6 +360,15 @@ const BINANCE_ORDER_TYPE_MAP: Record<string, OrderType> = {
   TAKE_PROFIT: "take_profit",
   TAKE_PROFIT_MARKET: "take_profit_market",
   TRAILING_STOP_MARKET: "trailing_stop_market",
+};
+const BINANCE_MARGIN_SIDE_EFFECT_TYPE_MAP: Record<
+  BinanceMarginSideEffectType,
+  string
+> = {
+  no_side_effect: "NO_SIDE_EFFECT",
+  margin_buy: "MARGIN_BUY",
+  auto_repay: "AUTO_REPAY",
+  auto_borrow_repay: "AUTO_BORROW_REPAY",
 };
 const BINANCE_RISK_LEVEL_CHANGE_MAP: Record<string, RiskAlertLevel> = {
   MARGIN_CALL: "margin_call",
@@ -297,6 +389,40 @@ const BINANCE_ACCOUNT_STATUS_RISK_LEVEL_MAP: Record<string, RiskLevel> = {
   FORCE_LIQUIDATION: "force_liquidation",
   BANKRUPTED: "force_liquidation",
 };
+
+type BinancePrivateOrderRoute =
+  | {
+      product: "um";
+      family: typeof BINANCE_PRIVATE_SYMBOL_FAMILY;
+      venueId: string;
+    }
+  | {
+      product: "margin";
+      family: typeof BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY;
+      venueId: string;
+    };
+
+function getPrivateOrderProduct(
+  definition: BinanceMarketDefinition,
+): BinancePrivateOrderRoute["product"] | undefined {
+  if (
+    definition.family === BINANCE_PRIVATE_SYMBOL_FAMILY &&
+    definition.contract === true &&
+    (definition.type === "swap" || definition.type === "future")
+  ) {
+    return "um";
+  }
+
+  if (
+    definition.family === BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY &&
+    definition.contract === false &&
+    definition.type === "spot"
+  ) {
+    return "margin";
+  }
+
+  return undefined;
+}
 function getBinancePapiHttpMessages(timeoutMs: number): HttpClientMessages {
   return {
     http: ({ status, statusText, url, rawBody }) =>
@@ -399,6 +525,14 @@ function encodePositionSide(
     default:
       return undefined;
   }
+}
+
+function encodeMarginSideEffectType(
+  value?: BinanceMarginSideEffectType,
+): string | undefined {
+  return value === undefined
+    ? undefined
+    : BINANCE_MARGIN_SIDE_EFFECT_TYPE_MAP[value];
 }
 
 function normalizeOrderStatus(
@@ -617,6 +751,7 @@ function mapAccountBootstrap(
 
 function mapOpenOrder(
   catalog: BinanceMarketCatalog,
+  family: BinancePrivateOrderRoute["family"],
   input: BinancePapiOpenOrder,
   receivedAt: number,
 ): RawOrderUpdate | undefined {
@@ -626,12 +761,12 @@ function mapOpenOrder(
     return undefined;
   }
 
-  const symbol = catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, input.symbol);
+  const symbol = catalog.toUnified(family, input.symbol);
   if (!symbol) {
     return undefined;
   }
 
-  return {
+  const update: RawOrderUpdate = {
     orderId: input.orderId === undefined ? undefined : `${input.orderId}`,
     clientOrderId: input.clientOrderId,
     symbol,
@@ -643,11 +778,15 @@ function mapOpenOrder(
     amount: input.origQty ?? "0",
     filled: input.executedQty ?? "0",
     avgFillPrice: input.avgPrice,
-    reduceOnly: input.reduceOnly,
-    positionSide: normalizePositionSide(input.positionSide),
-    exchangeTs: input.updateTime ?? input.time,
+    exchangeTs: input.updateTime ?? input.time ?? input.transactTime,
     receivedAt,
   };
+  if (family === BINANCE_PRIVATE_SYMBOL_FAMILY) {
+    update.reduceOnly = input.reduceOnly;
+    update.positionSide = normalizePositionSide(input.positionSide);
+  }
+
+  return update;
 }
 
 function mapAccountUpdateBalance(
@@ -699,6 +838,11 @@ function parsePrivateMessage(data: string): BinancePrivateMessage | undefined {
   const parsed = JSON.parse(data) as BinancePrivateMessage;
   return parsed.e === "ACCOUNT_UPDATE" ||
     parsed.e === "ORDER_TRADE_UPDATE" ||
+    parsed.e === "executionReport" ||
+    parsed.e === "outboundAccountPosition" ||
+    parsed.e === "balanceUpdate" ||
+    parsed.e === "liabilityChange" ||
+    parsed.e === "openOrderLoss" ||
     parsed.e === "listenKeyExpired" ||
     parsed.e === "riskLevelChange" ||
     parsed.e === "ACCOUNT_CONFIG_UPDATE"
@@ -710,6 +854,42 @@ function isAccountUpdateMessage(
   message: BinancePrivateMessage,
 ): message is BinanceAccountUpdateMessage {
   return message.e === "ACCOUNT_UPDATE";
+}
+
+function isOrderTradeUpdateMessage(
+  message: BinancePrivateMessage,
+): message is BinanceOrderTradeUpdateMessage {
+  return message.e === "ORDER_TRADE_UPDATE";
+}
+
+function isMarginExecutionReportMessage(
+  message: BinancePrivateMessage,
+): message is BinanceMarginExecutionReportMessage {
+  return message.e === "executionReport";
+}
+
+function isMarginOutboundAccountPositionMessage(
+  message: BinancePrivateMessage,
+): message is BinanceMarginOutboundAccountPositionMessage {
+  return message.e === "outboundAccountPosition";
+}
+
+function isMarginBalanceUpdateMessage(
+  message: BinancePrivateMessage,
+): message is BinanceMarginBalanceUpdateMessage {
+  return message.e === "balanceUpdate";
+}
+
+function isMarginLiabilityChangeMessage(
+  message: BinancePrivateMessage,
+): message is BinanceMarginLiabilityChangeMessage {
+  return message.e === "liabilityChange";
+}
+
+function isMarginOpenOrderLossMessage(
+  message: BinancePrivateMessage,
+): message is BinanceMarginOpenOrderLossMessage {
+  return message.e === "openOrderLoss";
 }
 
 function isListenKeyExpiredMessage(
@@ -863,6 +1043,122 @@ function mapOrderTrade(
   };
 }
 
+function mapMarginExecutionReport(
+  catalog: BinanceMarketCatalog,
+  message: BinanceMarginExecutionReportMessage,
+  receivedAt: number,
+): RawOrderUpdate | undefined {
+  const status = normalizeOrderStatus(message.X);
+  const orderType = normalizeOrderType(message.o);
+  if (!message.s || !status) {
+    return undefined;
+  }
+
+  const symbol = catalog.toUnified(
+    BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY,
+    message.s,
+  );
+  if (!symbol) {
+    return undefined;
+  }
+
+  return {
+    orderId: message.i === undefined ? undefined : `${message.i}`,
+    clientOrderId: message.c,
+    symbol,
+    side: normalizeOrderSide(message.S),
+    ...orderType,
+    status,
+    price: message.p,
+    amount: message.q ?? "0",
+    filled: message.z ?? "0",
+    exchangeTs: message.T ?? message.E,
+    receivedAt,
+    trade: mapMarginOrderTrade(message),
+  };
+}
+
+function mapMarginOrderTrade(
+  message: BinanceMarginExecutionReportMessage,
+): RawOrderUpdate["trade"] {
+  if (message.x !== "TRADE" || !(Number(message.l) > 0)) {
+    return undefined;
+  }
+
+  const fee =
+    message.n !== undefined && message.N !== undefined
+      ? {
+          cost: message.n,
+          asset: message.N,
+        }
+      : undefined;
+
+  return {
+    tradeId: message.t === undefined ? undefined : `${message.t}`,
+    price: message.L ?? "0",
+    qty: message.l ?? "0",
+    fee,
+    maker: message.m,
+  };
+}
+
+function mapMarginOutboundAccountPosition(
+  message: BinanceMarginOutboundAccountPositionMessage,
+  receivedAt: number,
+): RawAccountUpdate {
+  const exchangeTs = message.u ?? message.E;
+  return {
+    balances: message.B?.flatMap((balance) => {
+      if (!balance.a) {
+        return [];
+      }
+
+      const free = balance.f ?? "0";
+      const used = balance.l ?? "0";
+      return [
+        {
+          asset: balance.a,
+          free,
+          used,
+          total: new BigNumber(free).plus(used).toString(10),
+          exchangeTs,
+          receivedAt,
+        },
+      ];
+    }),
+    exchangeTs,
+    receivedAt,
+  };
+}
+
+function mapMarginLiabilityChange(
+  message: BinanceMarginLiabilityChangeMessage,
+  receivedAt: number,
+): RawAccountUpdate | undefined {
+  if (!message.a) {
+    return undefined;
+  }
+
+  const exchangeTs = message.T ?? message.E;
+  const borrowed = canonicalString(message.l);
+  const interest = canonicalString(message.i);
+  return {
+    balances: [
+      {
+        asset: message.a,
+        lending: {
+          borrowed,
+          interest,
+        },
+        exchangeTs,
+        receivedAt,
+      },
+    ],
+    exchangeTs,
+    receivedAt,
+  };
+}
+
 function mapCommissionRate(
   response: BinancePapiUmCommissionRate,
   symbol: string,
@@ -966,12 +1262,12 @@ function missingUmPositionVenueIds(
 
 function missingOpenOrderVenueIds(
   catalog: BinanceMarketCatalog,
+  family: BinancePrivateOrderRoute["family"],
   orders: BinancePapiOpenOrder[],
 ): string[] {
   return uniqueStrings(
     orders.flatMap((order) =>
-      order.symbol &&
-      !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, order.symbol)
+      order.symbol && !catalog.toUnified(family, order.symbol)
         ? [order.symbol]
         : [],
     ),
@@ -1025,10 +1321,10 @@ function firstMissingAccountUpdateVenueId(
 function missingAccountConfigUpdateVenueId(
   catalog: BinanceMarketCatalog,
   message: BinanceAccountConfigUpdateMessage,
-): string | undefined {
+): SymbolMappingMiss | undefined {
   const venueId = message.ac?.s;
   if (venueId && !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, venueId)) {
-    return venueId;
+    return { family: BINANCE_PRIVATE_SYMBOL_FAMILY, venueId };
   }
 
   return undefined;
@@ -1037,10 +1333,25 @@ function missingAccountConfigUpdateVenueId(
 function missingOrderUpdateVenueId(
   catalog: BinanceMarketCatalog,
   message: BinanceOrderTradeUpdateMessage,
-): string | undefined {
+): SymbolMappingMiss | undefined {
   const venueId = message.o?.s;
   if (venueId && !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, venueId)) {
-    return venueId;
+    return { family: BINANCE_PRIVATE_SYMBOL_FAMILY, venueId };
+  }
+
+  return undefined;
+}
+
+function missingMarginExecutionReportVenueId(
+  catalog: BinanceMarketCatalog,
+  message: BinanceMarginExecutionReportMessage,
+): SymbolMappingMiss | undefined {
+  const venueId = message.s;
+  if (
+    venueId &&
+    !catalog.toUnified(BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY, venueId)
+  ) {
+    return { family: BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY, venueId };
   }
 
   return undefined;
@@ -1048,6 +1359,34 @@ function missingOrderUpdateVenueId(
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function uniqueSymbolMappingMisses(
+  misses: readonly SymbolMappingMiss[],
+): SymbolMappingMiss[] {
+  const seen = new Set<string>();
+  const unique: SymbolMappingMiss[] = [];
+  for (const miss of misses) {
+    const key = `${miss.family}:${miss.venueId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(miss);
+  }
+  return unique;
+}
+
+function groupMissesByFamily(
+  misses: readonly SymbolMappingMiss[],
+): Map<BinanceMarketFamily, string[]> {
+  const grouped = new Map<BinanceMarketFamily, string[]>();
+  for (const miss of uniqueSymbolMappingMisses(misses)) {
+    const venueIds = grouped.get(miss.family) ?? [];
+    venueIds.push(miss.venueId);
+    grouped.set(miss.family, venueIds);
+  }
+  return grouped;
 }
 
 function isBinanceOrderNotFound(error: unknown): boolean {
@@ -1110,7 +1449,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   readonly notes = [
     "Capabilities describe the current SDK runtime, not Binance's full exchange API surface.",
     "Funding rate support depends on the market type.",
-    "Order commands currently target Binance PAPI UM USD-M symbols; venue-level order.supported does not mean every Binance market type is orderable.",
+    "Order commands route Binance PAPI UM and PAPI margin by symbol; venue-level order.supported does not mean every Binance market type is orderable.",
   ];
   readonly accountCapabilities: VenueAccountCapabilities = {
     register: "supported",
@@ -1119,7 +1458,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     balances: "supported",
     positions: "supported",
     risk: "supported",
-    lending: "unsupported",
+    lending: "supported",
     credentialsRequired: true,
   };
   readonly orderCapabilities: VenueOrderCapabilities = {
@@ -1253,19 +1592,40 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     credentials: AccountCredentials,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOpenOrdersSnapshot> {
-    await this.ensureUsdmCatalog();
+    await Promise.all([this.ensureUsdmCatalog(), this.ensureSpotCatalog()]);
     const receivedAt = Date.now();
-    const orders = await this.signedRequest<BinancePapiOpenOrder[]>(
-      "GET",
-      "/papi/v1/um/openOrders",
-      credentials,
-      accountOptions,
-      undefined,
-      SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
-    );
+    const [umOrders, marginOrders] = await Promise.all([
+      this.signedRequest<BinancePapiOpenOrder[]>(
+        "GET",
+        "/papi/v1/um/openOrders",
+        credentials,
+        accountOptions,
+        undefined,
+        SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+      ),
+      this.signedRequest<BinancePapiOpenOrder[]>(
+        "GET",
+        "/papi/v1/margin/openOrders",
+        credentials,
+        accountOptions,
+        undefined,
+        SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+      ),
+    ]);
 
     return {
-      orders: await this.mapOpenOrdersWithCatalogRefresh(orders, receivedAt),
+      orders: [
+        ...(await this.mapOpenOrdersWithCatalogRefresh(
+          BINANCE_PRIVATE_SYMBOL_FAMILY,
+          umOrders,
+          receivedAt,
+        )),
+        ...(await this.mapOpenOrdersWithCatalogRefresh(
+          BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY,
+          marginOrders,
+          receivedAt,
+        )),
+      ],
       snapshotReceivedAt: receivedAt,
     };
   }
@@ -1276,22 +1636,26 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate | undefined> {
     const receivedAt = Date.now();
-    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const route = await this.resolvePrivateOrderRoute(request.symbol);
     try {
       const response = await this.signedRequest<BinancePapiOpenOrder>(
         "GET",
-        "/papi/v1/um/order",
+        `/papi/v1/${route.product}/order`,
         credentials,
         accountOptions,
         {
-          symbol,
+          symbol: route.venueId,
           orderId: request.orderId,
           origClientOrderId: request.clientOrderId,
         },
         SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
       );
 
-      return await this.mapOpenOrderWithCatalogRefresh(response, receivedAt);
+      return await this.mapOpenOrderWithCatalogRefresh(
+        route.family,
+        response,
+        receivedAt,
+      );
     } catch (error) {
       if (isBinanceOrderNotFound(error)) {
         return undefined;
@@ -1411,35 +1775,56 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate> {
     const receivedAt = Date.now();
-    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const route = await this.resolvePrivateOrderRoute(request.symbol);
+    this.assertCreateOrderProductOptions(route, request);
+    const queryParams =
+      route.product === "um"
+        ? {
+            symbol: route.venueId,
+            side: encodeOrderSide(request.side),
+            type: encodeOrderType(request.type),
+            quantity: request.amount,
+            price: request.price,
+            timeInForce:
+              request.type === "limit"
+                ? request.postOnly === true
+                  ? "GTX"
+                  : "GTC"
+                : undefined,
+            newClientOrderId: request.clientOrderId,
+            reduceOnly:
+              request.um?.reduceOnly === undefined
+                ? undefined
+                : `${request.um.reduceOnly}`,
+            positionSide: encodePositionSide(request.um?.positionSide),
+          }
+        : {
+            symbol: route.venueId,
+            side: encodeOrderSide(request.side),
+            type: encodeOrderType(request.type),
+            quantity: request.amount,
+            price: request.price,
+            timeInForce: request.type === "limit" ? "GTC" : undefined,
+            newClientOrderId: request.clientOrderId,
+            sideEffectType: encodeMarginSideEffectType(
+              request.margin?.sideEffectType,
+            ),
+            autoRepayAtCancel:
+              request.margin?.autoRepayAtCancel === undefined
+                ? undefined
+                : `${request.margin.autoRepayAtCancel}`,
+          };
     const response = await this.signedRequest<BinancePapiOpenOrder>(
       "POST",
-      "/papi/v1/um/order",
+      `/papi/v1/${route.product}/order`,
       credentials,
       accountOptions,
-      {
-        symbol,
-        side: encodeOrderSide(request.side),
-        type: encodeOrderType(request.type),
-        quantity: request.amount,
-        price: request.price,
-        timeInForce:
-          request.type === "limit"
-            ? request.postOnly === true
-              ? "GTX"
-              : "GTC"
-            : undefined,
-        newClientOrderId: request.clientOrderId,
-        reduceOnly:
-          request.reduceOnly === undefined
-            ? undefined
-            : `${request.reduceOnly}`,
-        positionSide: encodePositionSide(request.positionSide),
-      },
+      queryParams,
       NO_RETRY_POLICY,
     );
 
     const mapped = await this.mapOpenOrderWithCatalogRefresh(
+      route.family,
       response,
       receivedAt,
     );
@@ -1458,14 +1843,14 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate> {
     const receivedAt = Date.now();
-    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const route = await this.resolvePrivateOrderRoute(request.symbol);
     const response = await this.signedRequest<BinancePapiOpenOrder>(
       "DELETE",
-      "/papi/v1/um/order",
+      `/papi/v1/${route.product}/order`,
       credentials,
       accountOptions,
       {
-        symbol,
+        symbol: route.venueId,
         orderId: request.orderId,
         origClientOrderId: request.clientOrderId,
       },
@@ -1474,6 +1859,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     );
 
     const mapped = await this.mapOpenOrderWithCatalogRefresh(
+      route.family,
       response,
       receivedAt,
     );
@@ -1491,14 +1877,14 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     request: CancelAllOrdersRequest,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawOrderUpdate[]> {
-    const symbol = await this.toUsdmVenueIdForCommand(request.symbol);
+    const route = await this.resolvePrivateOrderRoute(request.symbol);
     const openOrders = await this.signedRequest<BinancePapiOpenOrder[]>(
       "GET",
-      "/papi/v1/um/openOrders",
+      `/papi/v1/${route.product}/openOrders`,
       credentials,
       accountOptions,
       {
-        symbol,
+        symbol: route.venueId,
       },
       SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
       "cancel",
@@ -1509,11 +1895,11 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     // the WS terminal event / reconcile.
     const response = await this.signedRequest<BinancePapiCancelAllResponse>(
       "DELETE",
-      "/papi/v1/um/allOpenOrders",
+      `/papi/v1/${route.product}/allOpenOrders`,
       credentials,
       accountOptions,
       {
-        symbol,
+        symbol: route.venueId,
       },
       NO_RETRY_POLICY,
       "cancel",
@@ -1529,6 +1915,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
 
     const receivedAt = Date.now();
     const mappedOrders = await this.mapOpenOrdersWithCatalogRefresh(
+      route.family,
       openOrders,
       receivedAt,
     );
@@ -1601,16 +1988,16 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       }
 
       if (isAccountConfigUpdateMessage(message)) {
-        const missingVenueId = missingAccountConfigUpdateVenueId(
+        const missing = missingAccountConfigUpdateVenueId(
           this.marketCatalog,
           message,
         );
-        if (missingVenueId) {
+        if (missing) {
           if (replaying) {
-            this.reportSymbolMappingMisses([missingVenueId]);
+            this.reportSymbolMappingMisses([missing]);
             return true;
           }
-          quarantineSymbolMappingMiss(message, receivedAt, [missingVenueId]);
+          quarantineSymbolMappingMiss(message, receivedAt, [missing]);
           return false;
         }
 
@@ -1631,15 +2018,18 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
           message,
         );
         if (firstMissing) {
-          const venueIds = missingAccountUpdateVenueIds(
+          const misses = missingAccountUpdateVenueIds(
             this.marketCatalog,
             message,
-          );
+          ).map((venueId) => ({
+            family: BINANCE_PRIVATE_SYMBOL_FAMILY,
+            venueId,
+          }));
           if (replaying) {
-            this.reportSymbolMappingMisses(venueIds);
+            this.reportSymbolMappingMisses(misses);
             return true;
           }
-          quarantineSymbolMappingMiss(message, receivedAt, venueIds);
+          quarantineSymbolMappingMiss(message, receivedAt, misses);
           return false;
         }
 
@@ -1649,16 +2039,66 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
         return false;
       }
 
-      const missingVenueId = missingOrderUpdateVenueId(
-        this.marketCatalog,
-        message,
-      );
-      if (missingVenueId) {
+      if (isMarginOutboundAccountPositionMessage(message)) {
+        callbacks.onAccountUpdate(
+          mapMarginOutboundAccountPosition(message, receivedAt),
+        );
+        return false;
+      }
+
+      if (isMarginBalanceUpdateMessage(message)) {
+        return false;
+      }
+
+      if (isMarginLiabilityChangeMessage(message)) {
+        const accountUpdate = mapMarginLiabilityChange(message, receivedAt);
+        if (accountUpdate) {
+          callbacks.onAccountUpdate(accountUpdate);
+        }
+        return false;
+      }
+
+      if (isMarginOpenOrderLossMessage(message)) {
+        callbacks.requestReconcile?.("margin_open_order_loss");
+        return false;
+      }
+
+      if (isMarginExecutionReportMessage(message)) {
+        const missing = missingMarginExecutionReportVenueId(
+          this.marketCatalog,
+          message,
+        );
+        if (missing) {
+          if (replaying) {
+            this.reportSymbolMappingMisses([missing]);
+            return true;
+          }
+          quarantineSymbolMappingMiss(message, receivedAt, [missing]);
+          return false;
+        }
+
+        const orderUpdate = mapMarginExecutionReport(
+          this.marketCatalog,
+          message,
+          receivedAt,
+        );
+        if (orderUpdate) {
+          callbacks.onOrderUpdate(orderUpdate);
+        }
+        return false;
+      }
+
+      if (!isOrderTradeUpdateMessage(message)) {
+        return false;
+      }
+
+      const missing = missingOrderUpdateVenueId(this.marketCatalog, message);
+      if (missing) {
         if (replaying) {
-          this.reportSymbolMappingMisses([missingVenueId]);
+          this.reportSymbolMappingMisses([missing]);
           return true;
         }
-        quarantineSymbolMappingMiss(message, receivedAt, [missingVenueId]);
+        quarantineSymbolMappingMiss(message, receivedAt, [missing]);
         return false;
       }
 
@@ -1673,8 +2113,10 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       return false;
     };
 
-    const quarantinedVenueIds = () =>
-      uniqueStrings(symbolMappingQuarantine.flatMap((entry) => entry.venueIds));
+    const quarantinedMisses = () =>
+      uniqueSymbolMappingMisses(
+        symbolMappingQuarantine.flatMap((entry) => entry.misses),
+      );
 
     const requestReconcileForSymbolMappingMiss = () => {
       if (closed) {
@@ -1685,13 +2127,13 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     };
 
     const drainSymbolMappingQuarantine = async (): Promise<void> => {
-      const venueIds = quarantinedVenueIds();
-      if (venueIds.length === 0) {
+      const misses = quarantinedMisses();
+      if (misses.length === 0) {
         return;
       }
 
-      const refreshResult = await this.refreshUsdmCatalogAfterMiss(venueIds);
-      if (closed || refreshResult !== "refreshed") {
+      const refreshResult = await this.refreshCatalogsAfterMiss(misses);
+      if (closed || !refreshResult) {
         return;
       }
 
@@ -1741,10 +2183,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
           symbolMappingRefreshInFlight = undefined;
           if (!closed && symbolMappingQuarantine.length > 0) {
             scheduleSymbolMappingRefresh(
-              this.marketCatalog.getMissRefreshDelayMs(
-                BINANCE_PRIVATE_SYMBOL_FAMILY,
-                quarantinedVenueIds(),
-              ),
+              this.getMissRefreshDelayMs(quarantinedMisses()),
             );
           }
         },
@@ -1754,12 +2193,12 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     const quarantineSymbolMappingMiss = (
       message: BinancePrivateMessage,
       receivedAt: number,
-      venueIds: string[],
+      misses: SymbolMappingMiss[],
     ) => {
       if (symbolMappingQuarantine.length >= MAX_SYMBOL_MAPPING_QUARANTINE) {
         const dropped = symbolMappingQuarantine.shift();
         if (dropped) {
-          this.reportSymbolMappingMisses(dropped.venueIds);
+          this.reportSymbolMappingMisses(dropped.misses);
           requestReconcileForSymbolMappingMiss();
         }
       }
@@ -1767,7 +2206,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       symbolMappingQuarantine.push({
         message,
         receivedAt,
-        venueIds,
+        misses,
       });
       scheduleSymbolMappingRefresh();
     };
@@ -2011,6 +2450,10 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     await this.marketCatalog.ensureLoaded(BINANCE_PRIVATE_SYMBOL_FAMILY);
   }
 
+  private async ensureSpotCatalog(): Promise<void> {
+    await this.marketCatalog.ensureLoaded(BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY);
+  }
+
   private async ensureUsdmCatalogForCommand(symbol: string): Promise<void> {
     try {
       await this.ensureUsdmCatalog();
@@ -2048,23 +2491,171 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   private createCatalogUnavailableError(
     symbol: string | undefined,
     cause: unknown,
+    family: BinanceMarketFamily = BINANCE_PRIVATE_SYMBOL_FAMILY,
   ): CatalogUnavailableError {
     return new CatalogUnavailableError({
       venue: "binance",
-      family: BINANCE_PRIVATE_SYMBOL_FAMILY,
+      family,
       symbol,
       cause,
     });
   }
 
+  private async resolvePrivateOrderRoute(
+    symbol: string,
+  ): Promise<BinancePrivateOrderRoute> {
+    const [usdm, spot] = await Promise.allSettled([
+      this.lookupPrivateOrderRouteFamily(BINANCE_PRIVATE_SYMBOL_FAMILY, symbol),
+      this.lookupPrivateOrderRouteFamily(
+        BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY,
+        symbol,
+      ),
+    ]);
+
+    const usdmResult =
+      usdm.status === "fulfilled" ? usdm.value : { unavailable: usdm.reason };
+    const spotResult =
+      spot.status === "fulfilled" ? spot.value : { unavailable: spot.reason };
+
+    if ("route" in usdmResult && usdmResult.route) {
+      return usdmResult.route;
+    }
+    if ("route" in spotResult && spotResult.route) {
+      return spotResult.route;
+    }
+
+    const unsupported = await this.lookupUnsupportedCoinmOrderRoute(symbol);
+    if (unsupported) {
+      throw unsupported;
+    }
+
+    if ("unavailable" in usdmResult) {
+      throw this.createCatalogUnavailableError(
+        symbol,
+        usdmResult.unavailable,
+        BINANCE_PRIVATE_SYMBOL_FAMILY,
+      );
+    }
+    if ("unavailable" in spotResult) {
+      throw this.createCatalogUnavailableError(
+        symbol,
+        spotResult.unavailable,
+        BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY,
+      );
+    }
+
+    throw new SymbolMappingError({
+      venue: "binance",
+      family: "spot/usdm",
+      symbol,
+      direction: "to_venue",
+    });
+  }
+
+  private async lookupPrivateOrderRouteFamily(
+    family: typeof BINANCE_PRIVATE_SYMBOL_FAMILY,
+    symbol: string,
+  ): Promise<{ route?: BinancePrivateOrderRoute }>;
+  private async lookupPrivateOrderRouteFamily(
+    family: typeof BINANCE_PRIVATE_MARGIN_SYMBOL_FAMILY,
+    symbol: string,
+  ): Promise<{ route?: BinancePrivateOrderRoute }>;
+  private async lookupPrivateOrderRouteFamily(
+    family: BinancePrivateOrderRoute["family"],
+    symbol: string,
+  ): Promise<{ route?: BinancePrivateOrderRoute }> {
+    await this.marketCatalog.ensureLoaded(family);
+    let definition = this.marketCatalog.getDefinition(family, symbol);
+    if (!definition) {
+      await this.marketCatalog.refreshFamilyAfterMiss(family, [symbol]);
+      definition = this.marketCatalog.getDefinition(family, symbol);
+    }
+
+    if (!definition) {
+      return {};
+    }
+
+    const product = getPrivateOrderProduct(definition);
+    if (!product) {
+      return {};
+    }
+
+    return {
+      route: {
+        product,
+        family,
+        venueId: definition.id,
+      } as BinancePrivateOrderRoute,
+    };
+  }
+
+  private async lookupUnsupportedCoinmOrderRoute(
+    symbol: string,
+  ): Promise<UnsupportedSymbolProductError | undefined> {
+    try {
+      await this.marketCatalog.ensureLoaded("coinm");
+      let definition = this.marketCatalog.getDefinition("coinm", symbol);
+      if (!definition) {
+        await this.marketCatalog.refreshFamilyAfterMiss("coinm", [symbol]);
+        definition = this.marketCatalog.getDefinition("coinm", symbol);
+      }
+
+      return definition
+        ? new UnsupportedSymbolProductError({
+            venue: "binance",
+            family: definition.family,
+            symbol,
+          })
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private assertCreateOrderProductOptions(
+    route: BinancePrivateOrderRoute,
+    request: CreateOrderRequest,
+  ): void {
+    if (request.um !== undefined && request.margin !== undefined) {
+      throw new OrderInputValidationError(
+        "Binance createOrder cannot include both um and margin options",
+      );
+    }
+
+    if (route.product === "um" && request.margin !== undefined) {
+      throw new OrderInputValidationError(
+        "Binance UM orders do not accept margin order options",
+      );
+    }
+
+    if (route.product === "margin" && request.um !== undefined) {
+      throw new OrderInputValidationError(
+        "Binance margin orders do not accept UM order options",
+      );
+    }
+
+    if (route.product === "margin" && request.postOnly === true) {
+      throw new OrderInputValidationError(
+        "Binance margin orders do not support postOnly in this SDK version",
+      );
+    }
+  }
+
   private async refreshUsdmCatalogAfterMiss(
     venueIds: readonly string[],
   ): Promise<"refreshed" | "cooldown" | "failed"> {
+    return this.refreshCatalogAfterMiss(
+      BINANCE_PRIVATE_SYMBOL_FAMILY,
+      venueIds,
+    );
+  }
+
+  private async refreshCatalogAfterMiss(
+    family: BinanceMarketFamily,
+    venueIds: readonly string[],
+  ): Promise<"refreshed" | "cooldown" | "failed"> {
     try {
-      return await this.marketCatalog.refreshFamilyAfterMiss(
-        BINANCE_PRIVATE_SYMBOL_FAMILY,
-        venueIds,
-      );
+      return await this.marketCatalog.refreshFamilyAfterMiss(family, venueIds);
     } catch {
       // The catalog keeps the previous atomic snapshot and reports the failure
       // through the injected runtime error publisher. The caller keeps
@@ -2073,12 +2664,37 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     }
   }
 
-  private reportSymbolMappingMisses(venueIds: string[]): void {
-    for (const venueId of venueIds) {
-      this.marketCatalog.reportSymbolMappingMiss(
-        BINANCE_PRIVATE_SYMBOL_FAMILY,
-        venueId,
-      );
+  private async refreshCatalogsAfterMiss(
+    misses: readonly SymbolMappingMiss[],
+  ): Promise<boolean> {
+    const byFamily = new Map<BinanceMarketFamily, string[]>();
+    for (const miss of uniqueSymbolMappingMisses(misses)) {
+      const familyMisses = byFamily.get(miss.family) ?? [];
+      familyMisses.push(miss.venueId);
+      byFamily.set(miss.family, familyMisses);
+    }
+
+    const results = await Promise.all(
+      [...byFamily.entries()].map(([family, venueIds]) =>
+        this.refreshCatalogAfterMiss(family, venueIds),
+      ),
+    );
+    return results.includes("refreshed");
+  }
+
+  private getMissRefreshDelayMs(misses: readonly SymbolMappingMiss[]): number {
+    const delays = [...groupMissesByFamily(misses).entries()].map(
+      ([family, venueIds]) =>
+        this.marketCatalog.getMissRefreshDelayMs(family, venueIds),
+    );
+    return delays.length === 0 ? 0 : Math.min(...delays);
+  }
+
+  private reportSymbolMappingMisses(
+    misses: readonly SymbolMappingMiss[],
+  ): void {
+    for (const miss of uniqueSymbolMappingMisses(misses)) {
+      this.marketCatalog.reportSymbolMappingMiss(miss.family, miss.venueId);
     }
   }
 
@@ -2092,7 +2708,12 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     if (missing.length > 0) {
       await this.refreshUsdmCatalogAfterMiss(missing);
       missing = missingUmPositionVenueIds(this.marketCatalog, positions);
-      this.reportSymbolMappingMisses(missing);
+      this.reportSymbolMappingMisses(
+        missing.map((venueId) => ({
+          family: BINANCE_PRIVATE_SYMBOL_FAMILY,
+          venueId,
+        })),
+      );
     }
 
     return mapAccountBootstrap(
@@ -2113,7 +2734,12 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     if (missing.length > 0) {
       await this.refreshUsdmCatalogAfterMiss(missing);
       missing = missingUmPositionVenueIds(this.marketCatalog, positions);
-      this.reportSymbolMappingMisses(missing);
+      this.reportSymbolMappingMisses(
+        missing.map((venueId) => ({
+          family: BINANCE_PRIVATE_SYMBOL_FAMILY,
+          venueId,
+        })),
+      );
     }
 
     return mapAccountRefresh(
@@ -2125,27 +2751,37 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
   }
 
   private async mapOpenOrdersWithCatalogRefresh(
+    family: BinancePrivateOrderRoute["family"],
     orders: BinancePapiOpenOrder[],
     receivedAt: number,
   ): Promise<RawOrderUpdate[]> {
-    let missing = missingOpenOrderVenueIds(this.marketCatalog, orders);
+    let missing = missingOpenOrderVenueIds(this.marketCatalog, family, orders);
     if (missing.length > 0) {
-      await this.refreshUsdmCatalogAfterMiss(missing);
-      missing = missingOpenOrderVenueIds(this.marketCatalog, orders);
-      this.reportSymbolMappingMisses(missing);
+      await this.refreshCatalogAfterMiss(family, missing);
+      missing = missingOpenOrderVenueIds(this.marketCatalog, family, orders);
+      this.reportSymbolMappingMisses(
+        missing.map((venueId) => ({ family, venueId })),
+      );
     }
 
     return orders.flatMap((order) => {
-      const mapped = mapOpenOrder(this.marketCatalog, order, receivedAt);
+      const mapped = mapOpenOrder(
+        this.marketCatalog,
+        family,
+        order,
+        receivedAt,
+      );
       return mapped ? [mapped] : [];
     });
   }
 
   private async mapOpenOrderWithCatalogRefresh(
+    family: BinancePrivateOrderRoute["family"],
     order: BinancePapiOpenOrder,
     receivedAt: number,
   ): Promise<RawOrderUpdate | undefined> {
     const mapped = await this.mapOpenOrdersWithCatalogRefresh(
+      family,
       [order],
       receivedAt,
     );
@@ -2160,7 +2796,12 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     if (missing.length > 0) {
       await this.refreshUsdmCatalogAfterMiss(missing);
       missing = missingRiskLimitVenueIds(this.marketCatalog, brackets);
-      this.reportSymbolMappingMisses(missing);
+      this.reportSymbolMappingMisses(
+        missing.map((venueId) => ({
+          family: BINANCE_PRIVATE_SYMBOL_FAMILY,
+          venueId,
+        })),
+      );
     }
 
     return brackets.flatMap((bracket) => {

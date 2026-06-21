@@ -11,7 +11,9 @@ import type {
 
 export type { MarketType } from "./shared.ts";
 
-export interface MarketDefinition {
+export type OptionType = "call" | "put";
+
+export interface BaseMarketDefinition {
   venue: Venue;
   symbol: string;
   id: string;
@@ -33,6 +35,27 @@ export interface MarketDefinition {
   expiry?: number;
   raw: Record<string, unknown>;
 }
+
+export interface StandardMarketDefinition extends BaseMarketDefinition {
+  type: "spot" | "swap" | "future";
+}
+
+export interface OptionMarketDefinition extends BaseMarketDefinition {
+  type: "option";
+  underlying: string;
+  expiry: number;
+  strike: string;
+  strikeCurrency: string;
+  optionType: OptionType;
+  premiumCurrency: string;
+  settle: string;
+  contract: true;
+  contractSize: string;
+}
+
+export type MarketDefinition =
+  | StandardMarketDefinition
+  | OptionMarketDefinition;
 
 export interface MarketCatalogReloadSummary {
   venue: Venue;
@@ -139,7 +162,7 @@ export interface MarketDataStatus {
   lastReceivedAt?: number;
   lastReadyAt?: number;
   inactiveSince?: number;
-  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
+  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling" | "no_quote";
 }
 
 export interface MarketDataStreamStatus {
@@ -158,6 +181,32 @@ export interface MarketKeyInput {
 }
 
 export type DecimalInput = string | number | BigNumber;
+
+export interface ListOptionMarketsFilter {
+  venue?: Venue;
+  underlying?: string;
+  optionType?: OptionType;
+  expiry?: number;
+  strike?: DecimalInput;
+  strikeCurrency?: string;
+  premiumCurrency?: string;
+  settle?: string;
+  active?: boolean;
+}
+
+export type ListOptionPairsFilter = Omit<ListOptionMarketsFilter, "optionType">;
+
+export interface OptionPair {
+  venue: Venue;
+  underlying: string;
+  strikeCurrency: string;
+  premiumCurrency: string;
+  settle: string;
+  expiry: number;
+  strike: string;
+  call: OptionMarketDefinition;
+  put: OptionMarketDefinition;
+}
 
 export type NormalizeOrderInputRejectReason =
   | "price_not_positive"
@@ -299,6 +348,8 @@ export interface MarketManager {
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
   listMarkets(venue?: Venue): MarketDefinition[];
+  listOptionMarkets(filter?: ListOptionMarketsFilter): OptionMarketDefinition[];
+  listOptionPairs(filter?: ListOptionPairsFilter): OptionPair[];
   normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
   getL1Book(key: MarketKeyInput): L1Book | undefined;
   getL1Books(symbol: string): L1Book[];

@@ -179,7 +179,7 @@ Never express binary certainty when evidence is incomplete. Use "most likely", "
    - If it's a cross-platform issue → update `cross-platform-thinking-guide.md`
    - If it's a cross-layer issue → update `cross-layer-thinking-guide.md`
    - If it's a code reuse issue → update `code-reuse-thinking-guide.md`
-   - If it's domain-specific → update `backend/*.md` or `frontend/*.md`
+   - If it's domain-specific → update `.trellis/spec/sdk/*.md` or `.trellis/spec/sdk/venues/*.md`
 
 2. **Sync templates** - After updating `.trellis/spec/`, sync to `src/templates/markdown/spec/`
 

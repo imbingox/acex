@@ -1,4 +1,4 @@
-# Quality Guidelines
+# Testing And Quality
 
 ## Scenario: Bun SDK 仓库必须提供可执行的 lint / type-check / test 命令
 
@@ -21,7 +21,19 @@
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test --max-concurrency=1 tests/integration",
     "test:soak": "bun test --max-concurrency=1 tests/soak",
-    "test:all": "bun run test && bun run test:soak"
+    "test:all": "bun run test && bun run test:soak",
+    "test:live:market": "bun run scripts/live-market-smoke.ts",
+    "test:live:market:smoke": "bun run scripts/live-market-smoke.ts --duration 10",
+    "test:live:market:soak": "bun run scripts/live-market-smoke.ts --duration 60 --disconnect-after 5 --disconnect-target perp",
+    "test:live:account": "bun run scripts/live-account-smoke.ts",
+    "test:live:account:smoke": "bun run scripts/live-account-smoke.ts --duration 10",
+    "test:live:account:soak": "bun run scripts/live-account-smoke.ts --duration 60 --disconnect-after 5",
+    "test:live:order": "bun run scripts/live-order-smoke.ts",
+    "test:live:order:smoke": "bun run scripts/live-order-smoke.ts --duration 10",
+    "test:live:order:soak": "bun run scripts/live-order-smoke.ts --duration 60 --disconnect-after 5",
+    "test:live:order:listen-key": "bun run scripts/live-order-smoke.ts --duration 60 --expire-listen-key-after 5",
+    "test:live:juplend": "bun run scripts/live-juplend-account-smoke.ts",
+    "test:live:juplend:smoke": "bun run scripts/live-juplend-account-smoke.ts --duration 35 --show-amounts"
   }
 }
 ```
@@ -56,6 +68,9 @@ package.json
   - 不进入默认 `bun run test` / PR CI / release workflow。
 - `bun run test:all`
   - 本地完整验证入口，等价于默认快速测试 + soak。
+- `bun run test:live:*`
+  - 真实网络 / 真实凭证 smoke 入口，必须由人显式执行。
+  - 不进入默认 `bun run test`、`test:all`、PR CI 或 release workflow。
 
 #### 3.2 测试目录约定
 
@@ -111,7 +126,11 @@ package.json
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test --max-concurrency=1 tests/integration",
     "test:soak": "bun test --max-concurrency=1 tests/soak",
-    "test:all": "bun run test && bun run test:soak"
+    "test:all": "bun run test && bun run test:soak",
+    "test:live:market:smoke": "bun run scripts/live-market-smoke.ts --duration 10",
+    "test:live:account:smoke": "bun run scripts/live-account-smoke.ts --duration 10",
+    "test:live:order:smoke": "bun run scripts/live-order-smoke.ts --duration 10",
+    "test:live:juplend:smoke": "bun run scripts/live-juplend-account-smoke.ts --duration 35 --show-amounts"
   }
 }
 ```
@@ -188,7 +207,11 @@ bun run test
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test --max-concurrency=1 tests/integration",
     "test:soak": "bun test --max-concurrency=1 tests/soak",
-    "test:all": "bun run test && bun run test:soak"
+    "test:all": "bun run test && bun run test:soak",
+    "test:live:market:smoke": "bun run scripts/live-market-smoke.ts --duration 10",
+    "test:live:account:smoke": "bun run scripts/live-account-smoke.ts --duration 10",
+    "test:live:order:smoke": "bun run scripts/live-order-smoke.ts --duration 10",
+    "test:live:juplend:smoke": "bun run scripts/live-juplend-account-smoke.ts --duration 35 --show-amounts"
   }
 }
 ```
@@ -199,3 +222,16 @@ bun run test
 - `finish-work` 可以直接执行
 - 后续 CI 也能复用同一组命令
 - 默认测试入口保持快速确定性，长稳态和真实网络测试必须显式执行
+
+## 测试布局
+
+- `tests/unit/`：工具、manager、parser helper 和隔离行为的确定性单元测试。
+- `tests/integration/`：使用 fake REST + fake WebSocket 的 SDK 跨层测试。
+- `tests/soak/`：长时间本地稳定性测试，不属于默认 `bun run test`。
+- `scripts/live-*-smoke.ts`：真实网络 smoke 脚本，不属于默认 `bun run test`、`test:all`、CI 或 release。
+- `tests/support/exchanges/<venue>.ts`：venue-specific fixtures 和 fake transport installer。
+- live smoke 脚本必须留在默认 `bun run test` 之外，并要求显式环境变量或配置。
+
+## 必需命令
+
+项目质量门禁是 `bun run lint`、`bun run type-check` 和 `bun run test`。纯文档改动至少运行 `bun run lint`，并运行相关链接或 package 检查。

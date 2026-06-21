@@ -14,8 +14,9 @@ export interface MultiplexerSubscriptionHandle {
   close(): void;
 }
 
-export interface MultiplexedStreamCallbacks<TPayload> {
+export interface MultiplexedStreamCallbacks<TPayload, TStatusPayload = never> {
   onPayload(payload: TPayload, receivedAt: number): void;
+  onStatus?(payload: TStatusPayload, receivedAt: number): void;
   onFreshnessChange(freshness: Freshness, reason?: StaleReason): void;
   onDisconnected(): void;
   onError(error: Error): void;
@@ -30,7 +31,12 @@ export interface VenueHeartbeat {
   countAnyInboundAsActivity?: boolean;
 }
 
-export interface VenueStreamProtocol<TMessage, TDescriptor, TPayload> {
+export interface VenueStreamProtocol<
+  TMessage,
+  TDescriptor,
+  TPayload,
+  TStatusPayload = never,
+> {
   heartbeat?: VenueHeartbeat;
   subscriptionKey(descriptor: TDescriptor): string;
   connectionKey(descriptor: TDescriptor): string;
@@ -42,6 +48,7 @@ export interface VenueStreamProtocol<TMessage, TDescriptor, TPayload> {
     message: TMessage,
   ):
     | { kind: "data"; subscriptionKey: string; payload: TPayload }
+    | { kind: "status"; subscriptionKey: string; payload: TStatusPayload }
     | { kind: "ack" }
     | { kind: "ignore" };
 }
@@ -68,8 +75,8 @@ interface Deferred {
   reject(error: Error): void;
 }
 
-interface LocalSubscriber<TPayload> {
-  readonly callbacks: MultiplexedStreamCallbacks<TPayload>;
+interface LocalSubscriber<TPayload, TStatusPayload> {
+  readonly callbacks: MultiplexedStreamCallbacks<TPayload, TStatusPayload>;
   readonly ready: Promise<void>;
   readonly deferred: Deferred;
   readySettled: boolean;
@@ -77,9 +84,9 @@ interface LocalSubscriber<TPayload> {
   initialTimer: TimerHandle | undefined;
 }
 
-interface SubState<TDescriptor, TPayload> {
+interface SubState<TDescriptor, TPayload, TStatusPayload> {
   readonly descriptor: TDescriptor;
-  readonly subscribers: Set<LocalSubscriber<TPayload>>;
+  readonly subscribers: Set<LocalSubscriber<TPayload, TStatusPayload>>;
 }
 
 interface ControlFrame<TDescriptor> {
@@ -87,10 +94,10 @@ interface ControlFrame<TDescriptor> {
   readonly descriptors: Map<string, TDescriptor>;
 }
 
-interface ConnectionState<TDescriptor, TPayload> {
+interface ConnectionState<TDescriptor, TPayload, TStatusPayload> {
   readonly key: string;
   readonly url: string;
-  readonly subs: Map<string, SubState<TDescriptor, TPayload>>;
+  readonly subs: Map<string, SubState<TDescriptor, TPayload, TStatusPayload>>;
   readonly controlQueue: ControlFrame<TDescriptor>[];
   session: ManagedWebSocketSession;
   isOpen: boolean;
@@ -129,10 +136,15 @@ function eventError(event: Event): Error {
   return new Error(`WebSocket error: ${event.type}`);
 }
 
-export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
+export class SubscriptionMultiplexer<
+  TMessage,
+  TDescriptor,
+  TPayload,
+  TStatusPayload = never,
+> {
   private readonly connections = new Map<
     string,
-    ConnectionState<TDescriptor, TPayload>[]
+    ConnectionState<TDescriptor, TPayload, TStatusPayload>[]
   >();
 
   private readonly now: () => number;
@@ -146,7 +158,8 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     private readonly protocol: VenueStreamProtocol<
       TMessage,
       TDescriptor,
-      TPayload
+      TPayload,
+      TStatusPayload
     >,
     private readonly options: SubscriptionMultiplexerOptions<TDescriptor>,
   ) {
@@ -160,7 +173,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
 
   subscribe(
     descriptor: TDescriptor,
-    callbacks: MultiplexedStreamCallbacks<TPayload>,
+    callbacks: MultiplexedStreamCallbacks<TPayload, TStatusPayload>,
   ): MultiplexerSubscriptionHandle {
     const subscriptionKey = this.protocol.subscriptionKey(descriptor);
     const connectionKey = this.protocol.connectionKey(descriptor);
@@ -171,7 +184,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     const connection =
       existingConnection ?? this.getOrCreateConnection(connectionKey);
     const { promise, deferred } = createDeferred();
-    const localSubscriber: LocalSubscriber<TPayload> = {
+    const localSubscriber: LocalSubscriber<TPayload, TStatusPayload> = {
       callbacks,
       ready: promise,
       deferred,
@@ -198,7 +211,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
       );
     }
 
-    const sub: SubState<TDescriptor, TPayload> = {
+    const sub: SubState<TDescriptor, TPayload, TStatusPayload> = {
       descriptor,
       subscribers: new Set([localSubscriber]),
     };
@@ -226,10 +239,10 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private createHandle(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     subscriptionKey: string,
     ready: Promise<void>,
-    localSubscriber: LocalSubscriber<TPayload>,
+    localSubscriber: LocalSubscriber<TPayload, TStatusPayload>,
   ): MultiplexerSubscriptionHandle {
     let closed = false;
     return {
@@ -252,7 +265,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
 
   private getOrCreateConnection(
     connectionKey: string,
-  ): ConnectionState<TDescriptor, TPayload> {
+  ): ConnectionState<TDescriptor, TPayload, TStatusPayload> {
     const pool = this.connections.get(connectionKey);
     if (pool) {
       for (const connection of pool) {
@@ -267,8 +280,8 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
 
   private createConnection(
     connectionKey: string,
-  ): ConnectionState<TDescriptor, TPayload> {
-    const connection: ConnectionState<TDescriptor, TPayload> = {
+  ): ConnectionState<TDescriptor, TPayload, TStatusPayload> {
+    const connection: ConnectionState<TDescriptor, TPayload, TStatusPayload> = {
       key: connectionKey,
       url: this.protocol.connectionUrl(connectionKey),
       subs: new Map(),
@@ -321,7 +334,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private hasSubscriptionCapacity(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): boolean {
     return (
       this.maxSubscriptionsPerConnection === undefined ||
@@ -332,7 +345,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   private findConnectionWithSubscription(
     connectionKey: string,
     subscriptionKey: string,
-  ): ConnectionState<TDescriptor, TPayload> | undefined {
+  ): ConnectionState<TDescriptor, TPayload, TStatusPayload> | undefined {
     const pool = this.connections.get(connectionKey);
     if (!pool) {
       return undefined;
@@ -348,7 +361,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private addConnectionToPool(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     const pool = this.connections.get(connection.key);
     if (pool) {
@@ -360,7 +373,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private removeConnectionFromPool(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     const pool = this.connections.get(connection.key);
     if (!pool) {
@@ -377,7 +390,9 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }
   }
 
-  private handleOpen(connection: ConnectionState<TDescriptor, TPayload>): void {
+  private handleOpen(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
     connection.isOpen = true;
     connection.lastControlSentAt = undefined;
 
@@ -398,7 +413,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private notifyReconnect(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     try {
       this.options.onReconnect?.({
@@ -411,7 +426,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private handleUnexpectedClose(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     connection.isOpen = false;
     connection.lastControlSentAt = undefined;
@@ -434,12 +449,12 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private handleMessage(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     message: TMessage,
     receivedAt: number,
   ): void {
     const routed = this.protocol.routeMessage(message);
-    if (routed.kind !== "data") {
+    if (routed.kind !== "data" && routed.kind !== "status") {
       return;
     }
 
@@ -451,19 +466,27 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     if (sub.subscribers.size === 1) {
       const localSubscriber = sub.subscribers.values().next().value;
       if (localSubscriber) {
-        this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+        if (routed.kind === "data") {
+          this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+        } else {
+          this.deliverStatus(sub, localSubscriber, routed.payload, receivedAt);
+        }
       }
       return;
     }
 
     for (const localSubscriber of [...sub.subscribers]) {
-      this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+      if (routed.kind === "data") {
+        this.deliverPayload(sub, localSubscriber, routed.payload, receivedAt);
+      } else {
+        this.deliverStatus(sub, localSubscriber, routed.payload, receivedAt);
+      }
     }
   }
 
   private deliverPayload(
-    sub: SubState<TDescriptor, TPayload>,
-    localSubscriber: LocalSubscriber<TPayload>,
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    localSubscriber: LocalSubscriber<TPayload, TStatusPayload>,
     payload: TPayload,
     receivedAt: number,
   ): void {
@@ -484,11 +507,24 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }
   }
 
+  private deliverStatus(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    localSubscriber: LocalSubscriber<TPayload, TStatusPayload>,
+    payload: TStatusPayload,
+    receivedAt: number,
+  ): void {
+    if (!sub.subscribers.has(localSubscriber)) {
+      return;
+    }
+
+    localSubscriber.callbacks.onStatus?.(payload, receivedAt);
+  }
+
   private scheduleInitialTimeout(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     subscriptionKey: string,
-    sub: SubState<TDescriptor, TPayload>,
-    localSubscriber: LocalSubscriber<TPayload>,
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    localSubscriber: LocalSubscriber<TPayload, TStatusPayload>,
   ): void {
     localSubscriber.initialTimer = this.setTimer(() => {
       localSubscriber.initialTimer = undefined;
@@ -515,7 +551,9 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     }, this.options.initialMessageTimeoutMs);
   }
 
-  private clearInitialTimer(localSubscriber: LocalSubscriber<TPayload>): void {
+  private clearInitialTimer(
+    localSubscriber: LocalSubscriber<TPayload, TStatusPayload>,
+  ): void {
     if (!localSubscriber.initialTimer) {
       return;
     }
@@ -524,13 +562,17 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
     localSubscriber.initialTimer = undefined;
   }
 
-  private clearSubTimers(sub: SubState<TDescriptor, TPayload>): void {
+  private clearSubTimers(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
     for (const localSubscriber of sub.subscribers) {
       this.clearInitialTimer(localSubscriber);
     }
   }
 
-  private resolveSubReady(localSubscriber: LocalSubscriber<TPayload>): void {
+  private resolveSubReady(
+    localSubscriber: LocalSubscriber<TPayload, TStatusPayload>,
+  ): void {
     if (localSubscriber.readySettled) {
       return;
     }
@@ -540,10 +582,10 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private removeSubscription(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     subscriptionKey: string,
     sendUnsubscribe: boolean,
-    localSubscriber?: LocalSubscriber<TPayload>,
+    localSubscriber?: LocalSubscriber<TPayload, TStatusPayload>,
   ): void {
     const sub = connection.subs.get(subscriptionKey);
     if (!sub) {
@@ -583,7 +625,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private retireConnectionAfterControlFlush(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     connection.closeAfterControlQueueDrained = true;
     this.removeConnectionFromPool(connection);
@@ -591,7 +633,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private closeConnection(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     if (connection.controlTimer) {
       this.clearTimer(connection.controlTimer);
@@ -604,7 +646,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private markAllStale(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     reason: StaleReason,
   ): void {
     for (const sub of connection.subs.values()) {
@@ -620,7 +662,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private markAllStaleSilently(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     for (const sub of connection.subs.values()) {
       for (const localSubscriber of sub.subscribers) {
@@ -630,7 +672,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private notifyConnectionError(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     error: Error,
   ): void {
     for (const sub of connection.subs.values()) {
@@ -641,7 +683,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private enqueueControlFrame(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     kind: ControlFrameKind,
     entries: [string, TDescriptor][],
   ): void {
@@ -669,7 +711,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private findLastQueuedFrame(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     kind: ControlFrameKind,
   ): ControlFrame<TDescriptor> | undefined {
     for (let index = connection.controlQueue.length - 1; index >= 0; index--) {
@@ -683,7 +725,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private removeQueuedDescriptor(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     kind: ControlFrameKind,
     subscriptionKey: string,
   ): void {
@@ -701,7 +743,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private scheduleControlFlush(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     if (connection.controlTimer || !connection.isOpen) {
       return;
@@ -723,7 +765,7 @@ export class SubscriptionMultiplexer<TMessage, TDescriptor, TPayload> {
   }
 
   private flushControlFrame(
-    connection: ConnectionState<TDescriptor, TPayload>,
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
     if (!connection.isOpen) {
       return;

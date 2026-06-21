@@ -118,6 +118,32 @@ test("client exposes venue runtime capabilities without starting", () => {
     },
   });
 
+  expect(client.getVenueCapabilities("deribit")).toMatchObject({
+    venue: "deribit",
+    runtimeStatus: "available",
+    readOnly: true,
+    market: {
+      catalog: "supported",
+      serverTime: "unsupported",
+      publicTrades: "unsupported",
+      publicRawTrades: "unsupported",
+      fundingRateHistory: "unsupported",
+      l1Book: "supported",
+      fundingRate: "unsupported",
+      marketTypes: ["option"],
+    },
+    account: {
+      snapshot: "unsupported",
+      updates: "unsupported",
+      credentialsRequired: false,
+    },
+    order: {
+      supported: false,
+      fees: "unsupported",
+      reason: "read_only",
+    },
+  });
+
   for (const venue of ["okx", "bybit", "gate"] as const) {
     expect(client.getVenueCapabilities(venue)).toMatchObject({
       venue,
@@ -138,6 +164,7 @@ test("client exposes venue runtime capabilities without starting", () => {
 
   expect(client.listVenueCapabilities().map((entry) => entry.venue)).toEqual([
     "binance",
+    "deribit",
     "okx",
     "bybit",
     "gate",
@@ -154,6 +181,43 @@ test("client exposes venue runtime capabilities without starting", () => {
     "limit",
     "market",
   ]);
+});
+
+test("top-level venues option narrows runtime-supported adapters", () => {
+  const binanceOnly = createClient({ venues: ["binance"] });
+  expect(binanceOnly.getVenueCapabilities("binance").runtimeStatus).toBe(
+    "available",
+  );
+  expect(binanceOnly.getVenueCapabilities("deribit")).toMatchObject({
+    runtimeStatus: "type_only",
+    order: {
+      supported: false,
+      reason: "not_implemented",
+    },
+  });
+  expect(binanceOnly.getVenueCapabilities("juplend").runtimeStatus).toBe(
+    "type_only",
+  );
+
+  const deribitOnly = createClient({ venues: [" deribit " as "deribit"] });
+  expect(deribitOnly.getVenueCapabilities("deribit")).toMatchObject({
+    runtimeStatus: "available",
+    readOnly: true,
+    order: {
+      supported: false,
+      reason: "read_only",
+    },
+  });
+  expect(deribitOnly.getVenueCapabilities("binance").runtimeStatus).toBe(
+    "type_only",
+  );
+
+  expect(() => createClient({ venues: [] })).toThrow(
+    "CreateClientOptions.venues must not be empty",
+  );
+  expect(() => createClient({ venues: ["okx"] })).toThrow(
+    "has no runtime adapter",
+  );
 });
 
 test("client stop keeps lifecycle and market health semantics observable", async () => {

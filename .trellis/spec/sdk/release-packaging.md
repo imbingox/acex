@@ -1,4 +1,4 @@
-# Release Publishing
+# Release And Packaging
 
 ## Scenario: 仓库需要一个基于 Changesets 和 npm Trusted Publishing 的自动 beta + 手动 stable 发布流程
 
@@ -54,6 +54,18 @@ bun --silent run release:notes
 bun run release
 ```
 
+当前 npm package `files` contract：
+
+```json
+[
+  "index.ts",
+  "src/",
+  "docs/",
+  "README.md",
+  "CHANGELOG.md"
+]
+```
+
 当前 `version-packages` contract：
 
 ```bash
@@ -98,8 +110,8 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
   - `bun run test`
   - `bun run pack:check`
 - `version-packages` 不能只跑裸 `changeset version`；必须在版本文件生成后立刻格式化存在的 `.changeset/pre.json`、`package.json`，以及存在时的 `CHANGELOG.md`，避免 beta/stable 发布时因为格式问题把 workflow 跑挂。
-- `bun run pack:check` 必须在 `changeset publish` 前运行，用真实 npm tarball 预览确认 `files` contract 没有漏掉下游需要的文档或入口。
-- npm 包必须包含 `README.md` 与 `CHANGELOG.md`，不能把 `.changeset/*.md` 当成下游发布说明。
+- `bun run pack:check` 必须在 `changeset publish` 前运行，用真实 npm tarball 预览确认必需发布文件；当前脚本硬性校验 `README.md`、`CHANGELOG.md` 与 `docs/`。
+- npm `files` contract 必须包含 `docs/`，保证 README / docs index 链接到的用户文档随包发布；不能把 `.changeset/*.md`、`.trellis/spec/` 或 `todo/` 当成下游发布说明。
 
 #### 3.5 Git tag contract
 
@@ -143,7 +155,7 @@ changeset version && files="package.json"; if [ -f .changeset/pre.json ]; then f
 - changeset 文件名使用 kebab-case，放在 `.changeset/` 根目录，例如 `.changeset/fresh-funding-rate.md`。
 - changeset summary 必须写用户可理解的行为变化，不写内部实现流水账。
 - 当前仓库处于 beta prerelease mode；feature PR merge 后会先生成 beta release PR，release PR merge 后才 publish beta 包。
-- 不影响用户的纯内部维护可不写 changeset，例如 Trellis journal、任务归档、测试 fixture 重排、无行为变化的注释整理。
+- 不影响 npm 用户的纯内部维护可不写 changeset，例如 Trellis spec / journal、任务归档、`todo/`、测试 fixture 重排、无行为变化的注释整理。
 
 Changeset bump 选择矩阵：
 
@@ -151,7 +163,7 @@ Changeset bump 选择矩阵：
 |---|---|---|
 | 新增 public API、新能力、新可观察字段 | `minor` | 新增真实资金费率数据流、给 public snapshot 增加 `status` 字段 |
 | 向后兼容的行为修复 | `patch` | 修复 stop 后 snapshot status 与聚合 status 不一致 |
-| 文档、测试、Trellis 任务归档、journal | 无需 changeset | 只更新 `docs/*` 或 `.trellis/workspace/*` |
+| 文档、测试、Trellis spec / 任务归档 / journal、todo | 无需 changeset | 只更新 `docs/*`、`.trellis/spec/*`、`.trellis/workspace/*` 或 `todo/*` |
 | pre-1.0（0.x）阶段的破坏性 public contract 变更 | `minor` | beta 阶段改变 public snapshot 返回值语义；`major` 保留给 1.0 里程碑 |
 | 破坏性 public contract 变更 | `major` | 删除/重命名 public API、改变返回值语义导致现有调用方必须改代码 |
 
@@ -169,7 +181,7 @@ Changeset bump 选择矩阵：
 | workflow 关闭 provenance | 视为偏离 Trusted Publishing contract，应移除 `NPM_CONFIG_PROVENANCE=false` |
 | `package.json.repository.url` 与 GitHub 仓库不一致 | Trusted Publishing 校验失败 |
 | `bun run lint` / `type-check` / `test` 任一失败 | workflow 直接失败，不允许发布 |
-| `bun run pack:check` 失败或 tarball 缺少 `README.md` / `CHANGELOG.md` | workflow 失败，不允许发布 |
+| `bun run pack:check` 失败或 tarball 缺少 `README.md` / `CHANGELOG.md` / `docs/` | workflow 失败，不允许发布 |
 | 当前 beta 版本已经发布过，又有无 changeset 提交落到 `main` | workflow 应跳过重复 publish，不能直接因为 version already exists 失败 |
 | npm 版本已存在但对应 GitHub Release 不存在 | 跳过 npm publish，补建同 tag 的 GitHub Release |
 | npm 版本已存在但远端 tag 不存在 | 在当前 release metadata commit 上创建 `v<version>` tag 并显式推送该 tag |
@@ -180,7 +192,7 @@ Changeset bump 选择矩阵：
 | npm 已存在 stable 目标版本但本地 pre exit 又生成同一版本 | 不得重复发布；需要选择下一个正确 stable 版本并把该例外记录到 release commit/changelog |
 | PR 新增 public API / public type 字段但没有 `.changeset/*.md` | 视为 release contract 缺失，合并前必须补 changeset |
 | PR 同时包含 feature 和 bug fix | changeset bump 选最高级别，例如 `minor` 覆盖 feature + fix |
-| PR 只有文档、测试或 Trellis 归档 | 可不写 changeset |
+| PR 只有文档、测试、Trellis spec / 归档或 todo | 可不写 changeset |
 | 0.x beta 阶段的破坏性 public contract 变更写成 `major` | 视为版本策略偏离；应改为 `minor`，`major` 留给 1.0 里程碑 |
 
 ### 5. Good / Base / Bad Cases
@@ -282,7 +294,7 @@ bun --silent run release:notes <version>
 
 - workflow YAML 语法正确，路径固定在 `.github/workflows/`
 - 仓库现有质量命令在本地可执行
-- `bun run pack:check` 解析 `npm pack --dry-run --json`，缺少 `README.md` 或 `CHANGELOG.md` 时必须非零退出
+- `bun run pack:check` 解析 `npm pack --dry-run --json`，缺少 `README.md`、`CHANGELOG.md` 或 `docs/` 时必须非零退出
 - `bun --silent run release:notes <version>` 能提取 `CHANGELOG.md` 中对应版本小节且不包含 Bun 命令回显；找不到版本时必须失败
 - 用户可见代码变更必须有 `.changeset/*.md`
 - changeset bump 级别必须与 public contract 变化匹配；0.x beta 阶段的破坏性 public contract 变更使用 `minor`

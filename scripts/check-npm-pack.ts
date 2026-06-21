@@ -9,7 +9,7 @@ interface PackResult {
   files?: unknown;
 }
 
-const REQUIRED_FILES = ["README.md", "CHANGELOG.md"];
+const REQUIRED_FILES = ["README.md", "CHANGELOG.md", "docs/"];
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -61,7 +61,14 @@ const packedFiles = new Set(
     .map((file: PackFile) => file.path)
     .filter((path): path is string => typeof path === "string"),
 );
-const missingFiles = REQUIRED_FILES.filter((file) => !packedFiles.has(file));
+const missingFiles = REQUIRED_FILES.filter(
+  (file) =>
+    !(
+      packedFiles.has(file) ||
+      (file.endsWith("/") &&
+        [...packedFiles].some((packedFile) => packedFile.startsWith(file)))
+    ),
+);
 
 if (missingFiles.length > 0) {
   fail(`npm package is missing required files: ${missingFiles.join(", ")}`);

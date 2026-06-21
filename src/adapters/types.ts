@@ -186,6 +186,12 @@ export interface RawL1BookUpdate {
   receivedAt: number;
 }
 
+export interface RawL1NoQuoteUpdate {
+  exchangeTs?: number;
+  receivedAt: number;
+  raw?: Record<string, unknown>;
+}
+
 export interface RawFundingRateUpdate {
   fundingRate: string;
   nextFundingTime?: number;
@@ -245,6 +251,7 @@ export interface RawFundingRateHistoryResult {
 
 export interface L1BookStreamCallbacks {
   onUpdate(update: RawL1BookUpdate): void;
+  onNoQuote?(update: RawL1NoQuoteUpdate): void;
   onFreshnessChange(
     freshness: "fresh" | "stale",
     reason?: "heartbeat_timeout",
@@ -281,6 +288,8 @@ export interface FundingRateStreamOptions {
 
 export interface MarketAdapter {
   readonly venue: Venue;
+  readonly readOnly?: boolean;
+  readonly notes?: string[];
   readonly marketCapabilities: VenueMarketCapabilities;
   loadMarkets(): Promise<MarketDefinition[]>;
   fetchServerTime?(): Promise<VenueServerTime>;

@@ -1,4 +1,4 @@
-# Code Organization
+# SDK Architecture
 
 ## Scenario: SDK 采用 5 层架构，每层只依赖下层，职责边界由接口契约保证
 
@@ -22,7 +22,9 @@ src/
 │   ├── client.ts
 │   ├── market.ts
 │   ├── account.ts
-│   └── order.ts
+│   ├── order.ts
+│   ├── fee.ts
+│   └── risk-limit.ts
 │
 ├── internal/                             # Layer 0: 基础设施
 │   ├── async-event-bus.ts
@@ -31,22 +33,39 @@ src/
 │   ├── http-client.ts                    # REST timeout / retry / TransportError / redaction
 │   ├── managed-websocket.ts
 │   ├── rate-limiter.ts                   # 默认 reactive RateLimiter
-│   └── subscription-multiplexer.ts       # 通用订阅多路复用原语（venue-agnostic）
+│   ├── rate-limiter/                     # limiter topology / state / snapshot / usage
+│   ├── subscription-multiplexer.ts       # 通用订阅多路复用原语（venue-agnostic）
+│   ├── syncing-time-provider.ts          # 签名时间同步
+│   └── watermark.ts                      # 跨 clock domain stale update 防护
 │
 ├── adapters/                             # Layer 1: 交易所适配器
 │   ├── types.ts                          # MarketAdapter / PrivateUserDataAdapter 接口契约
 │   ├── binance/
 │   │   ├── adapter.ts                    # BinanceMarketAdapter（行情经 multiplexer 复用连接）
-│   │   ├── stream-protocol.ts            # BinanceStreamProtocol（L1/funding 的 VenueStreamProtocol 策略）
+│   │   ├── error-codes.ts                # venue error code 归一
+│   │   ├── funding-history.ts            # funding history REST parser
 │   │   ├── market-catalog.ts             # Binance 市场目录加载
-│   │   └── private-adapter.ts            # BinancePrivateAdapter (PAPI UM listenKey + WS)
+│   │   ├── private-adapter.ts            # BinancePrivateAdapter (PAPI UM listenKey + WS)
+│   │   ├── public-market-http.ts         # public market REST helper
+│   │   ├── public-trades.ts              # public trade REST queries
+│   │   ├── rate-limit.ts
+│   │   ├── rate-limit-topology.ts
+│   │   ├── server-time.ts
+│   │   └── stream-protocol.ts            # BinanceStreamProtocol（L1/funding 的 VenueStreamProtocol 策略）
+│   ├── deribit/
+│   │   ├── adapter.ts                    # DeribitMarketAdapter（option catalog + quote stream）
+│   │   ├── market-catalog.ts
+│   │   └── stream-protocol.ts
 │   └── juplend/
+│       ├── lend-read.ts                  # @jup-ag/lend-read 边界封装
 │       └── private-adapter.ts            # JuplendPrivateAdapter (HTTP polling 只读借贷)
 │
 ├── managers/                             # Layer 2: 领域 Manager
-│   ├── market-manager.ts
 │   ├── account-manager.ts
+│   ├── fee-manager.ts
+│   ├── market-manager.ts
 │   ├── order-manager.ts
+│   ├── risk-limit-manager.ts
 │   └── order/                            # OrderManager 私有子模块（model / identity / snapshot / store / data-status）
 │
 └── client/                               # Layer 3: 编排层
@@ -62,9 +81,9 @@ src/
 ```text
 Layer 4  公开 API          src/index.ts, src/errors.ts
 Layer 3  编排层            src/client/{runtime, create-client, context, private-subscription-coordinator, venue-capabilities}.ts
-Layer 2  领域层            src/managers/{market, account, order}-manager.ts
-Layer 1  适配层            src/adapters/{types, binance/*, juplend/*}
-Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, http-client, managed-websocket, rate-limiter, subscription-multiplexer}.ts
+Layer 2  领域层            src/managers/{market, account, order, fee, risk-limit}-manager.ts
+Layer 1  适配层            src/adapters/{types, binance/*, deribit/*, juplend/*}
+Layer 0  基础设施          src/internal/{async-event-bus, decimal, filters, http-client, managed-websocket, rate-limiter*, subscription-multiplexer, syncing-time-provider, watermark}.ts
          类型定义          src/types/*（跨层共享）
 ```
 
@@ -83,8 +102,9 @@ export type {
   AcexErrorTransportDetails,
   AcexErrorTransportKind,
   AcexVenueErrorDetails,
+  VenueErrorReason,
 } from "./errors.ts";
-export { AcexError } from "./errors.ts";
+export { AcexError, isOrderStateUnknown } from "./errors.ts";
 export * from "./types/index.ts";
 ```
 
@@ -101,12 +121,14 @@ export * from "./types/index.ts";
 - `src/types/market.ts`：market 领域类型与 `MarketManager` 接口。
 - `src/types/account.ts`：account 领域类型与 `AccountManager` 接口。
 - `src/types/order.ts`：order 领域类型与 `OrderManager` 接口。
+- `src/types/fee.ts`：fee 领域类型与 `FeeManager` 接口。
+- `src/types/risk-limit.ts`：risk limit / leverage 领域类型与 `RiskLimitManager` 接口。
 - `src/types/client.ts`：顶层 `AcexClient` 接口、健康视图、聚合事件类型。
 
 #### 3.3 `src/internal/*` 只放领域无关原语
 
 - 可被多个领域复用，且不携带 market/account/order 语义的能力。
-- 当前包括：`async-event-bus.ts`（异步事件总线）、`decimal.ts`（canonical decimal string 转换）、`filters.ts`（事件过滤器匹配函数）、`http-client.ts`（REST timeout / retry / typed `TransportError` / redaction）、`managed-websocket.ts`（WebSocket 生命周期管理）、`rate-limiter.ts`（默认 reactive limiter）、`subscription-multiplexer.ts`（venue-agnostic 订阅多路复用：连接池化 + 重连重放 + per-subscription ready/stale + 控制帧限速，靠注入的 `VenueStreamProtocol` 策略隔离交易所细节）。
+- 当前包括：`async-event-bus.ts`（异步事件总线）、`decimal.ts`（canonical decimal string 转换）、`filters.ts`（事件过滤器匹配函数）、`http-client.ts`（REST timeout / retry / typed `TransportError` / redaction）、`managed-websocket.ts`（WebSocket 生命周期管理）、`rate-limiter.ts` 与 `rate-limiter/*`（默认 reactive limiter、topology、usage snapshot）、`subscription-multiplexer.ts`（venue-agnostic 订阅多路复用：连接池化 + 重连重放 + per-subscription ready/stale + 控制帧限速，靠注入的 `VenueStreamProtocol` 策略隔离交易所细节）、`syncing-time-provider.ts`（签名时间同步）、`watermark.ts`（跨 clock domain stale update 防护）。
 - **不能依赖上层任何模块**（只能依赖 `src/types/*`）。
 
 #### 3.4 `src/adapters/*` 封装交易所特定实现
@@ -119,7 +141,7 @@ export * from "./types/index.ts";
   - 交易所特定的 catalog / REST 逻辑文件。
 - 私有 adapter 必须把交易所特定 REST / WS 细节、签名方案、listenKey 维护完全封装在 `adapters/<venue>/` 内部，对外只返回标准化的 `RawAccountBootstrap` / `RawAccountUpdate` / `RawOrderUpdate`。
 - **交易所特定类型（如 `BinanceMarketDefinition.family`）不得泄漏到适配器之外**。适配器对外只返回标准 `MarketDefinition` / `Raw*` 类型。
-- 完整接口级契约见 [Adapter Contract](./adapter-contract.md)。
+- 完整接口级契约见 [Adapter Contract](./adapters.md)。
 
 #### 3.5 `src/managers/*` 各自持有领域状态
 
@@ -179,14 +201,14 @@ export * from "./types/index.ts";
 
 #### Good
 
-新增 OKX 交易所支持时：
+新增 runtime venue 支持时：
 
-- 创建 `src/adapters/okx/` 子目录
-- 在其中实现 `OkxMarketAdapter`（implements `MarketAdapter`）与 `OkxPrivateAdapter`（implements `PrivateUserDataAdapter`）
-- **加入 runtime registry**：runtime 已经把 adapter 抽成 `marketAdapters: Map<Venue, MarketAdapter>` / `privateAdapters: Map<Venue, PrivateUserDataAdapter>`（`src/client/runtime.ts`），新 venue 只需把实例 push 到对应 Map。`MarketManagerImpl` 已按 `key.venue` 从 `marketAdapters` registry 分派（每 venue 独立 catalog 懒加载、互不影响），`PrivateSubscriptionCoordinator` / `getPrivateAdapter()` 也都按 `venue` 分派——新增 market venue **不需要改 manager**
+- 创建 `src/adapters/<venue>/` 子目录
+- 在其中实现 `<Venue>MarketAdapter`（implements `MarketAdapter`）和/或 `<Venue>PrivateAdapter`（implements `PrivateUserDataAdapter`）
+- **加入 runtime registry**：在 `src/client/runtime.ts` 中把 venue 加入 `RuntimeSupportedVenue` 和 `RUNTIME_VENUE_FACTORIES`，由 factory 创建 adapter group，再汇入 `marketAdapters: Map<Venue, MarketAdapter>` / `privateAdapters: Map<Venue, PrivateUserDataAdapter>`。`MarketManagerImpl` 已按 `key.venue` 从 `marketAdapters` registry 分派（每 venue 独立 catalog 懒加载、互不影响），`PrivateSubscriptionCoordinator` / `getPrivateAdapter()` 也都按 `venue` 分派——新增 market venue **不需要改 manager**
 - 行情 WS：实现该 venue 的 `VenueStreamProtocol`（参考 `binance/stream-protocol.ts`），交给 `SubscriptionMultiplexer` 即可复用连接，不要自己写 per-symbol 连接
 - Manager 代码不需要改动（Manager 通过 `ClientContext` 与 runtime 交互，不直接持有 adapter 引用）
-- 新 adapter 的接口级约束见 [Adapter Contract](./adapter-contract.md)
+- 新 adapter 的接口级约束见 [Adapter Contract](./adapters.md)
 
 新增 `ticker` 市场能力时：
 
@@ -293,12 +315,17 @@ export class MarketManagerImpl
 // src/client/runtime.ts（当前编排器形态）
 export class AcexClientImpl implements AcexClient, ClientContext {
   constructor(options: CreateClientOptions = {}) {
-    const marketAdapter = new BinanceMarketAdapter();
-    this.marketAdapters = new Map([[marketAdapter.venue, marketAdapter]]);
-    const privateAdapters = [
-      new BinancePrivateAdapter(),
-      new JuplendPrivateAdapter(),
-    ];
+    const adapterGroups = createVenueAdapterGroups(/* runtime options */);
+    this.marketAdapters = new Map(
+      adapterGroups.flatMap((group) =>
+        group.marketAdapter
+          ? [[group.marketAdapter.venue, group.marketAdapter]]
+          : [],
+      ),
+    );
+    const privateAdapters = adapterGroups.flatMap((group) =>
+      group.privateAdapter ? [group.privateAdapter] : [],
+    );
     this.privateAdapters = new Map(
       privateAdapters.map((a) => [a.venue, a]),
     );
@@ -306,12 +333,15 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     this.marketManager = new MarketManagerImpl(this, this.marketAdapters, marketOptions);
     this.accountManager = new AccountManagerImpl(this);
     this.orderManager = new OrderManagerImpl(this);
+    this.feeManager = new FeeManagerImpl(this, options.fee);
+    this.riskLimitManager = new RiskLimitManagerImpl(this, options.riskLimit);
     this.privateCoordinator = new PrivateSubscriptionCoordinator(
       this,
       privateAdapters,
       this.accountManager,
       this.orderManager,
       options.account,
+      options.order,
     );
   }
 }

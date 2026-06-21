@@ -1,5 +1,9 @@
 import { stopAllClientsForTests } from "../../../src/client/runtime.ts";
 import { FakeWebSocket, jsonResponse, textResponse } from "../test-utils.ts";
+import {
+  DERIBIT_GET_INSTRUMENTS_URL,
+  deribitInstrumentsResponse,
+} from "./deribit.ts";
 
 const SPOT_EXCHANGE_INFO_URL = "https://api.binance.com/api/v3/exchangeInfo";
 const USDM_EXCHANGE_INFO_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
@@ -504,6 +508,12 @@ export function installBinanceMarketInfra(): void {
       const headers = new Headers(
         init?.headers ?? (input instanceof Request ? input.headers : undefined),
       );
+
+      if (endpoint === DERIBIT_GET_INSTRUMENTS_URL) {
+        return deribitInstrumentsResponse(
+          parsed.searchParams.get("currency") ?? "",
+        );
+      }
 
       if (endpoint === USDM_AGG_TRADES_URL) {
         return jsonResponse(binanceFixtures.publicTrades.aggTrades);

@@ -17,8 +17,8 @@ import type {
   GetSymbolFeeRateInput,
   HealthEvent,
   MarketDefinition,
-  MarketType,
   MetricType,
+  StandardMarketDefinition,
   Venue,
   VenueOrderCapabilities,
 } from "../../src/types/index.ts";
@@ -41,7 +41,7 @@ const SUPPORTED_ORDER_CAPABILITIES: VenueOrderCapabilities = {
 
 function createMarketDefinition(
   symbol: string,
-  type: MarketType,
+  type: StandardMarketDefinition["type"],
 ): MarketDefinition {
   return {
     venue: "binance",

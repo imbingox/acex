@@ -70,7 +70,7 @@ async function nextMatchingStatus(
 
 test("loadMarkets exposes a unified binance market catalog", async () => {
   installBinanceMarketInfra();
-  const client = createClient();
+  const client = createClient({ venues: ["binance"] });
 
   await client.market.loadMarkets();
 
@@ -153,7 +153,7 @@ test("loadMarkets exposes a unified binance market catalog", async () => {
 
 test("normalizeOrderInput floors price and amount to market steps", async () => {
   installBinanceMarketInfra();
-  const client = createClient();
+  const client = createClient({ venues: ["binance"] });
 
   await client.market.loadMarkets();
 
@@ -180,7 +180,7 @@ test("normalizeOrderInput floors price and amount to market steps", async () => 
 
 test("normalizeOrderInput reports min-notional rejection after normalization", async () => {
   installBinanceMarketInfra();
-  const client = createClient();
+  const client = createClient({ venues: ["binance"] });
 
   await client.market.loadMarkets();
 
@@ -202,7 +202,7 @@ test("normalizeOrderInput reports min-notional rejection after normalization", a
 
 test("normalizeOrderInput rejects non-finite input without throwing", async () => {
   installBinanceMarketInfra();
-  const client = createClient();
+  const client = createClient({ venues: ["binance"] });
 
   await client.market.loadMarkets();
 
@@ -229,7 +229,7 @@ test("market catalog load failure emits an adapter error and wrapped AcexError",
       }),
   });
 
-  const client = createClient();
+  const client = createClient({ venues: ["binance"] });
   const errors = client.events.errors()[Symbol.asyncIterator]();
 
   const failure = await client.market.loadMarkets().catch((error) => error);

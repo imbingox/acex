@@ -4,5 +4,5 @@
   "initialVersions": {
     "@imbingox/acex": "1.0.0"
   },
-  "changesets": []
+  "changesets": ["deribit-option-market-mvp"]
 }

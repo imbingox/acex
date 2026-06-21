@@ -61,9 +61,10 @@ For triggered tasks, include all sections below:
 
 ```
 .trellis/spec/
-├── <layer>/           # Per-layer coding standards (e.g., backend/, frontend/, api/)
-│   ├── index.md       # Overview and links
-│   └── *.md           # Topic-specific guidelines
+├── sdk/               # SDK coding standards
+│   ├── index.md       # Overview and routing
+│   ├── *.md           # Topic-specific SDK guidelines
+│   └── venues/        # Venue-specific contracts
 └── guides/            # Thinking checklists (NOT coding specs!)
     ├── index.md       # Guide index
     └── *.md           # Topic-specific guides
@@ -152,7 +153,7 @@ If you added a new section or the code-spec status changed, update the category'
 - Trigger: <why this requires code-spec depth>
 
 ### 2. Signatures
-- Backend command/API/DB signature(s)
+- SDK command/API/runtime signature(s)
 
 ### 3. Contracts
 - Request fields (name, type, constraints)
@@ -305,7 +306,7 @@ If you're unsure what to update, answer these prompts:
    - Purely one-off implementation detail → Maybe skip
 
 4. **Which area does it relate to?**
-   - [ ] Backend code
+   - [ ] SDK code
    - [ ] Frontend code
    - [ ] Cross-layer data flow
    - [ ] Code organization/reuse

@@ -63,7 +63,7 @@ export function getVenueCapabilitiesSnapshot(
 ): VenueCapabilities {
   const marketAdapter = registry.marketAdapters.get(venue);
   const privateAdapter = registry.privateAdapters.get(venue);
-  const readOnly = privateAdapter?.readOnly ?? marketAdapter?.readOnly ?? false;
+  const readOnly = Boolean(privateAdapter?.readOnly || marketAdapter?.readOnly);
   const hasRuntimeAdapter = Boolean(marketAdapter || privateAdapter);
   const notes =
     privateAdapter?.notes ??

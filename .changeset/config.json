@@ -11,7 +11,7 @@
     "index.ts",
     "package.json",
     "README.md",
-    "docs/api.md"
+    "docs/**"
   ],
   "updateInternalDependencies": "patch",
   "ignore": []

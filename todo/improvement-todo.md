@@ -32,12 +32,12 @@
 - [ ] **正式 logger 集成**
   - 现状：`logger` / `logLevel` 仍是预留字段；目前生产诊断主要依赖 `events.errors()`、health/status 事件和 `onMetric`。
   - 价值：补齐结构化诊断入口。
-  - 注意：需要定义等级、字段脱敏、热路径采样策略，并同步 `.trellis/spec/backend/logging-guidelines.md`。
+  - 注意：需要定义等级、字段脱敏、热路径采样策略，并同步 `.trellis/spec/sdk/` 下对应 runtime / observability 规范；如无合适落点，先新增专门 logging 规范。
 
 - [ ] **降低 `order.snapshot_replaced` 事件负载**
   - 现状：reconcile 会发布 open + retained closed 的全量数组，事件较重。
   - 价值：减少大账户下的周期性事件体积。
-  - 注意：当前 `order-execution` spec 要求该事件保持全量，变更前需先设计新契约，例如新增轻量 open-set 事件或增量事件，而不是直接缩窄既有事件语义。
+  - 注意：当前 `.trellis/spec/sdk/venues/binance.md` 要求该事件保持全量，变更前需先设计新契约，例如新增轻量 open-set 事件或增量事件，而不是直接缩窄既有事件语义。
 
 - [ ] **bootstrap 覆盖先到 stream 增量的竞态**
   - 现状：私有账户 bootstrap 可能在订阅初期覆盖更早到达的 WS 增量。

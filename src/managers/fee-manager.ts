@@ -33,12 +33,14 @@ const BINANCE_DEFAULT_RATES: Record<MarketType, FeeRatePair> = {
   spot: { maker: "0.001", taker: "0.001" },
   swap: { maker: "0.0002", taker: "0.0005" },
   future: { maker: "0.0001", taker: "0.0005" },
+  option: { maker: "0.0003", taker: "0.0003" },
 };
 
 const GENERIC_DEFAULT_RATES: Record<MarketType, FeeRatePair> = {
   spot: { maker: "0.001", taker: "0.001" },
   swap: { maker: "0.0002", taker: "0.0005" },
   future: { maker: "0.0002", taker: "0.0005" },
+  option: { maker: "0.0003", taker: "0.0003" },
 };
 
 const VENUE_DEFAULT_RATES: Partial<

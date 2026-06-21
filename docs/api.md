@@ -1,6 +1,6 @@
 # @imbingox/acex API 使用手册
 
-本文面向 SDK 下游调用方：策略服务、风控面板、交易执行器和数据采集进程。目标是说明如何正确持有 `AcexClient`、查询当前 runtime 能力、订阅状态型数据、执行订单命令，以及在接入时处理错误和限制。
+本文面向 SDK 下游调用方：业务服务、风控面板、交易执行器和数据采集进程。目标是说明如何正确持有 `AcexClient`、查询当前 runtime 能力、订阅状态型数据、执行订单命令，以及在接入时处理错误和限制。
 
 ## 目录
 
@@ -269,7 +269,7 @@ try {
 import { BigNumber } from "@imbingox/acex";
 
 const book = client.market.getL1Book({ venue: "binance", symbol });
-const spread = new BigNumber(book!.askPrice).minus(book!.bidPrice);
+const bidAskDiff = new BigNumber(book!.askPrice).minus(book!.bidPrice);
 ```
 
 不要用 `parseFloat()` 处理金额、数量、价格和比率。`createOrder()` 的 `price` / `amount` 必须传 decimal string；`normalizeOrderInput()` 的 `DecimalInput` 可接受 string / number / `BigNumber`。
@@ -294,6 +294,7 @@ const spread = new BigNumber(book!.askPrice).minus(book!.bidPrice);
 
 ```ts
 const client = createClient({
+  venues: ["binance", "deribit", "juplend"],
   clock: {
     now: () => Date.now(),
   },
@@ -305,6 +306,11 @@ const client = createClient({
     l1StaleAfterMs: 15_000,
     l1ReconnectDelayMs: 1_000,
     l1ReconnectMaxDelayMs: 10_000,
+    venues: {
+      deribit: {
+        underlyings: ["BTC"],
+      },
+    },
   },
   account: {
     streamOpenTimeoutMs: 15_000,
@@ -329,6 +335,10 @@ const client = createClient({
   },
 });
 ```
+
+`venues` 是顶层 runtime adapter 选择入口：省略时注册当前 SDK runtime 已支持的全部 venue；显式数组只注册列出的 runtime venue；空数组、只有空白值或包含 type-only venue（如 `okx` / `bybit` / `gate`）会在 `createClient()` 时抛配置错误。需要 Binance-only 行情或测试隔离时传 `createClient({ venues: ["binance"] })`。`market.venues.*` 和 `account.venues.*` 只配置对应 venue，不负责启用 venue。
+
+`market.venues.deribit.underlyings` 是 Deribit option underlying 列表，SDK 会 trim、uppercase、去重，并映射到 Deribit `public/get_instruments` 的 `currency` 参数。Deribit 被当前 client 选择且省略该配置时默认 `["BTC"]`；显式空数组或规范化后为空数组是配置错误。任一 underlying 请求失败或返回空 option catalog 时，`loadMarkets()` 会按 market catalog load failure 暴露错误，不会静默跳过。
 
 `clock` 只用于 outbound request / signing timestamp，不驱动 WebSocket freshness 的 received-at 时钟。需要自定义 REST 限流行为时可传 `rateLimiter`，否则使用默认 bucket-aware budget limiter：它会注册 Binance REST topology，在 `beforeRequest` 中按固定窗口和 `rateLimit.utilizationTarget`（默认 0.9）主动预扣预算，接近上限时 sleep 到下一窗口；Binance PAPI request-weight 桶为 `priority:"cancel"` 保留 headroom，撤单请求仍计入真实 weight 但可使用保留区；risk limit 设置杠杆请求使用 `priority:"risk"`。响应后的 Binance usage header 会回填校正 bucket 用量，429/418 block 也会落到对应 bucket，缺少 `Retry-After` 的 429 会冷却到窗口结束并带小 jitter。Binance `account.venues.binance.riskPollIntervalMs` 默认 5s，用于风险和 mark-to-market 仓位刷新；`account.venues.binance.privateReconcileIntervalMs` 默认 60s，用于账户余额、仓位和订单状态 REST 对账，显式传 `0` 可关闭 private reconcile，但不关闭 risk polling。`riskLimit.refreshIntervalMs` 默认 5 分钟，用于账户级 leverage bracket / notional tier 全量后台刷新。Juplend 只使用 `account.venues.juplend.pollIntervalMs` 驱动 adapter polling，不继承 Binance 的 reconcile/risk polling 默认。`onMetric` 是同步可观测性钩子；callback 抛错会被 SDK 吞掉，不会打断下单、订阅或事件发布流程。未传 `onMetric` 时，热路径不会计算 latency 或构造 tags。`sandbox`、`logger`、`logLevel` 目前是预留位。
 
@@ -376,6 +386,7 @@ Capability 查询不访问网络，不要求 `start()`。返回值表达当前 S
 | Venue | runtimeStatus | readOnly | 关键能力 |
 |---|---|---:|---|
 | `binance` | `available` | false | market catalog / server time / L1；funding rate 为 `market_dependent`；order supported |
+| `deribit` | `available` | true | public option catalog / `quote.<instrument>` L1；account/order unsupported，order reason 为 `read_only` |
 | `juplend` | `available` | true | account polling + lending；order reason 为 `read_only` |
 | `okx` / `bybit` / `gate` | `type_only` | false | runtime 未接入，order reason 为 `not_implemented` |
 
@@ -419,6 +430,8 @@ interface MarketManager {
   listMarkets(venue?: Venue): MarketDefinition[];
   getMarket(venue: Venue, symbol: string): MarketDefinition | undefined;
   getMarkets(symbol: string): MarketDefinition[];
+  listOptionMarkets(filter?: ListOptionMarketsFilter): OptionMarketDefinition[];
+  listOptionPairs(filter?: ListOptionPairsFilter): OptionPair[];
   normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput;
 
   acquireL1BookSubscription(input: AcquireL1BookSubscriptionInput): Promise<MarketSubscriptionLease>;
@@ -452,7 +465,96 @@ const market = client.market.getMarket("binance", "BTC/USDT:USDT");
 
 Binance TradFi Perps 会按 USDⓈ-M 永续合约暴露，例如 `AAPLUSDT` 归一为 `AAPL/USDT:USDT`，可使用同一套 L1 Book 与 Funding Rate 订阅接口。
 
-### 5.2 订单输入归一
+### 5.2 Deribit option catalog / pairs
+
+Deribit MVP 只支持公开期权行情：option catalog、call/put pair discovery 和 `quote.<instrument>` L1 Book。账户、下单、私有 WebSocket、Greeks / IV / mark price 稳定 API、L2/depth 和业务计算都不在当前范围内。
+
+Deribit option `MarketDefinition` 是标准 public contract 的一部分，`type: "option"` 时可收窄为 `OptionMarketDefinition`：
+
+```ts
+const optionMarkets = client.market.listOptionMarkets({
+  venue: "deribit",
+  underlying: "BTC",
+  active: true,
+});
+
+const optionPairs = client.market.listOptionPairs({
+  venue: "deribit",
+  underlying: "BTC",
+  active: true,
+});
+```
+
+`listOptionMarkets()` / `listOptionPairs()` 只读取当前已加载 catalog，不隐式触发网络加载。Deribit 未被当前 client 选择或尚未加载 catalog 时返回当前 catalog 结果，通常是空数组。`active` 不传时不会隐式过滤 inactive instruments。`strike` filter 接受 decimal input，会先归一为 canonical decimal string 再精确匹配；`underlying`、`strikeCurrency`、`premiumCurrency`、`settle` 会 trim + uppercase 后精确匹配。
+
+Deribit option `symbol` 固定为 `<underlying>/<strikeCurrency>:<settle>-<YYYYMMDD>-<strike>-<C|P>`，例如 `BTC/USD:BTC-20260621-57000-C`。`base` / `underlying` 来自 Deribit `base_currency`，`quote` / `strikeCurrency` 来自 `counter_currency`，`premiumCurrency` 来自 `quote_currency`，`settle` 来自 `settlement_currency`。原生 `instrument_name` 保留在 `id`，原始 payload 保留在 `raw`。
+
+通过 pair 返回的 call / put symbol 可以继续订阅对应的 L1 Book：
+
+```ts
+const client = createClient({
+  venues: ["deribit"],
+  market: {
+    venues: {
+      deribit: {
+        underlyings: ["BTC"],
+      },
+    },
+  },
+});
+const l1Leases: Array<{ ready: Promise<void>; close(): void }> = [];
+
+try {
+  await client.market.loadMarkets();
+
+  const pairs = client.market.listOptionPairs({
+    venue: "deribit",
+    underlying: "BTC",
+    active: true,
+  });
+  const firstPair = pairs[0];
+  if (!firstPair) {
+    throw new Error("missing Deribit option pair");
+  }
+
+  await client.start();
+
+  l1Leases.push(
+    await client.market.acquireL1BookSubscription({
+      venue: "deribit",
+      symbol: firstPair.call.symbol,
+    }),
+    await client.market.acquireL1BookSubscription({
+      venue: "deribit",
+      symbol: firstPair.put.symbol,
+    }),
+  );
+
+  await Promise.all(l1Leases.map((lease) => lease.ready));
+
+  const callBook = client.market.getL1Book({
+    venue: "deribit",
+    symbol: firstPair.call.symbol,
+  });
+  const putBook = client.market.getL1Book({
+    venue: "deribit",
+    symbol: firstPair.put.symbol,
+  });
+
+  console.log(firstPair.expiry, firstPair.strike, callBook?.askPrice, putBook?.bidPrice);
+} finally {
+  for (const lease of l1Leases) {
+    lease.close();
+  }
+  await client.stop();
+}
+```
+
+Deribit option L1 使用 public WS `quote.<instrument>`，只在 bid/ask price 和 size 都存在、有限且为正数时发布 `L1Book`。如果首包没有完整双边 quote，`lease.ready` 会继续等待并可能按初始消息超时失败；不会发布半成品 `l1_book.updated`。如果已有完整 quote 后收到无完整双边 quote，SDK 会保留 last complete book 的顶层价格、时间戳和 version，只把 `book.status.freshness` 置为 `"stale"`、`reason` 置为 `"no_quote"`，并通过 `market.status_changed` 更新 `lastReceivedAt`。后续恢复完整 quote 时会发布新的 L1 Book 并恢复 `"fresh"`。
+
+Deribit option L1 的 bid/ask 价格单位是 `premiumCurrency`；strike 单位是 `strikeCurrency`，结算币种是 `settle`。SDK 不自动做单位换算，调用方如需和其他市场数据组合，应自行处理不同字段的计价单位。
+
+### 5.3 订单输入归一
 
 ```ts
 const normalized = client.market.normalizeOrderInput({
@@ -469,7 +571,7 @@ if (!normalized.accepted) {
 
 `normalizeOrderInput()` 会按 `priceStep` / `amountStep` 向下取整，并检查 `minAmount` / `minNotional`。它不会自动帮你下单，调用方需要把归一后的 string 放入 `createOrder()`。
 
-### 5.3 Server time
+### 5.4 Server time
 
 ```ts
 const time = await client.market.fetchServerTime("binance");
@@ -478,7 +580,7 @@ console.log(time.serverTime, time.roundTripMs, time.estimatedOffsetMs);
 
 当前 Binance server time 测量源固定为 USDⓈ-M REST `/fapi/v1/time`。失败会包装为 `MARKET_SERVER_TIME_FETCH_FAILED`。
 
-### 5.4 Public trades
+### 5.5 Public trades
 
 ```ts
 const result = await client.market.fetchPublicTrades({
@@ -493,7 +595,7 @@ for (const trade of result.trades) {
 }
 ```
 
-`fetchPublicTrades()` 查询公开市场成交，不是账号成交。当前 Binance 实现走 `aggTrades`，返回的是聚合成交：`PublicTrade.id` 是 aggregate trade id，`raw` 中保留 Binance 原始 `a/f/l/T/m` 等字段。`startTs` 必填，`endTs` 是排他上界；`endTs` 和 `limit` 至少传一个。只传 `limit` 时，从 `startTs` 开始返回最多 N 条；只传 `endTs` 时返回 `[startTs, endTs)` 内成交，adapter 会使用安全上限；两者都传时同时生效，返回时间窗口内最多 `limit` 条。命中上限时 `truncated = true`。
+`fetchPublicTrades()` 查询公开市场成交，不是账号成交。当前 Binance 实现走 `aggTrades`，返回的是汇总成交：`PublicTrade.id` 是 aggregate trade id，`raw` 中保留 Binance 原始 `a/f/l/T/m` 等字段。`startTs` 必填，`endTs` 是排他上界；`endTs` 和 `limit` 至少传一个。只传 `limit` 时，从 `startTs` 开始返回最多 N 条；只传 `endTs` 时返回 `[startTs, endTs)` 内成交，adapter 会使用安全上限；两者都传时同时生效，返回时间窗口内最多 `limit` 条。命中上限时 `truncated = true`。
 
 ```ts
 const raw = await client.market.fetchPublicRawTrades({
@@ -506,7 +608,7 @@ const raw = await client.market.fetchPublicRawTrades({
 
 `fetchPublicRawTrades()` 查询 Binance 逐笔 raw public trades，内部先用 `aggTrades` 按 `startTs` 定位起始 raw trade id，再带 `X-MBX-APIKEY` 调 `historicalTrades`，并按 raw trade 的 `time` 做 `[startTs, endTs)` 本地过滤。SDK 不会把用户的完整 `endTs` 窗口传给 locator 请求；如果定位到的首条 aggregate trade 已晚于 `endTs`，会返回空结果。该方法需要 Binance market API key；可通过 `createClient({ market: { venues: { binance: { apiKey } } } })` 显式传入，未显式传入时默认读取 `BINANCE_MARKET_API_KEY`。缺少 key 会在加载 market catalog 前本地失败并包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`。可查询范围同时受 Binance `aggTrades` locator 与 `historicalTrades`/MARKET_DATA 端点自身的数据可用性限制。
 
-### 5.5 Funding rate history
+### 5.6 Funding rate history
 
 ```ts
 const history = await client.market.fetchFundingRateHistory({
@@ -526,11 +628,11 @@ for (const rate of history.rates) {
 
 当前 Binance 支持 USDⓈ-M 和 COIN-M 永续合约。spot 或 dated future 会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`；远端请求或响应结构失败会包装为 `MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED`。
 
-### 5.6 Funding rate
+### 5.7 Funding rate
 
 Funding Rate 当前通过 Binance mark price websocket 更新，仅支持永续合约（`MarketDefinition.type === "swap"`，包括 Binance TradFi Perps）。spot 或 future 订阅会抛 `MARKET_FUNDING_RATE_UNSUPPORTED`。
 
-### 5.7 事件流 options
+### 5.8 事件流 options
 
 Market 事件流支持可选第二参：
 
@@ -546,7 +648,7 @@ client.market.events.l1BookUpdates(
 );
 ```
 
-`l1BookUpdates()` 与 `fundingRateUpdates()` 默认使用 `conflate`，同一 `venue:symbol` 慢消费者只保留最新事件，适合策略热路径。需要录制每个 tick 时显式传 `{ mode: "buffer" }`。`market.events.all()` 与 `market.events.status()` 默认使用 `buffer`；显式传 `{ mode: "conflate" }` 时，`all()` 按 `type:venue:symbol` 合并，`status()` 按 `venue:symbol` 合并。
+`l1BookUpdates()` 与 `fundingRateUpdates()` 默认使用 `conflate`，同一 `venue:symbol` 慢消费者只保留最新事件，适合只关心最新状态的调用方。需要录制每个 tick 时显式传 `{ mode: "buffer" }`。`market.events.all()` 与 `market.events.status()` 默认使用 `buffer`；显式传 `{ mode: "conflate" }` 时，`all()` 按 `type:venue:symbol` 合并，`status()` 按 `venue:symbol` 合并。
 
 `buffer` 模式默认每个订阅者最多积压 `10_000` 条事件，超过后丢弃最旧事件。每次积压 episode 只会向 `client.events.errors()` 发布一次 `EVENT_BUFFER_OVERFLOW` runtime error，事件 metadata 包含 `stream` 与 `maxBuffer`；队列排空后再次溢出会再次告警。`conflate` 模式天然有界，不使用 `maxBuffer`。
 
@@ -624,7 +726,7 @@ interface OrderEventStreams {
 - 未传 `clientOrderId` 时，`createOrder()` 由 SDK 生成合规 client id（`acex-<entropy>-<ts>-<seq>`，≤32）并作为 Binance `newClientOrderId` 发送，返回 snapshot 的 `clientOrderId` 即该值；自带 `clientOrderId` 超长或含非法字符会抛 `ORDER_INPUT_INVALID`
 - `cancelOrder()` 必须传 `orderId` 或 `clientOrderId`
 - `cancelAllOrders()` 必须传 `symbol`，不支持账户级全撤
-- UM hedge mode 下必须显式传 `um.positionSide: "long" | "short"`
+- UM 双向持仓模式下必须显式传 `um.positionSide: "long" | "short"`
 - UM-only 参数放在 `um`，margin-only 参数放在 `margin`；产品线参数与 symbol 不匹配会抛 `ORDER_INPUT_INVALID`
 - Binance private stream 支持 UM `ORDER_TRADE_UPDATE` / `ACCOUNT_UPDATE` / `ACCOUNT_CONFIG_UPDATE`，以及 margin `executionReport`、`outboundAccountPosition`、`balanceUpdate`、`liabilityChange`、`openOrderLoss`；`balanceUpdate` 默认不作为完整余额写入，`liabilityChange.l` 作为当前 total liability 覆盖，`openOrderLoss` 进入合并/节流后的 private reconcile
 
@@ -708,7 +810,7 @@ const fresh = await client.fee.fetchSymbolFeeRate({
 - `fetchSymbolFeeRate()` 立即远端查询单个 symbol，成功后写回同一份 cache，后续 `getSymbolFeeRate()` 返回 `source: "venue"`。
 - 返回的 `maker` / `taker` 是费率小数，例如 `"0.0002"` 表示 0.02%，并且是 canonical decimal string。
 - 默认刷新周期是 24h，可用 `CreateClientOptions.fee.refreshIntervalMs` 覆盖。
-- 默认费率按 `Venue + MarketType` 区分，可用 `CreateClientOptions.fee.defaultRates` 覆盖。Binance 内置默认值：spot `0.001/0.001`、swap `0.0002/0.0005`、future `0.0001/0.0005`。
+- 默认费率按 `Venue + MarketType` 区分，可用 `CreateClientOptions.fee.defaultRates` 覆盖。Binance 内置默认值：spot `0.001/0.001`、swap `0.0002/0.0005`、future `0.0001/0.0005`、option `0.0003/0.0003`。
 - Binance 当前只对 `swap` 使用 PAPI UM `commissionRate` 真实刷新；`spot` / `future` 先返回默认值，显式 `fetchSymbolFeeRate()` 会抛 `VENUE_NOT_SUPPORTED`。
 - 远端查询失败会包装为 `FEE_RATE_FETCH_FAILED`；后台刷新失败保留旧真实值或默认值，并通过 `client.events.errors()` 发布 `source: "fee"`。
 
@@ -791,9 +893,9 @@ for await (const error of client.events.errors({ maxBuffer: 20_000 })) {
 以下类型均从 `@imbingox/acex` 根入口导出；以 package public types 为准。这里列常用形状，完整字段可由 TypeScript 自动补全。
 
 ```ts
-type Venue = "binance" | "okx" | "bybit" | "gate" | "juplend";
+type Venue = "binance" | "deribit" | "okx" | "bybit" | "gate" | "juplend";
 type ClientStatus = "idle" | "starting" | "running" | "stopping" | "stopped";
-type MarketType = "spot" | "swap" | "future";
+type MarketType = "spot" | "swap" | "future" | "option";
 type PositionSide = "long" | "short" | "net";
 type CreateOrderType = "limit" | "market";
 type OrderType =
@@ -884,6 +986,7 @@ interface VenueCapabilities {
 
 ```ts
 interface CreateClientOptions {
+  venues?: Venue[];
   sandbox?: boolean;
   clock?: {
     now(): number;
@@ -905,6 +1008,10 @@ interface CreateClientOptions {
       binance?: {
         /** Used by fetchPublicRawTrades(); secret/signature not required. */
         apiKey?: string;
+      };
+      deribit?: {
+        /** Option underlyings mapped to Deribit get_instruments currency. */
+        underlyings?: string[];
       };
     };
   };
@@ -937,7 +1044,7 @@ interface CreateClientOptions {
     /**
      * Defaults keyed by Venue + MarketType.
      * Binance built-ins: spot 0.001/0.001, swap 0.0002/0.0005,
-     * future 0.0001/0.0005.
+     * future 0.0001/0.0005, option 0.0003/0.0003.
      */
     defaultRates?: Partial<
       Record<
@@ -1130,7 +1237,7 @@ interface AccountCredentials {
 `clock` 只用于私有签名请求的 `timestamp`，不参与 `receivedAt`、WebSocket freshness 或本地状态时间。默认不传 `clock` 时，runtime 会为 Binance 签名请求启用 venue 级 server-time 自动校准；当交易所返回 `timestamp_out_of_sync` 时，SDK 会触发一次去抖后的重校。显式传入 `clock` 表示调用方完全接管签名时间，SDK 不会创建默认 server-time sampler 或同步 timer。
 
 ```ts
-interface MarketDefinition {
+interface BaseMarketDefinition {
   venue: Venue;
   symbol: string;
   id: string;
@@ -1151,6 +1258,37 @@ interface MarketDefinition {
   minNotional?: string;
   expiry?: number;
   raw: Record<string, unknown>;
+}
+
+interface StandardMarketDefinition extends BaseMarketDefinition {
+  type: "spot" | "swap" | "future";
+}
+
+interface OptionMarketDefinition extends BaseMarketDefinition {
+  type: "option";
+  underlying: string;
+  expiry: number;
+  strike: string;
+  strikeCurrency: string;
+  optionType: "call" | "put";
+  premiumCurrency: string;
+  settle: string;
+  contract: true;
+  contractSize: string;
+}
+
+type MarketDefinition = StandardMarketDefinition | OptionMarketDefinition;
+
+interface OptionPair {
+  venue: Venue;
+  underlying: string;
+  strikeCurrency: string;
+  premiumCurrency: string;
+  settle: string;
+  expiry: number;
+  strike: string;
+  call: OptionMarketDefinition;
+  put: OptionMarketDefinition;
 }
 
 interface VenueServerTime {

@@ -61,6 +61,7 @@ interface VenueMarketCapabilities {
   - `not_implemented`: venue 仅类型占位或 runtime 未接入
 - capability 真源应尽量靠近 adapter：
   - `MarketAdapter.marketCapabilities` 声明该 market adapter 已实现的 catalog / server time / public trades / public raw trades / funding history / L1 / funding rate 能力。
+  - `MarketAdapter.readOnly?: true` 可声明 market-only read-only runtime。没有 private adapter 时，runtime 仍应返回 `runtimeStatus:"available"`、`readOnly:true`、account unsupported、order unsupported 且 `order.reason:"read_only"`。Deribit public option market data 属于该形态。
   - `PrivateUserDataAdapter.accountCapabilities` 声明账户视图能力。
   - `PrivateUserDataAdapter.orderCapabilities` 声明订单命令与订单流能力。
   - `PrivateUserDataAdapter.readOnly` / `notes` 声明私有链路的只读状态和说明。
@@ -73,6 +74,7 @@ interface VenueMarketCapabilities {
 |---|---|
 | 查询 `binance` | `runtimeStatus = "available"`，`order.supported = true`，`order.orderTypes = ["limit", "market"]` |
 | 查询 `binance` 的 market 能力 | `catalog = "supported"`，`serverTime = "supported"`，`publicTrades = "supported"`，`publicRawTrades = "supported"`，`fundingRateHistory = "supported"`，`l1Book = "supported"`，`fundingRate = "market_dependent"` |
+| 查询 `deribit`（runtime 被选择） | `runtimeStatus = "available"`，`readOnly = true`，`market.catalog = "supported"`，`market.l1Book = "supported"`，`market.marketTypes = ["option"]`，account 全 unsupported，`order.reason = "read_only"` |
 | 查询 `juplend` | `runtimeStatus = "available"`，`readOnly = true`，`market.serverTime = "unsupported"`，`order.supported = false`，`reason = "read_only"` |
 | 查询 `okx` / `bybit` / `gate` | `runtimeStatus = "type_only"`，runtime 能力均为 unsupported，`market.serverTime = "unsupported"`，`order.reason = "not_implemented"` |
 | client 未 `start()` | capability 查询仍可用 |
@@ -114,6 +116,7 @@ for (const venue of SUPPORTED_VENUES) {
 - Integration: `getVenueCapabilities("binance")` 返回 `order.supported = true`、`fundingRate = "market_dependent"`。
 - Integration: `getVenueCapabilities("binance")` 返回 `market.serverTime = "supported"`。
 - Integration: `getVenueCapabilities("binance")` 返回 `market.publicTrades = "supported"`、`market.publicRawTrades = "supported"` 与 `market.fundingRateHistory = "supported"`。
+- Integration: `getVenueCapabilities("deribit")` 在 Deribit 被 runtime 选择时返回 `readOnly = true`、`market.marketTypes = ["option"]`、`market.l1Book = "supported"`、`order.reason = "read_only"`，且不需要 private adapter。
 - Integration: `getVenueCapabilities("juplend")` 返回 `readOnly = true`、`market.serverTime = "unsupported"`、`order.reason = "read_only"`、`account.updates = "polling"`。
 - Integration: `okx` / `bybit` / `gate` 返回 `runtimeStatus = "type_only"`、`market.serverTime = "unsupported"` 和 `order.reason = "not_implemented"`。
 - Integration: 不调用 `client.start()` 也能查询。

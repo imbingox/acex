@@ -63,23 +63,27 @@ export function getVenueCapabilitiesSnapshot(
 ): VenueCapabilities {
   const marketAdapter = registry.marketAdapters.get(venue);
   const privateAdapter = registry.privateAdapters.get(venue);
+  const readOnly = privateAdapter?.readOnly ?? marketAdapter?.readOnly ?? false;
+  const hasRuntimeAdapter = Boolean(marketAdapter || privateAdapter);
+  const notes =
+    privateAdapter?.notes ??
+    marketAdapter?.notes ??
+    (hasRuntimeAdapter
+      ? [
+          "Capabilities describe the current SDK runtime, not the venue's full API surface.",
+        ]
+      : typeOnlyNotes);
 
   return cloneVenueCapabilities({
     venue,
-    runtimeStatus: marketAdapter || privateAdapter ? "available" : "type_only",
-    readOnly: privateAdapter?.readOnly ?? false,
-    notes:
-      privateAdapter?.notes ??
-      (marketAdapter
-        ? [
-            "Capabilities describe the current SDK runtime, not the venue's full API surface.",
-          ]
-        : typeOnlyNotes),
+    runtimeStatus: hasRuntimeAdapter ? "available" : "type_only",
+    readOnly,
+    notes,
     market: marketAdapter?.marketCapabilities ?? unsupportedMarket,
     account: privateAdapter?.accountCapabilities ?? unsupportedAccount,
     order: privateAdapter?.orderCapabilities ?? {
       ...unsupportedOrder,
-      reason: "not_implemented",
+      reason: readOnly ? "read_only" : "not_implemented",
     },
   });
 }

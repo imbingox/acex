@@ -2,6 +2,7 @@ import { BinanceMarketAdapter } from "../adapters/binance/adapter.ts";
 import { BinanceMarketCatalog } from "../adapters/binance/market-catalog.ts";
 import { BinancePrivateAdapter } from "../adapters/binance/private-adapter.ts";
 import { fetchBinanceServerTime } from "../adapters/binance/server-time.ts";
+import { DeribitMarketAdapter } from "../adapters/deribit/adapter.ts";
 import { JuplendPrivateAdapter } from "../adapters/juplend/private-adapter.ts";
 import type {
   CancelAllOrdersRequest,
@@ -50,6 +51,7 @@ import {
   type ClientStatusChangedEvent,
   type CreateClientOptions,
   type CreateOrderInput,
+  type DeribitMarketRuntimeOptions,
   type FeeManager,
   type FetchRiskLimitsInput,
   type GetSymbolFeeRateInput,
@@ -69,6 +71,7 @@ import {
   type RiskLimitManager,
   type SetSymbolLeverageInput,
   type StopOptions,
+  SUPPORTED_VENUES,
   type TimeProvider,
   type Venue,
   type VenueCapabilities,
@@ -124,19 +127,78 @@ interface VenueAdapterFactoryResult {
   readonly lifecycle?: VenueAdapterLifecycle;
 }
 
-// Per-venue factories receive their own statically typed options slice, so a
-// renamed venue option fails type-check here instead of silently reading a
-// dead key at runtime. Adding a venue = one factory + one entry in
-// createVenueAdapterGroups.
-function createVenueAdapterGroups(
+type RuntimeSupportedVenue = "binance" | "deribit" | "juplend";
+
+type VenueAdapterGroupFactory = (
   deps: VenueAdapterFactoryDeps,
   marketOptions: MarketVenueRuntimeOptionsMap | undefined,
-  venueOptions: AccountVenueRuntimeOptionsMap | undefined,
-): VenueAdapterFactoryResult[] {
-  return [
+  accountOptions: AccountVenueRuntimeOptionsMap | undefined,
+) => VenueAdapterFactoryResult;
+
+const RUNTIME_VENUE_FACTORIES = {
+  binance: (deps, marketOptions) =>
     createBinanceAdapterGroup(deps, marketOptions?.binance),
-    createJuplendAdapterGroup(deps, venueOptions?.juplend),
-  ];
+  deribit: (deps, marketOptions) =>
+    createDeribitAdapterGroup(deps, marketOptions?.deribit),
+  juplend: (deps, _marketOptions, accountOptions) =>
+    createJuplendAdapterGroup(deps, accountOptions?.juplend),
+} satisfies Record<RuntimeSupportedVenue, VenueAdapterGroupFactory>;
+
+const RUNTIME_SUPPORTED_VENUES = Object.keys(
+  RUNTIME_VENUE_FACTORIES,
+) as RuntimeSupportedVenue[];
+
+function createVenueAdapterGroups(
+  deps: VenueAdapterFactoryDeps,
+  selectedVenues: readonly Venue[] | undefined,
+  marketOptions: MarketVenueRuntimeOptionsMap | undefined,
+  accountOptions: AccountVenueRuntimeOptionsMap | undefined,
+): VenueAdapterFactoryResult[] {
+  return normalizeSelectedRuntimeVenues(selectedVenues).map((venue) =>
+    RUNTIME_VENUE_FACTORIES[venue](deps, marketOptions, accountOptions),
+  );
+}
+
+function normalizeSelectedRuntimeVenues(
+  venues: readonly Venue[] | undefined,
+): RuntimeSupportedVenue[] {
+  if (venues === undefined) {
+    return [...RUNTIME_SUPPORTED_VENUES];
+  }
+
+  const normalized = new Set<string>();
+  for (const venue of venues) {
+    const value = String(venue).trim().toLowerCase();
+    if (value) {
+      normalized.add(value);
+    }
+  }
+
+  if (normalized.size === 0) {
+    throw new Error("CreateClientOptions.venues must not be empty");
+  }
+
+  const supportedVenues = new Set<string>(SUPPORTED_VENUES);
+  const selected: RuntimeSupportedVenue[] = [];
+  for (const venue of normalized) {
+    if (!supportedVenues.has(venue)) {
+      throw new Error(`Unknown venue in CreateClientOptions.venues: ${venue}`);
+    }
+    if (!isRuntimeSupportedVenue(venue)) {
+      throw new Error(
+        `Venue has no runtime adapter and cannot be selected in CreateClientOptions.venues: ${venue}`,
+      );
+    }
+    selected.push(venue);
+  }
+
+  return selected;
+}
+
+function isRuntimeSupportedVenue(
+  venue: string,
+): venue is RuntimeSupportedVenue {
+  return Object.hasOwn(RUNTIME_VENUE_FACTORIES, venue);
 }
 
 function toError(value: unknown, fallback: string): Error {
@@ -223,6 +285,18 @@ function createBinanceAdapterGroup(
           stop: () => signingTimeProvider.stop(),
         }
       : undefined,
+  };
+}
+
+function createDeribitAdapterGroup(
+  deps: VenueAdapterFactoryDeps,
+  marketOptions: DeribitMarketRuntimeOptions | undefined,
+): VenueAdapterFactoryResult {
+  return {
+    marketAdapter: new DeribitMarketAdapter({
+      rateLimiter: deps.rateLimiter,
+      underlyings: marketOptions?.underlyings,
+    }),
   };
 }
 
@@ -324,6 +398,7 @@ export class AcexClientImpl implements AcexClient, ClientContext {
         emitMetric: this.emitMetric.bind(this),
         publishRuntimeError: this.publishRuntimeError.bind(this),
       },
+      options.venues,
       options.market?.venues,
       options.account?.venues,
     );

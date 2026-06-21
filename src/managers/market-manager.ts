@@ -8,6 +8,7 @@ import type {
   RawFundingRateHistoryEntry,
   RawFundingRateUpdate,
   RawL1BookUpdate,
+  RawL1NoQuoteUpdate,
   RawPublicTrade,
   StreamHandle,
 } from "../adapters/types.ts";
@@ -43,6 +44,8 @@ import type {
   FundingRateUpdatedEvent,
   L1Book,
   L1BookUpdatedEvent,
+  ListOptionMarketsFilter,
+  ListOptionPairsFilter,
   MarketCatalogReloadSummary,
   MarketDataStatus,
   MarketDataStreamStatus,
@@ -55,6 +58,8 @@ import type {
   MarketSubscriptionLease,
   NormalizedOrderInput,
   NormalizeOrderInputInput,
+  OptionMarketDefinition,
+  OptionPair,
   PublicTrade,
   SubscriptionActivity,
   Venue,
@@ -79,8 +84,10 @@ interface MarketRecord {
   fundingRateSubscribed: boolean;
   l1Freshness?: "fresh" | "stale";
   l1Reason?: MarketDataStatus["reason"];
+  l1LastReceivedAt?: number;
   fundingRateFreshness?: "fresh" | "stale";
   fundingRateReason?: MarketDataStatus["reason"];
+  fundingRateLastReceivedAt?: number;
   status: MarketDataStatus;
   l1BookStream?: StreamHandle;
   fundingRateStream?: StreamHandle;
@@ -233,11 +240,149 @@ function cloneMarketDefinition(definition: MarketDefinition): MarketDefinition {
   return { ...definition, raw: { ...definition.raw } };
 }
 
+function cloneOptionMarket(
+  definition: OptionMarketDefinition,
+): OptionMarketDefinition {
+  return cloneMarketDefinition(definition) as OptionMarketDefinition;
+}
+
 function floorToStep(value: BigNumber, step: BigNumber): BigNumber {
   if (step.isLessThanOrEqualTo(0)) {
     return value;
   }
   return value.dividedToIntegerBy(step).multipliedBy(step);
+}
+
+interface NormalizedOptionMarketsFilter {
+  venue?: Venue;
+  underlying?: string;
+  optionType?: "call" | "put";
+  expiry?: number;
+  strike?: string;
+  strikeCurrency?: string;
+  premiumCurrency?: string;
+  settle?: string;
+  active?: boolean;
+}
+
+function normalizeUpperFilter(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  return normalized || undefined;
+}
+
+function normalizeOptionMarketsFilter(
+  filter: ListOptionMarketsFilter | undefined,
+): NormalizedOptionMarketsFilter {
+  return {
+    venue: filter?.venue,
+    underlying: normalizeUpperFilter(filter?.underlying),
+    optionType: filter?.optionType,
+    expiry: filter?.expiry,
+    strike:
+      filter?.strike === undefined ? undefined : toCanonical(filter.strike),
+    strikeCurrency: normalizeUpperFilter(filter?.strikeCurrency),
+    premiumCurrency: normalizeUpperFilter(filter?.premiumCurrency),
+    settle: normalizeUpperFilter(filter?.settle),
+    active: filter?.active,
+  };
+}
+
+function matchesOptionMarket(
+  market: OptionMarketDefinition,
+  filter: NormalizedOptionMarketsFilter,
+): boolean {
+  return (
+    (filter.venue === undefined || market.venue === filter.venue) &&
+    (filter.underlying === undefined ||
+      market.underlying === filter.underlying) &&
+    (filter.optionType === undefined ||
+      market.optionType === filter.optionType) &&
+    (filter.expiry === undefined || market.expiry === filter.expiry) &&
+    (filter.strike === undefined || market.strike === filter.strike) &&
+    (filter.strikeCurrency === undefined ||
+      market.strikeCurrency === filter.strikeCurrency) &&
+    (filter.premiumCurrency === undefined ||
+      market.premiumCurrency === filter.premiumCurrency) &&
+    (filter.settle === undefined || market.settle === filter.settle) &&
+    (filter.active === undefined || market.active === filter.active)
+  );
+}
+
+function compareOptionType(
+  left: "call" | "put",
+  right: "call" | "put",
+): number {
+  const leftOrder = left === "call" ? 0 : 1;
+  const rightOrder = right === "call" ? 0 : 1;
+  return leftOrder - rightOrder;
+}
+
+function compareDecimalStrings(left: string, right: string): number {
+  const difference = new BigNumber(left).comparedTo(new BigNumber(right));
+  return difference ?? 0;
+}
+
+function compareOptionMarketFields(
+  left: Pick<
+    OptionMarketDefinition,
+    | "venue"
+    | "underlying"
+    | "strikeCurrency"
+    | "premiumCurrency"
+    | "settle"
+    | "expiry"
+    | "strike"
+  >,
+  right: Pick<
+    OptionMarketDefinition,
+    | "venue"
+    | "underlying"
+    | "strikeCurrency"
+    | "premiumCurrency"
+    | "settle"
+    | "expiry"
+    | "strike"
+  >,
+): number {
+  return (
+    left.venue.localeCompare(right.venue) ||
+    left.underlying.localeCompare(right.underlying) ||
+    left.strikeCurrency.localeCompare(right.strikeCurrency) ||
+    left.premiumCurrency.localeCompare(right.premiumCurrency) ||
+    left.settle.localeCompare(right.settle) ||
+    left.expiry - right.expiry ||
+    compareDecimalStrings(left.strike, right.strike)
+  );
+}
+
+function compareOptionMarkets(
+  left: OptionMarketDefinition,
+  right: OptionMarketDefinition,
+): number {
+  return (
+    compareOptionMarketFields(left, right) ||
+    compareOptionType(left.optionType, right.optionType)
+  );
+}
+
+function compareOptionPairs(left: OptionPair, right: OptionPair): number {
+  return compareOptionMarketFields(left, right);
+}
+
+function optionPairKey(market: OptionMarketDefinition): string {
+  return JSON.stringify([
+    market.venue,
+    market.underlying,
+    market.strikeCurrency,
+    market.premiumCurrency,
+    market.settle,
+    market.expiry,
+    market.strike,
+  ]);
 }
 
 export class MarketManagerImpl
@@ -544,6 +689,61 @@ export class MarketManagerImpl
     return filtered
       .sort((left, right) => left.symbol.localeCompare(right.symbol))
       .map((market) => cloneMarketDefinition(market));
+  }
+
+  listOptionMarkets(
+    filter?: ListOptionMarketsFilter,
+  ): OptionMarketDefinition[] {
+    const normalizedFilter = normalizeOptionMarketsFilter(filter);
+    return [...this.definitions.values()]
+      .filter(
+        (market): market is OptionMarketDefinition => market.type === "option",
+      )
+      .filter((market) => matchesOptionMarket(market, normalizedFilter))
+      .sort(compareOptionMarkets)
+      .map((market) => cloneOptionMarket(market));
+  }
+
+  listOptionPairs(filter?: ListOptionPairsFilter): OptionPair[] {
+    const groups = new Map<
+      string,
+      {
+        call?: OptionMarketDefinition;
+        put?: OptionMarketDefinition;
+      }
+    >();
+
+    for (const market of this.listOptionMarkets(filter)) {
+      const key = optionPairKey(market);
+      const group = groups.get(key) ?? {};
+      if (market.optionType === "call") {
+        group.call = market;
+      } else {
+        group.put = market;
+      }
+      groups.set(key, group);
+    }
+
+    const pairs: OptionPair[] = [];
+    for (const group of groups.values()) {
+      if (!group.call || !group.put) {
+        continue;
+      }
+
+      pairs.push({
+        venue: group.call.venue,
+        underlying: group.call.underlying,
+        strikeCurrency: group.call.strikeCurrency,
+        premiumCurrency: group.call.premiumCurrency,
+        settle: group.call.settle,
+        expiry: group.call.expiry,
+        strike: group.call.strike,
+        call: group.call,
+        put: group.put,
+      });
+    }
+
+    return pairs.sort(compareOptionPairs);
   }
 
   normalizeOrderInput(input: NormalizeOrderInputInput): NormalizedOrderInput {
@@ -1550,6 +1750,7 @@ export class MarketManagerImpl
   ): StreamHandle {
     const callbacks: L1BookStreamCallbacks = {
       onUpdate: (update: RawL1BookUpdate) => {
+        record.l1LastReceivedAt = update.receivedAt;
         if (this.context.metricsEnabled && update.exchangeTs !== undefined) {
           this.context.emitMetric(
             METRIC_NAMES.wsMessageLatency,
@@ -1583,6 +1784,9 @@ export class MarketManagerImpl
 
         this.publishMarketEvent(event);
         this.recomputeAndPublishStatus(record);
+      },
+      onNoQuote: (update: RawL1NoQuoteUpdate) => {
+        this.handleL1NoQuote(record, update);
       },
       onFreshnessChange: (freshness, reason) => {
         this.updateConnectionState(record, "l1Book", freshness, reason);
@@ -1624,6 +1828,7 @@ export class MarketManagerImpl
   ): StreamHandle {
     const callbacks: FundingRateStreamCallbacks = {
       onUpdate: (update: RawFundingRateUpdate) => {
+        record.fundingRateLastReceivedAt = update.receivedAt;
         record.fundingRateFreshness = "fresh";
         record.fundingRateReason = undefined;
         record.fundingRate = this.createFundingRate(
@@ -1677,6 +1882,17 @@ export class MarketManagerImpl
       callbacks,
       options,
     );
+  }
+
+  private handleL1NoQuote(
+    record: MarketRecord,
+    update: RawL1NoQuoteUpdate,
+  ): void {
+    record.l1LastReceivedAt = update.receivedAt;
+    record.l1Freshness = "stale";
+    record.l1Reason = "no_quote";
+    this.syncL1BookStatus(record, undefined, undefined, update.receivedAt);
+    this.recomputeAndPublishStatus(record, undefined, { forcePublish: true });
   }
 
   private createL1Book(
@@ -1757,6 +1973,7 @@ export class MarketManagerImpl
   private recomputeAndPublishStatus(
     record: MarketRecord,
     now = this.context.now(),
+    options: { forcePublish?: boolean } = {},
   ): void {
     const l1Ready = record.l1BookSubscribed && Boolean(record.l1Book);
     const fundingRateReady =
@@ -1774,8 +1991,11 @@ export class MarketManagerImpl
       inactiveSince: active ? undefined : now,
     };
 
+    const lastReceivedAt = this.resolveLastReceivedAt(record);
+    if (lastReceivedAt !== undefined && lastReceivedAt > 0) {
+      nextStatus.lastReceivedAt = lastReceivedAt;
+    }
     if (nextStatus.ready) {
-      nextStatus.lastReceivedAt = this.resolveLastReceivedAt(record);
       nextStatus.lastReadyAt = this.resolveLastReadyAt(record);
     }
 
@@ -1783,6 +2003,7 @@ export class MarketManagerImpl
 
     const publicationKey = statusPublicationKey(record.status);
     if (
+      !options.forcePublish &&
       sameStatusPublicationKey(publicationKey, record.lastPublishedStatusKey)
     ) {
       return;
@@ -1796,6 +2017,7 @@ export class MarketManagerImpl
     record: MarketRecord,
     now?: number,
     activity?: SubscriptionActivity,
+    lastReceivedAt?: number,
   ): void {
     if (!record.l1Book) {
       return;
@@ -1808,7 +2030,7 @@ export class MarketManagerImpl
         true,
         record.l1Freshness,
         record.l1Reason,
-        record.l1Book.receivedAt,
+        lastReceivedAt ?? record.l1LastReceivedAt ?? record.l1Book.receivedAt,
         record.l1Book.updatedAt,
         now,
       ),
@@ -1831,7 +2053,7 @@ export class MarketManagerImpl
         true,
         record.fundingRateFreshness,
         record.fundingRateReason,
-        record.fundingRate.receivedAt,
+        record.fundingRateLastReceivedAt ?? record.fundingRate.receivedAt,
         record.fundingRate.updatedAt,
         now,
       ),
@@ -1885,8 +2107,8 @@ export class MarketManagerImpl
 
   private resolveLastReceivedAt(record: MarketRecord): number | undefined {
     return Math.max(
-      record.l1Book?.receivedAt ?? 0,
-      record.fundingRate?.receivedAt ?? 0,
+      record.l1LastReceivedAt ?? record.l1Book?.receivedAt ?? 0,
+      record.fundingRateLastReceivedAt ?? record.fundingRate?.receivedAt ?? 0,
     );
   }
 

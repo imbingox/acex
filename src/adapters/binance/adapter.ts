@@ -250,22 +250,22 @@ export class BinanceMarketAdapter implements MarketAdapter {
     };
 
     if (!this.multiplexer) {
-      this.multiplexer = new SubscriptionMultiplexer(
-        new BinanceStreamProtocol(),
-        {
-          initialMessageTimeoutMs: config.initialMessageTimeoutMs,
-          staleAfterMs: config.staleAfterMs,
-          reconnectDelayMs: config.reconnectDelayMs,
-          reconnectMaxDelayMs: config.reconnectMaxDelayMs,
-          controlFrameMaxPerSec: BINANCE_CONTROL_FRAME_MAX_PER_SEC,
-          maxSubscriptionsPerConnection:
-            BINANCE_MAX_SUBSCRIPTIONS_PER_CONNECTION,
-          now: config.now,
-          onReconnect: ({ descriptors }) => {
-            this.emitReconnectMetric(descriptors);
-          },
+      this.multiplexer = new SubscriptionMultiplexer<
+        BinanceStreamMessage,
+        BinanceStreamDescriptor,
+        BinanceStreamPayload
+      >(new BinanceStreamProtocol(), {
+        initialMessageTimeoutMs: config.initialMessageTimeoutMs,
+        staleAfterMs: config.staleAfterMs,
+        reconnectDelayMs: config.reconnectDelayMs,
+        reconnectMaxDelayMs: config.reconnectMaxDelayMs,
+        controlFrameMaxPerSec: BINANCE_CONTROL_FRAME_MAX_PER_SEC,
+        maxSubscriptionsPerConnection: BINANCE_MAX_SUBSCRIPTIONS_PER_CONNECTION,
+        now: config.now,
+        onReconnect: ({ descriptors }) => {
+          this.emitReconnectMetric(descriptors);
         },
-      );
+      });
       this.multiplexerConfig = config;
       return this.multiplexer;
     }

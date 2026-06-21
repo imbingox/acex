@@ -1,5 +1,6 @@
 export const SUPPORTED_VENUES = [
   "binance",
+  "deribit",
   "okx",
   "bybit",
   "gate",
@@ -8,7 +9,7 @@ export const SUPPORTED_VENUES = [
 
 export type Venue = (typeof SUPPORTED_VENUES)[number];
 
-export type MarketType = "spot" | "swap" | "future";
+export type MarketType = "spot" | "swap" | "future" | "option";
 
 export type ClientStatus =
   | "idle"
@@ -302,12 +303,18 @@ export interface MarketRuntimeOptions {
   l1ReconnectMaxDelayMs?: number;
   venues?: {
     binance?: BinanceMarketRuntimeOptions;
+    deribit?: DeribitMarketRuntimeOptions;
   };
 }
 
 export interface BinanceMarketRuntimeOptions {
   /** Market-data API key for Binance public raw historical trades. */
   apiKey?: string;
+}
+
+export interface DeribitMarketRuntimeOptions {
+  /** Deribit option underlyings mapped to public/get_instruments currency. */
+  underlyings?: string[];
 }
 
 export interface BinanceAccountRuntimeOptions {
@@ -356,6 +363,8 @@ export interface RiskLimitRuntimeOptions {
 }
 
 export interface CreateClientOptions {
+  /** Runtime venues to register. Omit to enable all SDK runtime-supported venues. */
+  venues?: Venue[];
   sandbox?: boolean;
   /** Request/signing clock override; local receivedAt/freshness clocks stay independent. */
   clock?: TimeProvider;

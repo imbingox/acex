@@ -6,10 +6,9 @@ import {
 } from "../../internal/http-client.ts";
 import type {
   AcexInternalError,
-  MarketDefinition,
-  MarketType,
   RateLimiter,
   RateLimitScope,
+  StandardMarketDefinition,
 } from "../../types/index.ts";
 import { SymbolMappingError } from "../types.ts";
 import { parseBinanceRateLimitUsage } from "./rate-limit.ts";
@@ -21,8 +20,9 @@ type FetchLike = (
 ) => Promise<Response>;
 
 export type BinanceMarketFamily = "spot" | "usdm" | "coinm";
+type BinanceMarketType = StandardMarketDefinition["type"];
 
-export interface BinanceMarketDefinition extends MarketDefinition {
+export interface BinanceMarketDefinition extends StandardMarketDefinition {
   family: BinanceMarketFamily;
 }
 
@@ -127,7 +127,7 @@ function formatExpiry(expiry: number): string {
 function inferContractType(
   contractType: string | undefined,
   deliveryDate: number | undefined,
-): MarketType {
+): BinanceMarketType {
   // Binance TradFi perpetuals expose a far-future deliveryDate, so the
   // contractType is authoritative for perpetual classification.
   if (contractType === "PERPETUAL" || contractType === "TRADIFI_PERPETUAL") {
@@ -145,7 +145,7 @@ function buildFuturesSymbol(
   base: string,
   quote: string,
   settle: string,
-  type: MarketType,
+  type: BinanceMarketType,
   expiry: number | undefined,
 ): string {
   const prefix = `${base}/${quote}:${settle}`;

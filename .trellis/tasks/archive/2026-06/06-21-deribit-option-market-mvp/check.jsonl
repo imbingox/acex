@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend architecture index and required guideline routing for reviewing adapter/runtime/manager/public type changes."}
+{"file": ".trellis/spec/backend/code-organization.md", "reason": "Review layering and file placement for new Deribit adapter, runtime registry, manager APIs, and docs."}
+{"file": ".trellis/spec/backend/adapter-contract.md", "reason": "Review MarketAdapter, catalog normalization, StreamHandle, SubscriptionMultiplexer, and new venue contracts."}
+{"file": ".trellis/spec/backend/market-subscription-leases.md", "reason": "Review L1 lease ready/close behavior and no_quote status-only path."}
+{"file": ".trellis/spec/backend/venue-capabilities.md", "reason": "Review capability aggregation for runtime-supported, type-only, and read-only venues."}
+{"file": ".trellis/spec/backend/type-safety.md", "reason": "Review public type, union, canonical decimal, and import-type requirements."}

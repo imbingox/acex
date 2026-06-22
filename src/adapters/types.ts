@@ -373,6 +373,31 @@ export interface RawRiskLevelChange {
   receivedAt: number;
 }
 
+export interface FetchFundingFeeHistoryRequest {
+  symbol?: string;
+  startTs?: number;
+  endTs?: number;
+  page: number;
+  limit: number;
+}
+
+export interface RawFundingFeeHistoryEntry {
+  symbol: string;
+  asset: string;
+  amount: string;
+  fundingTime: number;
+  receivedAt: number;
+  venueTransactionId?: string;
+  tradeId?: string;
+  positionSide?: PositionSide;
+  raw: Record<string, unknown>;
+}
+
+export interface RawFundingFeeHistoryResult {
+  fees: RawFundingFeeHistoryEntry[];
+  truncated: boolean;
+}
+
 export interface RawLendingRiskUpdate {
   marginLevel?: string;
   healthFactor?: string;
@@ -573,6 +598,11 @@ export interface PrivateUserDataAdapter {
     request: FetchSymbolFeeRateRequest,
     accountOptions?: Record<string, unknown>,
   ): Promise<RawSymbolFeeRate>;
+  fetchFundingFeeHistory?(
+    credentials: AccountCredentials,
+    request: FetchFundingFeeHistoryRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawFundingFeeHistoryResult>;
   fetchSymbolRiskLimit?(
     credentials: AccountCredentials,
     request: FetchSymbolRiskLimitRequest,

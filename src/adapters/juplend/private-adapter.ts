@@ -674,6 +674,7 @@ export class JuplendPrivateAdapter implements PrivateUserDataAdapter {
     positions: "unsupported",
     risk: "supported",
     lending: "supported",
+    fundingFeeHistory: "unsupported",
     credentialsRequired: false,
   };
   readonly orderCapabilities: VenueOrderCapabilities = {

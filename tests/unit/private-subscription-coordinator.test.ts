@@ -134,6 +134,10 @@ class StubContext implements ClientContext {
     throw new Error("not implemented");
   }
 
+  fetchFundingFeeHistory(): never {
+    throw new Error("not implemented");
+  }
+
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,
@@ -306,6 +310,7 @@ class StubBinanceAdapter implements PrivateUserDataAdapter {
     positions: "supported",
     risk: "supported",
     lending: "unsupported",
+    fundingFeeHistory: "unsupported",
     credentialsRequired: true,
   };
   readonly orderCapabilities: VenueOrderCapabilities = {
@@ -482,6 +487,7 @@ class StubPollingBinanceAdapter extends StubNoRefreshBinanceAdapter {
     positions: "supported",
     risk: "supported",
     lending: "unsupported",
+    fundingFeeHistory: "unsupported",
     credentialsRequired: true,
   };
 }
@@ -603,6 +609,7 @@ class StubJuplendAdapter implements PrivateUserDataAdapter {
     positions: "unsupported",
     risk: "supported",
     lending: "supported",
+    fundingFeeHistory: "unsupported",
     credentialsRequired: false,
   };
   readonly orderCapabilities: VenueOrderCapabilities = {

@@ -41,6 +41,7 @@ export const BINANCE_RATE_LIMIT_PLANS = {
   papiAccount: "binance:papi:account",
   papiPositionRisk: "binance:papi:position-risk",
   papiCommissionRate: "binance:papi:commission-rate",
+  papiUmIncomeHistory: "binance:papi:um-income-history",
   papiLeverageBracket: "binance:papi:leverage-bracket",
   papiQueryOrder: "binance:papi:query-order",
   papiOpenOrdersSymbol: "binance:papi:open-orders:symbol",
@@ -188,6 +189,11 @@ export const BINANCE_RATE_LIMIT_TOPOLOGY: RateLimitTopology = {
       BINANCE_RATE_LIMIT_PLANS.papiCommissionRate,
       BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
       20,
+    ),
+    requestWeightPlan(
+      BINANCE_RATE_LIMIT_PLANS.papiUmIncomeHistory,
+      BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+      30,
     ),
     requestWeightPlan(
       BINANCE_RATE_LIMIT_PLANS.papiLeverageBracket,
@@ -354,6 +360,8 @@ export function getBinancePapiRateLimitPlanId(
       return BINANCE_RATE_LIMIT_PLANS.papiPositionRisk;
     case "GET /papi/v1/um/commissionRate":
       return BINANCE_RATE_LIMIT_PLANS.papiCommissionRate;
+    case "GET /papi/v1/um/income":
+      return BINANCE_RATE_LIMIT_PLANS.papiUmIncomeHistory;
     case "GET /papi/v1/um/leverageBracket":
       return BINANCE_RATE_LIMIT_PLANS.papiLeverageBracket;
     case "GET /papi/v1/um/order":

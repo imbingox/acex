@@ -44,6 +44,7 @@
 ## 相关能力
 
 - Binance account 会把 PAPI margin liability 投影到 balance lending facet；Juplend account 是只读借贷账户视图。
+- Account funding fee history 当前支持 Binance PAPI UM 实际资金费流水；Deribit、Juplend 和 type-only venue 返回 unsupported。
 - FeeManager 当前可对 Binance swap 通过 PAPI UM commissionRate 读取账号级真实费率；其他 venue 或 Binance spot/future 先返回默认费率。
 - RiskLimitManager 当前可对 Binance PAPI UM 读取 leverage bracket / notional tier，并支持设置 symbol leverage。
 - Deribit 当前只覆盖公开期权 catalog 和 L1 Book。

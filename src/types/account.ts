@@ -42,6 +42,15 @@ export interface PositionKeyInput {
   side?: PositionSide;
 }
 
+export interface FetchFundingFeeHistoryInput {
+  accountId: string;
+  symbols?: string[];
+  startTs?: number;
+  endTs?: number;
+  page?: number;
+  limit?: number;
+}
+
 export interface AccountEventFilter {
   accountId?: string;
   venue?: Venue;
@@ -111,6 +120,30 @@ export interface RiskSnapshot {
   updatedAt: number;
   seq: number;
   lending?: LendingRiskFacet;
+}
+
+export interface FundingFeeHistoryEntry {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  asset: string;
+  amount: string;
+  fundingTime: number;
+  receivedAt: number;
+  venueTransactionId?: string;
+  tradeId?: string;
+  positionSide?: PositionSide;
+  raw: Record<string, unknown>;
+}
+
+export interface FetchFundingFeeHistoryResult {
+  fees: FundingFeeHistoryEntry[];
+  startTs?: number;
+  endTs?: number;
+  page: number;
+  limit: number;
+  truncated: boolean;
+  nextPage?: number;
 }
 
 export interface LendingRiskFacet {
@@ -204,4 +237,7 @@ export interface AccountManager {
   getPosition(input: PositionKeyInput): PositionSnapshot | undefined;
   getRiskSnapshot(accountId: string): RiskSnapshot | undefined;
   getAccountStatus(accountId: string): AccountDataStatus | undefined;
+  fetchFundingFeeHistory(
+    input: FetchFundingFeeHistoryInput,
+  ): Promise<FetchFundingFeeHistoryResult>;
 }

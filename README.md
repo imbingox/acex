@@ -35,6 +35,8 @@
 | Deribit | ❌ | ❌ | ❌ | ❌ | ❌ | ➖ |
 | Juplend | ➖ | ➖ | ➖ | ➖ | ➖ | ✅ |
 
+Binance private account 还支持账户实际资金费流水查询：`client.account.fetchFundingFeeHistory()` 会返回 PAPI UM `FUNDING_FEE` income history，并在 [Manager API](./docs/managers.md#账户资金费历史) 中说明分页和去重建议。
+
 ## 安装
 
 ```bash

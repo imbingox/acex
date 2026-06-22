@@ -26,6 +26,7 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  FetchFundingFeeHistoryRequest,
   FetchOrderRequest,
   FetchRiskLimitsRequest,
   FetchSymbolFeeRateRequest,
@@ -36,6 +37,7 @@ import type {
   RawAccountBootstrap,
   RawAccountUpdate,
   RawBalanceUpdate,
+  RawFundingFeeHistoryResult,
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
   RawPositionUpdate,
@@ -139,6 +141,17 @@ interface BinancePapiUmCommissionRate {
   symbol?: string;
   makerCommissionRate?: string;
   takerCommissionRate?: string;
+}
+
+interface BinancePapiUmIncomeEntry {
+  symbol?: string;
+  incomeType?: string;
+  income?: string;
+  asset?: string;
+  time?: number;
+  info?: string;
+  tranId?: number | string;
+  tradeId?: string;
 }
 
 interface BinancePapiUmLeverageBracketItem {
@@ -1176,6 +1189,47 @@ function mapCommissionRate(
   };
 }
 
+function mapFundingFeeIncomeEntry(
+  catalog: BinanceMarketCatalog,
+  input: BinancePapiUmIncomeEntry,
+  receivedAt: number,
+): RawFundingFeeHistoryResult["fees"][number] {
+  if (!input.symbol) {
+    throw new Error("Binance PAPI income response is missing symbol");
+  }
+
+  const symbol = catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, input.symbol);
+  if (!symbol) {
+    throw new Error(
+      `Binance PAPI income response contains unmapped symbol: ${input.symbol}`,
+    );
+  }
+
+  if (input.incomeType !== undefined && input.incomeType !== "FUNDING_FEE") {
+    throw new Error(
+      `Binance PAPI income response contains unexpected incomeType: ${input.incomeType}`,
+    );
+  }
+
+  if (!input.asset || input.income === undefined || input.time === undefined) {
+    throw new Error(
+      "Binance PAPI income response is missing funding fee fields",
+    );
+  }
+
+  return {
+    symbol,
+    asset: input.asset,
+    amount: input.income,
+    fundingTime: input.time,
+    receivedAt,
+    venueTransactionId:
+      input.tranId === undefined ? undefined : `${input.tranId}`,
+    tradeId: input.tradeId && input.tradeId !== "" ? input.tradeId : undefined,
+    raw: { ...input },
+  };
+}
+
 function mapRiskLimitTier(
   input: BinancePapiUmLeverageBracketItem,
 ): RawSymbolRiskLimit["tiers"][number] | undefined {
@@ -1280,6 +1334,20 @@ function missingRiskLimitVenueIds(
 ): string[] {
   return uniqueStrings(
     brackets.flatMap((entry) =>
+      entry.symbol &&
+      !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, entry.symbol)
+        ? [entry.symbol]
+        : [],
+    ),
+  );
+}
+
+function missingFundingFeeIncomeVenueIds(
+  catalog: BinanceMarketCatalog,
+  entries: BinancePapiUmIncomeEntry[],
+): string[] {
+  return uniqueStrings(
+    entries.flatMap((entry) =>
       entry.symbol &&
       !catalog.toUnified(BINANCE_PRIVATE_SYMBOL_FAMILY, entry.symbol)
         ? [entry.symbol]
@@ -1459,6 +1527,7 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     positions: "supported",
     risk: "supported",
     lending: "supported",
+    fundingFeeHistory: "supported",
     credentialsRequired: true,
   };
   readonly orderCapabilities: VenueOrderCapabilities = {
@@ -1684,6 +1753,46 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
     const receivedAt = Date.now();
 
     return mapCommissionRate(response, request.symbol, receivedAt);
+  }
+
+  async fetchFundingFeeHistory(
+    credentials: AccountCredentials,
+    request: FetchFundingFeeHistoryRequest,
+    accountOptions?: Record<string, unknown>,
+  ): Promise<RawFundingFeeHistoryResult> {
+    const symbol =
+      request.symbol === undefined
+        ? undefined
+        : await this.toUsdmVenueIdForCommand(request.symbol);
+    if (symbol === undefined) {
+      await this.ensureUsdmCatalog();
+    }
+
+    const response = await this.signedRequest<BinancePapiUmIncomeEntry[]>(
+      "GET",
+      "/papi/v1/um/income",
+      credentials,
+      accountOptions,
+      {
+        symbol,
+        incomeType: "FUNDING_FEE",
+        startTime:
+          request.startTs === undefined ? undefined : `${request.startTs}`,
+        endTime: request.endTs === undefined ? undefined : `${request.endTs}`,
+        page: `${request.page}`,
+        limit: `${request.limit}`,
+      },
+      SINGLE_ATTEMPT_IDEMPOTENT_POLICY,
+    );
+    const receivedAt = Date.now();
+
+    return {
+      fees: await this.mapFundingFeeIncomeWithCatalogRefresh(
+        response,
+        receivedAt,
+      ),
+      truncated: response.length >= request.limit,
+    };
   }
 
   async fetchSymbolRiskLimit(
@@ -2812,6 +2921,32 @@ export class BinancePrivateAdapter implements PrivateUserDataAdapter {
       );
       return mapped ? [mapped] : [];
     });
+  }
+
+  private async mapFundingFeeIncomeWithCatalogRefresh(
+    entries: BinancePapiUmIncomeEntry[],
+    receivedAt: number,
+  ): Promise<RawFundingFeeHistoryResult["fees"]> {
+    let missing = missingFundingFeeIncomeVenueIds(this.marketCatalog, entries);
+    if (missing.length > 0) {
+      await this.refreshUsdmCatalogAfterMiss(missing);
+      missing = missingFundingFeeIncomeVenueIds(this.marketCatalog, entries);
+      this.reportSymbolMappingMisses(
+        missing.map((venueId) => ({
+          family: BINANCE_PRIVATE_SYMBOL_FAMILY,
+          venueId,
+        })),
+      );
+      if (missing.length > 0) {
+        throw new Error(
+          `Binance PAPI income response contains unmapped funding fee symbols: ${missing.join(", ")}`,
+        );
+      }
+    }
+
+    return entries.map((entry) =>
+      mapFundingFeeIncomeEntry(this.marketCatalog, entry, receivedAt),
+    );
   }
 
   private async signedRequest<T>(

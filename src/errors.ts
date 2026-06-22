@@ -4,6 +4,8 @@ import type { Venue } from "./types/shared.ts";
 export type AcexErrorCode =
   | "ACCOUNT_ALREADY_EXISTS"
   | "ACCOUNT_BOOTSTRAP_FAILED"
+  | "ACCOUNT_FUNDING_FEE_HISTORY_FETCH_FAILED"
+  | "ACCOUNT_INPUT_INVALID"
   | "ACCOUNT_NOT_FOUND"
   | "CLIENT_NOT_STARTED"
   | "CREDENTIALS_MISSING"

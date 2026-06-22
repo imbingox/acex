@@ -309,6 +309,111 @@ test("account subscribe bootstraps Binance PAPI UM account data and applies upda
   await iterator.return?.();
 });
 
+test("account fetchFundingFeeHistory returns Binance PAPI UM funding fee income", async () => {
+  const requests = installBinancePrivateAccountInfra({
+    fundingFeeIncome: [
+      {
+        symbol: "BTCUSDT",
+        incomeType: "FUNDING_FEE",
+        income: "0.00001000",
+        asset: "USDT",
+        time: 1710000000000,
+        tranId: 90001,
+      },
+    ],
+  });
+  const client = createClient();
+
+  try {
+    await client.registerAccount({
+      accountId: "main-binance",
+      venue: "binance",
+      credentials: {
+        apiKey: "key",
+        secret: "secret",
+      },
+      options: {
+        timestamp: 1710000000999,
+        recvWindow: 5000,
+      },
+    });
+    await client.start();
+
+    const result = await client.account.fetchFundingFeeHistory({
+      accountId: "main-binance",
+      symbols: ["BTC/USDT:USDT"],
+      startTs: 1700000000000,
+      endTs: 1700003600000,
+      page: 2,
+      limit: 1000,
+    });
+
+    expect(result).toMatchObject({
+      page: 2,
+      limit: 1000,
+      truncated: false,
+      fees: [
+        {
+          accountId: "main-binance",
+          venue: "binance",
+          symbol: "BTC/USDT:USDT",
+          asset: "USDT",
+          amount: "0.00001",
+          fundingTime: 1710000000000,
+          venueTransactionId: "90001",
+        },
+      ],
+    });
+
+    const incomeRequest = requests.find(
+      (request) => request.url.pathname === "/papi/v1/um/income",
+    );
+    expect(incomeRequest?.url.searchParams.get("symbol")).toBe("BTCUSDT");
+    expect(incomeRequest?.url.searchParams.get("incomeType")).toBe(
+      "FUNDING_FEE",
+    );
+    expect(incomeRequest?.url.searchParams.get("startTime")).toBe(
+      "1700000000000",
+    );
+    expect(incomeRequest?.url.searchParams.get("endTime")).toBe(
+      "1700003600000",
+    );
+    expect(incomeRequest?.url.searchParams.get("page")).toBe("2");
+    expect(incomeRequest?.url.searchParams.get("limit")).toBe("1000");
+    expect(incomeRequest?.url.searchParams.get("timestamp")).toBe(
+      "1710000000999",
+    );
+  } finally {
+    await client.stop();
+  }
+});
+
+test("account fetchFundingFeeHistory rejects missing Binance credentials before REST", async () => {
+  const requests = installBinancePrivateAccountInfra();
+  const client = createClient();
+
+  try {
+    await client.registerAccount({
+      accountId: "main-binance",
+      venue: "binance",
+    });
+    await client.start();
+
+    await expect(
+      client.account.fetchFundingFeeHistory({
+        accountId: "main-binance",
+      }),
+    ).rejects.toMatchObject({
+      code: "CREDENTIALS_MISSING",
+    });
+    expect(
+      requests.some((request) => request.url.pathname === "/papi/v1/um/income"),
+    ).toBe(false);
+  } finally {
+    await client.stop();
+  }
+});
+
 test("Binance margin liability updates merge partial lending fields without accumulating", async () => {
   installBinancePrivateAccountInfra();
   const client = createClient({

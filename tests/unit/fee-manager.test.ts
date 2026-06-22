@@ -262,6 +262,10 @@ class StubFeeContext implements ClientContext {
     return this.fetchSymbolFeeRateImpl(input);
   }
 
+  fetchFundingFeeHistory(): never {
+    throw new Error("not implemented");
+  }
+
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,

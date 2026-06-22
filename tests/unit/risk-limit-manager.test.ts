@@ -223,6 +223,10 @@ class StubRiskLimitContext implements ClientContext {
     throw new Error("not implemented");
   }
 
+  fetchFundingFeeHistory(): never {
+    throw new Error("not implemented");
+  }
+
   fetchSymbolRiskLimit(
     input: GetSymbolRiskLimitInput,
   ): Promise<RawSymbolRiskLimit> {

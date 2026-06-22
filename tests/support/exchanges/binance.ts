@@ -342,6 +342,16 @@ const binanceFixtures = {
       makerCommissionRate: "0.00020000",
       takerCommissionRate: "0.00050000",
     },
+    fundingFeeIncome: [
+      {
+        symbol: "BTCUSDT",
+        incomeType: "FUNDING_FEE",
+        income: "0.00001000",
+        asset: "USDT",
+        time: 1710000000000,
+        tranId: 90001,
+      },
+    ],
     leverageBrackets: [
       {
         symbol: "BTCUSDT",
@@ -598,6 +608,8 @@ export function installBinancePrivateAccountInfra(options?: {
   commissionRate?: unknown;
   beforeCommissionRateResponse?: () => void;
   failCommissionRate?: boolean;
+  fundingFeeIncome?: unknown;
+  failFundingFeeIncome?: boolean;
   leverageBrackets?: unknown;
   leverageBracketResponses?: unknown[];
   failLeverageBracket?: boolean;
@@ -929,6 +941,20 @@ export function installBinancePrivateAccountInfra(options?: {
           options?.beforeCommissionRateResponse?.();
           return jsonResponse(
             options?.commissionRate ?? binanceFixtures.papi.commissionRate,
+          );
+        case "GET /papi/v1/um/income":
+          if (options?.failFundingFeeIncome) {
+            return textResponse('{"code":-2015,"msg":"Invalid API-key"}', {
+              status: 401,
+              statusText: "Unauthorized",
+            });
+          }
+          return jsonResponse(
+            filterOpenOrdersBySymbol(
+              options?.fundingFeeIncome ??
+                binanceFixtures.papi.fundingFeeIncome,
+              url.searchParams.get("symbol"),
+            ),
           );
         case "GET /papi/v1/um/leverageBracket":
           if (options?.failLeverageBracket) {

@@ -3,6 +3,7 @@ import type {
   RawAccountBootstrap,
   RawAccountUpdate,
   RawBalanceUpdate,
+  RawFundingFeeHistoryEntry,
   RawPositionUpdate,
   RawRiskLevelChange,
   RawRiskUpdate,
@@ -15,7 +16,12 @@ import type {
   PrivateAccountDataConsumer,
   PrivateSubscriptionState,
 } from "../client/context.ts";
-import { AcexError } from "../errors.ts";
+import type { AcexErrorDetails } from "../errors.ts";
+import {
+  AcexError,
+  buildAcexErrorDetails,
+  formatAcexErrorMessage,
+} from "../errors.ts";
 import type { AsyncEventBusOverflowInfo } from "../internal/async-event-bus.ts";
 import { AsyncEventBus } from "../internal/async-event-bus.ts";
 import { toCanonical } from "../internal/decimal.ts";
@@ -33,6 +39,9 @@ import type {
   AccountSnapshotReplacedEvent,
   AccountStatusChangedEvent,
   BalanceSnapshot,
+  FetchFundingFeeHistoryInput,
+  FetchFundingFeeHistoryResult,
+  FundingFeeHistoryEntry,
   PositionKeyInput,
   PositionSnapshot,
   RiskLevelChangedEvent,
@@ -51,8 +60,46 @@ interface AccountRecord {
   status: AccountDataStatus;
 }
 
+interface FundingFeeFetchMetadata {
+  accountId: string;
+  venue: Venue;
+  symbol?: string;
+}
+
+interface NormalizedFundingFeeHistoryInput {
+  accountId: string;
+  symbols?: string[];
+  startTs?: number;
+  endTs?: number;
+  page: number;
+  limit: number;
+}
+
+const DEFAULT_FUNDING_FEE_HISTORY_PAGE = 1;
+const DEFAULT_FUNDING_FEE_HISTORY_LIMIT = 1_000;
+const MAX_FUNDING_FEE_HISTORY_LIMIT = 1_000;
+const FUNDING_FEE_HISTORY_ACCOUNT_SCAN_THRESHOLD = 5;
+
 function cloneAccountStatus(status: AccountDataStatus): AccountDataStatus {
   return { ...status };
+}
+
+function compareFundingFeeHistoryEntries(
+  left: FundingFeeHistoryEntry,
+  right: FundingFeeHistoryEntry,
+): number {
+  if (left.fundingTime !== right.fundingTime) {
+    return left.fundingTime - right.fundingTime;
+  }
+
+  const symbolComparison = left.symbol.localeCompare(right.symbol);
+  if (symbolComparison !== 0) {
+    return symbolComparison;
+  }
+
+  return (left.venueTransactionId ?? "").localeCompare(
+    right.venueTransactionId ?? "",
+  );
 }
 
 function positionKey(symbol: string, side: PositionSnapshot["side"]): string {
@@ -304,6 +351,50 @@ export class AccountManagerImpl
   getAccountStatus(accountId: string): AccountDataStatus | undefined {
     const status = this.records.get(accountId)?.status;
     return status ? cloneAccountStatus(status) : undefined;
+  }
+
+  async fetchFundingFeeHistory(
+    input: FetchFundingFeeHistoryInput,
+  ): Promise<FetchFundingFeeHistoryResult> {
+    this.context.assertStarted();
+    const account = this.context.getRegisteredAccount(input.accountId);
+    const normalized = this.normalizeFundingFeeHistoryInput(input, {
+      accountId: account.accountId,
+      venue: account.venue,
+    });
+
+    if (normalized.symbols?.length === 0) {
+      return this.createFundingFeeHistoryResult(normalized, [], false);
+    }
+
+    if (normalized.symbols === undefined) {
+      return await this.fetchAccountFundingFeeHistory(normalized, {
+        accountId: account.accountId,
+        venue: account.venue,
+      });
+    }
+
+    const symbols = normalized.symbols;
+    if (symbols.length <= FUNDING_FEE_HISTORY_ACCOUNT_SCAN_THRESHOLD) {
+      return await this.fetchPerSymbolFundingFeeHistory(
+        { ...normalized, symbols },
+        {
+          accountId: account.accountId,
+          venue: account.venue,
+        },
+      );
+    }
+
+    const targetSymbols = new Set(symbols);
+    const result = await this.fetchAccountFundingFeeHistory(normalized, {
+      accountId: account.accountId,
+      venue: account.venue,
+    });
+
+    return {
+      ...result,
+      fees: result.fees.filter((fee) => targetSymbols.has(fee.symbol)),
+    };
   }
 
   // --- ManagerLifecycle ---
@@ -1061,6 +1152,251 @@ export class AccountManagerImpl
           }
         : previous?.lending,
     });
+  }
+
+  private normalizeFundingFeeHistoryInput(
+    input: FetchFundingFeeHistoryInput,
+    metadata: FundingFeeFetchMetadata,
+  ): NormalizedFundingFeeHistoryInput {
+    const page = input.page ?? DEFAULT_FUNDING_FEE_HISTORY_PAGE;
+    const limit = input.limit ?? DEFAULT_FUNDING_FEE_HISTORY_LIMIT;
+
+    if (!Number.isSafeInteger(page) || page < 1) {
+      throw this.createInputError("page must be a positive integer", metadata);
+    }
+
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw this.createInputError("limit must be a positive integer", metadata);
+    }
+
+    if (limit > MAX_FUNDING_FEE_HISTORY_LIMIT) {
+      throw this.createInputError(
+        `limit must be less than or equal to ${MAX_FUNDING_FEE_HISTORY_LIMIT} when fetching funding fee history`,
+        metadata,
+      );
+    }
+
+    if (
+      input.startTs !== undefined &&
+      (!Number.isSafeInteger(input.startTs) || input.startTs < 0)
+    ) {
+      throw this.createInputError(
+        "startTs must be a non-negative epoch millisecond timestamp",
+        metadata,
+      );
+    }
+
+    if (
+      input.endTs !== undefined &&
+      (!Number.isSafeInteger(input.endTs) || input.endTs < 0)
+    ) {
+      throw this.createInputError(
+        "endTs must be a non-negative epoch millisecond timestamp",
+        metadata,
+      );
+    }
+
+    if (
+      input.startTs !== undefined &&
+      input.endTs !== undefined &&
+      input.startTs > input.endTs
+    ) {
+      throw this.createInputError(
+        "startTs must be less than or equal to endTs when fetching funding fee history",
+        metadata,
+      );
+    }
+
+    const symbols =
+      input.symbols === undefined
+        ? undefined
+        : this.normalizeFundingFeeSymbols(input.symbols, metadata);
+
+    return {
+      accountId: input.accountId,
+      symbols,
+      startTs: input.startTs,
+      endTs: input.endTs,
+      page,
+      limit,
+    };
+  }
+
+  private normalizeFundingFeeSymbols(
+    symbols: string[],
+    metadata: FundingFeeFetchMetadata,
+  ): string[] {
+    const unique: string[] = [];
+    const seen = new Set<string>();
+
+    for (const symbol of symbols) {
+      if (symbol.trim() === "") {
+        throw this.createInputError(
+          "symbols cannot contain empty values when fetching funding fee history",
+          metadata,
+        );
+      }
+
+      if (!seen.has(symbol)) {
+        seen.add(symbol);
+        unique.push(symbol);
+      }
+    }
+
+    return unique;
+  }
+
+  private async fetchPerSymbolFundingFeeHistory(
+    input: NormalizedFundingFeeHistoryInput & { symbols: string[] },
+    metadata: FundingFeeFetchMetadata,
+  ): Promise<FetchFundingFeeHistoryResult> {
+    const results = await Promise.all(
+      input.symbols.map(async (symbol) => {
+        try {
+          return await this.context.fetchFundingFeeHistory({
+            accountId: input.accountId,
+            symbol,
+            startTs: input.startTs,
+            endTs: input.endTs,
+            page: input.page,
+            limit: input.limit,
+          });
+        } catch (error) {
+          throw this.wrapFundingFeeHistoryFetchError(error, {
+            ...metadata,
+            symbol,
+          });
+        }
+      }),
+    );
+
+    const fees = results.flatMap((result) =>
+      result.fees.map((fee) =>
+        this.createFundingFeeHistoryEntry(metadata, fee),
+      ),
+    );
+    const truncated = results.some((result) => result.truncated);
+    return this.createFundingFeeHistoryResult(input, fees, truncated);
+  }
+
+  private async fetchAccountFundingFeeHistory(
+    input: NormalizedFundingFeeHistoryInput,
+    metadata: FundingFeeFetchMetadata,
+  ): Promise<FetchFundingFeeHistoryResult> {
+    try {
+      const result = await this.context.fetchFundingFeeHistory({
+        accountId: input.accountId,
+        startTs: input.startTs,
+        endTs: input.endTs,
+        page: input.page,
+        limit: input.limit,
+      });
+      const fees = result.fees.map((fee) =>
+        this.createFundingFeeHistoryEntry(metadata, fee),
+      );
+      return this.createFundingFeeHistoryResult(input, fees, result.truncated);
+    } catch (error) {
+      throw this.wrapFundingFeeHistoryFetchError(error, metadata);
+    }
+  }
+
+  private createFundingFeeHistoryResult(
+    input: NormalizedFundingFeeHistoryInput,
+    fees: FundingFeeHistoryEntry[],
+    truncated: boolean,
+  ): FetchFundingFeeHistoryResult {
+    return {
+      fees: fees.sort(compareFundingFeeHistoryEntries),
+      startTs: input.startTs,
+      endTs: input.endTs,
+      page: input.page,
+      limit: input.limit,
+      truncated,
+      nextPage: truncated ? input.page + 1 : undefined,
+    };
+  }
+
+  private createFundingFeeHistoryEntry(
+    metadata: FundingFeeFetchMetadata,
+    input: RawFundingFeeHistoryEntry,
+  ): FundingFeeHistoryEntry {
+    return {
+      accountId: metadata.accountId,
+      venue: metadata.venue,
+      symbol: input.symbol,
+      asset: input.asset,
+      amount: toCanonical(input.amount),
+      fundingTime: input.fundingTime,
+      receivedAt: input.receivedAt,
+      venueTransactionId: input.venueTransactionId,
+      tradeId: input.tradeId,
+      positionSide: input.positionSide,
+      raw: { ...input.raw },
+    };
+  }
+
+  private createInputError(
+    message: string,
+    metadata: FundingFeeFetchMetadata,
+  ): AcexError {
+    return new AcexError("ACCOUNT_INPUT_INVALID", message, {
+      details: buildAcexErrorDetails(metadata),
+    });
+  }
+
+  private wrapFundingFeeHistoryFetchError(
+    error: unknown,
+    metadata: FundingFeeFetchMetadata,
+  ): AcexError {
+    if (error instanceof AcexError) {
+      return error;
+    }
+
+    this.context.publishRuntimeError(
+      "adapter",
+      error instanceof Error
+        ? error
+        : new Error("Unknown funding fee history failure"),
+      metadata,
+    );
+    const details = this.addVenueErrorReason(
+      metadata.venue,
+      buildAcexErrorDetails(metadata, error) ?? metadata,
+    );
+    return new AcexError(
+      "ACCOUNT_FUNDING_FEE_HISTORY_FETCH_FAILED",
+      formatAcexErrorMessage(
+        `Failed to fetch funding fee history for ${metadata.accountId}`,
+        details,
+      ),
+      {
+        cause: error,
+        details,
+      },
+    );
+  }
+
+  private addVenueErrorReason(
+    venue: Venue,
+    details: AcexErrorDetails,
+  ): AcexErrorDetails {
+    const venueErrorCode = details.venueError?.code;
+    if (!venueErrorCode) {
+      return details;
+    }
+
+    const reason = this.context.normalizeVenueErrorCode(venue, venueErrorCode);
+    if (!reason) {
+      return details;
+    }
+
+    return {
+      ...details,
+      venueError: {
+        ...details.venueError,
+        reason,
+      },
+    };
   }
 
   private publishStatus(record: AccountRecord): void {

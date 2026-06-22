@@ -135,6 +135,173 @@ await lease.ready;
 lease.close();
 ```
 
+## Scenario: AccountManager 查询账户实际资金费历史
+
+### 1. Scope / Trigger
+
+- Trigger: 新增或修改 `client.account.fetchFundingFeeHistory()`、账户级 funding fee history public type、private adapter income history contract、或 funding fee history pagination 语义时。
+- 目标: 让下游查询账户实际发生的资金费收付流水，而不是公开 funding rate history；同时隐藏 Binance income history 不支持多 symbol 批量查询的细节。
+
+### 2. Signatures
+
+Public 类型放在 `src/types/account.ts`，并通过 `AccountManager` 暴露：
+
+```ts
+interface FetchFundingFeeHistoryInput {
+  accountId: string;
+  symbols?: string[];
+  startTs?: number;
+  endTs?: number;
+  page?: number;
+  limit?: number;
+}
+
+interface FundingFeeHistoryEntry {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  asset: string;
+  amount: string;
+  fundingTime: number;
+  receivedAt: number;
+  venueTransactionId?: string;
+  tradeId?: string;
+  positionSide?: PositionSide;
+  raw: Record<string, unknown>;
+}
+
+interface FetchFundingFeeHistoryResult {
+  fees: FundingFeeHistoryEntry[];
+  startTs?: number;
+  endTs?: number;
+  page: number;
+  limit: number;
+  truncated: boolean;
+  nextPage?: number;
+}
+```
+
+Adapter SPI 在 `PrivateUserDataAdapter` 上保持可选：
+
+```ts
+fetchFundingFeeHistory?(
+  credentials: AccountCredentials,
+  request: FetchFundingFeeHistoryRequest,
+  accountOptions?: Record<string, unknown>,
+): Promise<RawFundingFeeHistoryResult>;
+```
+
+### 3. Contracts
+
+- `symbols === undefined` 表示全账户 account-scan；`symbols: []` 直接返回空结果且不得发远端请求。
+- 去重后 `symbols.length <= 5` 时，manager 内部按 symbol 循环调用 context；`symbols.length > 5` 时，manager 走 account-scan 并在本地按 symbol 过滤。
+- internal strategy 不属于 public contract，下游只使用 query-level `page` / `nextPage`。
+- `page` 默认 1；`limit` 默认 1000，最大 1000。`limit` 是底层 request page size，不保证合并后的 `fees.length <= limit`。
+- `truncated` 是 query-level 语义：
+  - per-symbol 路径：任意底层 symbol result truncated，则 public result truncated。
+  - account-scan 路径：底层 account page truncated，则 public result truncated，即使过滤后结果少于 `limit`。
+  - `truncated === true` 时 `nextPage = page + 1`。
+- Entries 必须按 `fundingTime`、`symbol`、`venueTransactionId ?? ""` 稳定排序；`amount` 必须在 manager 出口 canonical 化。
+- 不生成 SDK synthetic id；Binance `tranId` 映射为 `venueTransactionId`，其它 venue 没有等价字段时可省略。
+- Binance adapter 使用 `GET /papi/v1/um/income`，固定 `incomeType=FUNDING_FEE`，request weight 30，单 symbol 请求用 UM venue symbol，account-scan 不传 `symbol`。
+
+### 4. Validation & Error Matrix
+
+| 场景 | 行为 |
+|---|---|
+| client 未 start | 抛 `CLIENT_NOT_STARTED` |
+| accountId 未注册 | 抛 `ACCOUNT_NOT_FOUND` |
+| 缺 private credentials | 抛 `CREDENTIALS_MISSING`，不得发远端请求 |
+| venue capability 或 adapter hook 不支持 | 抛 `VENUE_NOT_SUPPORTED` |
+| `page < 1`、非整数、`limit < 1`、`limit > 1000`、时间戳非法或 `startTs > endTs` | 抛 `ACCOUNT_INPUT_INVALID`，不得发远端请求 |
+| symbol 循环中任一 symbol 失败 | 整个调用失败，不返回 partial success |
+| adapter 请求、响应结构、symbol mapping 或远端失败 | manager 包装为 `ACCOUNT_FUNDING_FEE_HISTORY_FETCH_FAILED`，保留 `cause` 和 `details.venue/accountId/symbol` |
+
+### 5. Good / Base / Bad Cases
+
+Good:
+
+```ts
+const result = await client.account.fetchFundingFeeHistory({
+  accountId: "main-binance",
+  symbols: ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+  startTs,
+  endTs,
+  limit: 1000,
+});
+```
+
+Base:
+
+```ts
+const endTs = Date.now();
+let page = 1;
+
+for (;;) {
+  const result = await client.account.fetchFundingFeeHistory({
+    accountId,
+    symbols,
+    startTs,
+    endTs,
+    page,
+  });
+  ingest(result.fees);
+  if (!result.nextPage) break;
+  page = result.nextPage;
+}
+```
+
+Bad:
+
+```ts
+// 错误：把 truncated 理解为 ETH 这个 symbol 一定还有下一页。
+if (result.truncated) {
+  fetchOnlyEthNextPage();
+}
+```
+
+### 6. Tests Required
+
+修改该能力时至少覆盖：
+
+- 本地输入校验失败不发远端请求。
+- `symbols: []` 返回空结果且不调用 context。
+- small symbol set 逐 symbol 调用；下一页仍用同一 query page 循环所有 symbol，未打满 symbol 返回空页可接受。
+- account-scan + filter 下，过滤后结果少于 `limit` 时仍按底层 truncated 暴露 `nextPage`。
+- `tranId` → `venueTransactionId`、canonical decimal、稳定排序。
+- Binance adapter 固定 `incomeType=FUNDING_FEE`，单 symbol 请求带 `symbol`，account-scan 不带 `symbol`。
+- `/papi/v1/um/income` rate-limit plan 使用 PAPI request-weight cost 30。
+- runtime capability、缺 credentials、unsupported venue / missing hook 的错误路径。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+return {
+  pageInfo: symbols.map((symbol) => ({
+    symbol,
+    truncated: symbolResult.fees.length === limit,
+  })),
+};
+```
+
+问题：account-scan 模式没有正确的 per-symbol completeness 语义；暴露该字段会误导下游按 symbol 分页。
+
+#### Correct
+
+```ts
+return {
+  fees,
+  page,
+  limit,
+  truncated: rawResult.truncated,
+  nextPage: rawResult.truncated ? page + 1 : undefined,
+};
+```
+
+效果：所有内部查询路径都只暴露 query-level pagination，下游保持同一查询条件翻页即可。
+
 ## Scenario: 账户级 RiskLimitManager 维护交易所硬风控限制
 
 ### 1. Scope / Trigger

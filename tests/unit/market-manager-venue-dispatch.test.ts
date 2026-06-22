@@ -116,6 +116,10 @@ class StubMarketContext implements ClientContext {
     throw new Error("not implemented");
   }
 
+  fetchFundingFeeHistory(): never {
+    throw new Error("not implemented");
+  }
+
   publishRuntimeError(
     source: AcexInternalError["source"],
     error: Error,

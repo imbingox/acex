@@ -60,6 +60,8 @@ try {
 | `MARKET_STREAM_TIMEOUT` | market stream 首条消息超时 |
 | `ACCOUNT_ALREADY_EXISTS` | 重复注册 accountId |
 | `ACCOUNT_BOOTSTRAP_FAILED` | account bootstrap 失败 |
+| `ACCOUNT_FUNDING_FEE_HISTORY_FETCH_FAILED` | 账户资金费历史请求失败或响应结构不合法 |
+| `ACCOUNT_INPUT_INVALID` | 账户级 REST 查询输入不合法，例如 funding fee history 的 page、limit 或时间范围无效 |
 | `ACCOUNT_NOT_FOUND` | accountId 未注册或已移除 |
 | `CREDENTIALS_MISSING` | private 订阅或下单缺凭证 |
 | `EVENT_BUFFER_OVERFLOW` | 事件流消费者积压超过缓冲上限 |
@@ -79,6 +81,7 @@ try {
 - Juplend 当前只提供借贷账户只读视图，不支持链上写操作
 - Binance 订单当前覆盖 PAPI margin / UM 的 `limit`、`market`、撤单和 open orders 主路径
 - Funding Rate 仅支持 Binance 永续合约，包括 Binance TradFi Perps
+- Account funding fee history 当前只覆盖 Binance PAPI UM 实际资金费流水；下游拉全量应固定 `endTs` 并按 `nextPage` 翻页
 - Binance order 命令按 symbol 路由 PAPI UM 与 PAPI margin；COIN-M、margin OCO、条件单和改单不支持
 - Binance fee 真实远端刷新当前只覆盖 `swap`；spot / future 返回默认费率，显式 fetch 抛 `VENUE_NOT_SUPPORTED`
 - Binance risk limit 当前只覆盖 PAPI UM leverage bracket / set leverage；不覆盖 spot、COIN-M 或非 UM 交易链路，也不计算下单前剩余名义价值

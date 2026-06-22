@@ -592,6 +592,200 @@ test("BinancePrivateAdapter maps PAPI UM leverage brackets", async () => {
   expect(requestedUrls[0]?.searchParams.get("symbol")).toBe("BTCUSDT");
 });
 
+test("BinancePrivateAdapter fetches PAPI UM funding fee income history", async () => {
+  const requestedUrls: URL[] = [];
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/um/income"
+      ) {
+        requestedUrls.push(url);
+        return jsonResponse([
+          {
+            symbol: "BTCUSDT",
+            incomeType: "FUNDING_FEE",
+            income: "0.00001000",
+            asset: "USDT",
+            time: 1710000000000,
+            tranId: 123456789,
+            tradeId: "",
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const result = await adapter.fetchFundingFeeHistory?.(
+    { apiKey: "key", secret: "secret" },
+    {
+      symbol: "BTC/USDT:USDT",
+      startTs: 1700000000000,
+      endTs: 1700003600000,
+      page: 2,
+      limit: 1000,
+    },
+  );
+
+  expect(result).toEqual({
+    fees: [
+      {
+        symbol: "BTC/USDT:USDT",
+        asset: "USDT",
+        amount: "0.00001000",
+        fundingTime: 1710000000000,
+        receivedAt: expect.any(Number),
+        venueTransactionId: "123456789",
+        tradeId: undefined,
+        raw: {
+          symbol: "BTCUSDT",
+          incomeType: "FUNDING_FEE",
+          income: "0.00001000",
+          asset: "USDT",
+          time: 1710000000000,
+          tranId: 123456789,
+          tradeId: "",
+        },
+      },
+    ],
+    truncated: false,
+  });
+  expect(requestedUrls[0]?.searchParams.get("symbol")).toBe("BTCUSDT");
+  expect(requestedUrls[0]?.searchParams.get("incomeType")).toBe("FUNDING_FEE");
+  expect(requestedUrls[0]?.searchParams.get("startTime")).toBe("1700000000000");
+  expect(requestedUrls[0]?.searchParams.get("endTime")).toBe("1700003600000");
+  expect(requestedUrls[0]?.searchParams.get("page")).toBe("2");
+  expect(requestedUrls[0]?.searchParams.get("limit")).toBe("1000");
+  expect(requestedUrls[0]?.searchParams.has("timestamp")).toBe(true);
+  expect(requestedUrls[0]?.searchParams.has("signature")).toBe(true);
+});
+
+test("BinancePrivateAdapter account-scans PAPI UM funding fee income without symbol", async () => {
+  const requestedUrls: URL[] = [];
+  const adapter = new BinancePrivateAdapter({
+    fetchFn: async (input) => {
+      const url = new URL(input.toString());
+      if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+        return jsonResponse(usdmExchangeInfo());
+      }
+      if (
+        url.origin === PAPI_REST_BASE_URL &&
+        `${url.pathname}` === "/papi/v1/um/income"
+      ) {
+        requestedUrls.push(url);
+        return jsonResponse([
+          {
+            symbol: "BTCUSDT",
+            incomeType: "FUNDING_FEE",
+            income: "0.0100",
+            asset: "USDT",
+            time: 1710000000000,
+            tranId: "btc-tran",
+          },
+          {
+            symbol: "BTCUSDT",
+            incomeType: "FUNDING_FEE",
+            income: "-0.0200",
+            asset: "USDT",
+            time: 1710003600000,
+            tranId: "btc-tran-2",
+          },
+        ]);
+      }
+
+      throw new Error(`Unexpected URL: ${url.toString()}`);
+    },
+  });
+
+  const result = await adapter.fetchFundingFeeHistory?.(
+    { apiKey: "key", secret: "secret" },
+    {
+      page: 1,
+      limit: 2,
+    },
+  );
+
+  expect(requestedUrls[0]?.searchParams.has("symbol")).toBe(false);
+  expect(requestedUrls[0]?.searchParams.get("incomeType")).toBe("FUNDING_FEE");
+  expect(result?.fees.map((fee) => fee.venueTransactionId)).toEqual([
+    "btc-tran",
+    "btc-tran-2",
+  ]);
+  expect(result?.truncated).toBe(true);
+});
+
+test("BinancePrivateAdapter rejects malformed funding fee income rows", async () => {
+  const cases: Array<{ name: string; row: Record<string, unknown> }> = [
+    {
+      name: "missing symbol",
+      row: {
+        incomeType: "FUNDING_FEE",
+        income: "0.0100",
+        asset: "USDT",
+        time: 1710000000000,
+        tranId: "missing-symbol",
+      },
+    },
+    {
+      name: "unmapped symbol",
+      row: {
+        symbol: "UNKNOWNUSDT",
+        incomeType: "FUNDING_FEE",
+        income: "0.0100",
+        asset: "USDT",
+        time: 1710000000000,
+        tranId: "unknown-symbol",
+      },
+    },
+    {
+      name: "unexpected income type",
+      row: {
+        symbol: "BTCUSDT",
+        incomeType: "COMMISSION",
+        income: "0.0100",
+        asset: "USDT",
+        time: 1710000000000,
+        tranId: "wrong-type",
+      },
+    },
+  ];
+
+  for (const item of cases) {
+    const adapter = new BinancePrivateAdapter({
+      fetchFn: async (input) => {
+        const url = new URL(input.toString());
+        if (url.toString() === USDM_EXCHANGE_INFO_URL) {
+          return jsonResponse(usdmExchangeInfo());
+        }
+        if (
+          url.origin === PAPI_REST_BASE_URL &&
+          `${url.pathname}` === "/papi/v1/um/income"
+        ) {
+          return jsonResponse([item.row]);
+        }
+
+        throw new Error(`Unexpected URL for ${item.name}: ${url.toString()}`);
+      },
+    });
+
+    await expect(
+      adapter.fetchFundingFeeHistory?.(
+        { apiKey: "key", secret: "secret" },
+        {
+          page: 1,
+          limit: 1000,
+        },
+      ),
+    ).rejects.toThrow();
+  }
+});
+
 test("BinancePrivateAdapter sets PAPI UM leverage", async () => {
   const requestedUrls: URL[] = [];
   const adapter = new BinancePrivateAdapter({

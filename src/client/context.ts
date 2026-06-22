@@ -1,6 +1,7 @@
 import type {
   RawAccountBootstrap,
   RawAccountUpdate,
+  RawFundingFeeHistoryResult,
   RawOpenOrdersSnapshot,
   RawOrderUpdate,
   RawRiskLevelChange,
@@ -15,6 +16,7 @@ import type {
   CancelAllOrdersInput,
   CancelOrderInput,
   CreateOrderInput,
+  FetchFundingFeeHistoryInput,
   FetchRiskLimitsInput,
   GetSymbolFeeRateInput,
   GetSymbolRiskLimitInput,
@@ -34,6 +36,11 @@ export interface RegisteredAccountRecord {
   venue: Venue;
   credentials?: AccountCredentials;
   options?: Record<string, unknown>;
+}
+
+export interface FetchFundingFeeHistoryContextInput
+  extends Omit<FetchFundingFeeHistoryInput, "symbols"> {
+  symbol?: string;
 }
 
 export interface ClientContext {
@@ -59,6 +66,9 @@ export interface ClientContext {
   cancelOrder(input: CancelOrderInput): Promise<RawOrderUpdate>;
   cancelAllOrders(input: CancelAllOrdersInput): Promise<RawOrderUpdate[]>;
   fetchSymbolFeeRate(input: GetSymbolFeeRateInput): Promise<RawSymbolFeeRate>;
+  fetchFundingFeeHistory(
+    input: FetchFundingFeeHistoryContextInput,
+  ): Promise<RawFundingFeeHistoryResult>;
   fetchSymbolRiskLimit?(
     input: GetSymbolRiskLimitInput,
   ): Promise<RawSymbolRiskLimit>;

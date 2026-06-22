@@ -162,6 +162,9 @@ function createContext(nowRef: { value: number }): ClientContext {
       void input;
       return notUsed("fetchSymbolFeeRate");
     },
+    fetchFundingFeeHistory() {
+      return notUsed("fetchFundingFeeHistory");
+    },
     publishRuntimeError(): void {},
     publishHealthEvent(event: HealthEvent): void {
       void event;

@@ -280,6 +280,22 @@ test("Binance PAPI risk limit endpoints map to one-unit request-weight plans", (
   );
 });
 
+test("Binance PAPI UM income history maps to 30-unit request-weight plan", () => {
+  expect(getBinancePapiRateLimitPlanId("GET", "/papi/v1/um/income")).toBe(
+    BINANCE_RATE_LIMIT_PLANS.papiUmIncomeHistory,
+  );
+  expect(findBinancePlan(BINANCE_RATE_LIMIT_PLANS.papiUmIncomeHistory)).toEqual(
+    expect.objectContaining({
+      costs: [
+        {
+          bucketId: BINANCE_RATE_LIMIT_BUCKETS.papiRequestWeight1m,
+          cost: 30,
+        },
+      ],
+    }),
+  );
+});
+
 test("BudgetRateLimiter falls back to endpoint scope for unknown plans", async () => {
   let now = 1_000;
   const sleeps: number[] = [];

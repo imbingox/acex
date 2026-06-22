@@ -108,6 +108,7 @@ export interface VenueAccountCapabilities {
   positions: VenueCapabilitySupport;
   risk: VenueCapabilitySupport;
   lending: VenueCapabilitySupport;
+  fundingFeeHistory: VenueCapabilitySupport;
   credentialsRequired: boolean;
 }
 

@@ -149,7 +149,7 @@ Capability 查询不访问网络，不要求 `start()`。返回值表达当前 S
 
 | Venue | runtimeStatus | readOnly | 关键能力 |
 |---|---|---:|---|
-| `binance` | `available` | false | market catalog / server time / L1；funding rate 为 `market_dependent`；order supported |
+| `binance` | `available` | false | market catalog / server time / L1；funding rate 为 `market_dependent`；account funding fee history；order supported |
 | `deribit` | `available` | true | public option catalog / `quote.<instrument>` L1；account/order unsupported，order reason 为 `read_only` |
 | `juplend` | `available` | true | account polling + lending；order reason 为 `read_only` |
 
@@ -431,6 +431,7 @@ interface AccountManager {
   getPosition(input: PositionKeyInput): PositionSnapshot | undefined;
   getRiskSnapshot(accountId: string): RiskSnapshot | undefined;
   getAccountStatus(accountId: string): AccountDataStatus | undefined;
+  fetchFundingFeeHistory(input: FetchFundingFeeHistoryInput): Promise<FetchFundingFeeHistoryResult>;
 }
 ```
 
@@ -455,6 +456,49 @@ for await (const event of client.account.events.updates({
 ```
 
 Account 事件流只支持 `{ maxBuffer?: number }`，不提供 conflate；余额、仓位、风险和状态事件默认按 buffer 语义保留顺序。
+
+### 账户资金费历史
+
+```ts
+const page = await client.account.fetchFundingFeeHistory({
+  accountId: "main-binance",
+  symbols: ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+  startTs,
+  endTs,
+  limit: 1000,
+});
+```
+
+`fetchFundingFeeHistory()` 查询账户实际发生的 funding fee 收付流水，不是公开 market funding rate history。Binance 当前使用 PAPI UM income history，并固定 `incomeType=FUNDING_FEE`；public API 不暴露 income type。
+
+`symbols` 省略表示查询全账户；传空数组会直接返回空结果且不发远端请求；传多个 symbol 时 SDK 会隐藏 Binance 单 symbol / account-scan 查询路径差异。`limit` 默认 1000，最大 1000，是底层 venue 请求 page size，不保证合并后的 `fees.length <= limit`。`truncated` 是 query-level pagination：为 `true` 时继续用相同条件请求 `nextPage`；它不表示某个单独 symbol 一定还有下一页，也不会返回 per-symbol page info。
+
+拉完整时间窗口时应固定 `endTs`，按 `nextPage` 翻页直到没有下一页：
+
+```ts
+const endTs = Date.now();
+let page = 1;
+
+for (;;) {
+  const result = await client.account.fetchFundingFeeHistory({
+    accountId: "main-binance",
+    symbols,
+    startTs,
+    endTs,
+    page,
+    limit: 1000,
+  });
+
+  ingest(result.fees);
+
+  if (!result.nextPage) {
+    break;
+  }
+  page = result.nextPage;
+}
+```
+
+Binance `tranId` 会映射为 `venueTransactionId`；其它 venue 没有等价字段时该字段可省略。下游做防御性去重时优先使用 `accountId + venue + venueTransactionId`；缺少 `venueTransactionId` 时回退到 `accountId + venue + symbol + asset + fundingTime + amount + tradeId?`。
 
 ## OrderManager
 

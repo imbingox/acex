@@ -82,6 +82,7 @@ test("client exposes venue runtime capabilities without starting", () => {
       snapshot: "supported",
       updates: "websocket",
       lending: "supported",
+      fundingFeeHistory: "supported",
     },
     order: {
       supported: true,
@@ -110,6 +111,7 @@ test("client exposes venue runtime capabilities without starting", () => {
       snapshot: "supported",
       updates: "polling",
       lending: "supported",
+      fundingFeeHistory: "unsupported",
     },
     order: {
       supported: false,
@@ -135,6 +137,7 @@ test("client exposes venue runtime capabilities without starting", () => {
     account: {
       snapshot: "unsupported",
       updates: "unsupported",
+      fundingFeeHistory: "unsupported",
       credentialsRequired: false,
     },
     order: {
@@ -158,6 +161,9 @@ test("client exposes venue runtime capabilities without starting", () => {
       order: {
         supported: false,
         reason: "not_implemented",
+      },
+      account: {
+        fundingFeeHistory: "unsupported",
       },
     });
   }

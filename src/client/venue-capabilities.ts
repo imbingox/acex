@@ -18,6 +18,7 @@ const unsupportedAccount: VenueAccountCapabilities = {
   positions: "unsupported",
   risk: "unsupported",
   lending: "unsupported",
+  fundingFeeHistory: "unsupported",
   credentialsRequired: false,
 };
 

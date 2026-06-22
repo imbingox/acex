@@ -109,6 +109,10 @@ class StubOrderContext implements ClientContext {
     throw new Error("not implemented");
   }
 
+  fetchFundingFeeHistory(): never {
+    throw new Error("not implemented");
+  }
+
   publishRuntimeError(
     _source: AcexInternalError["source"],
     _error: Error,

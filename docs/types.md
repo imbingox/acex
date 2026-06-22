@@ -70,6 +70,7 @@ interface VenueCapabilities {
     positions: "supported" | "unsupported";
     risk: "supported" | "unsupported";
     lending: "supported" | "unsupported";
+    fundingFeeHistory: "supported" | "unsupported";
     credentialsRequired: boolean;
   };
   order: {
@@ -479,6 +480,39 @@ interface FetchFundingRateHistoryResult {
   endTs?: number;
   limit?: number;
   truncated: boolean;
+}
+
+interface FetchFundingFeeHistoryInput {
+  accountId: string;
+  symbols?: string[];
+  startTs?: number;
+  endTs?: number;
+  page?: number;
+  limit?: number;
+}
+
+interface FundingFeeHistoryEntry {
+  accountId: string;
+  venue: Venue;
+  symbol: string;
+  asset: string;
+  amount: string;
+  fundingTime: number;
+  receivedAt: number;
+  venueTransactionId?: string;
+  tradeId?: string;
+  positionSide?: PositionSide;
+  raw: Record<string, unknown>;
+}
+
+interface FetchFundingFeeHistoryResult {
+  fees: FundingFeeHistoryEntry[];
+  startTs?: number;
+  endTs?: number;
+  page: number;
+  limit: number;
+  truncated: boolean;
+  nextPage?: number;
 }
 
 interface L1Book {

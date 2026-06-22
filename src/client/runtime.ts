@@ -8,11 +8,13 @@ import type {
   CancelAllOrdersRequest,
   CancelOrderRequest,
   CreateOrderRequest,
+  FetchFundingFeeHistoryRequest,
   FetchRiskLimitsRequest,
   FetchSymbolFeeRateRequest,
   FetchSymbolRiskLimitRequest,
   MarketAdapter,
   PrivateUserDataAdapter,
+  RawFundingFeeHistoryResult,
   RawOrderUpdate,
   RawSymbolFeeRate,
   RawSymbolLeverageUpdate,
@@ -79,6 +81,7 @@ import {
 } from "../types/index.ts";
 import {
   type ClientContext,
+  type FetchFundingFeeHistoryContextInput,
   hasPrivateCredentials,
   mergeCredentials,
   type PrivateAccountDataConsumer,
@@ -788,6 +791,58 @@ export class AcexClientImpl implements AcexClient, ClientContext {
     };
 
     return adapter.fetchSymbolFeeRate(account.credentials ?? {}, request, {
+      ...account.options,
+      accountId: account.accountId,
+    });
+  }
+
+  fetchFundingFeeHistory(
+    input: FetchFundingFeeHistoryContextInput,
+  ): Promise<RawFundingFeeHistoryResult> {
+    this.assertStarted();
+    const account = this.getRegisteredAccount(input.accountId);
+    const adapter = this.getPrivateAdapter(account.venue);
+    if (
+      adapter.accountCapabilities.fundingFeeHistory === "unsupported" ||
+      !adapter.fetchFundingFeeHistory
+    ) {
+      throw this.createError(
+        "VENUE_NOT_SUPPORTED",
+        `Venue does not support funding fee history queries: ${account.venue}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    if (
+      !hasPrivateCredentials(
+        account.credentials,
+        adapter.accountCapabilities.credentialsRequired,
+      )
+    ) {
+      throw this.createError(
+        "CREDENTIALS_MISSING",
+        `Account credentials are required for funding fee history queries: ${input.accountId}`,
+        {
+          accountId: input.accountId,
+          venue: account.venue,
+          symbol: input.symbol,
+        },
+      );
+    }
+
+    const request: FetchFundingFeeHistoryRequest = {
+      symbol: input.symbol,
+      startTs: input.startTs,
+      endTs: input.endTs,
+      page: input.page ?? 1,
+      limit: input.limit ?? 1000,
+    };
+
+    return adapter.fetchFundingFeeHistory(account.credentials ?? {}, request, {
       ...account.options,
       accountId: account.accountId,
     });

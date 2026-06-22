@@ -1914,3 +1914,37 @@ Implemented Binance riskLeverage updates from ACCOUNT_UPDATE and riskLevelChange
 ### Next Steps
 
 - None - task complete
+
+
+## Session 55: Account funding fee history API
+
+**Date**: 2026-06-22
+**Task**: Account funding fee history API
+**Branch**: `main`
+
+### Summary
+
+Added client.account.fetchFundingFeeHistory with Binance PAPI UM income history support, query-level pagination, capability/errors/docs/changeset, tests, and task artifacts.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `132e0ce` | (see git log) |
+| `0e4a36d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

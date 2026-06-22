@@ -1,5 +1,11 @@
 # @imbingox/acex
 
+## 1.1.0-beta.1
+
+### Minor Changes
+
+- 72508f8: Add `client.account.fetchFundingFeeHistory()` for Binance account-level funding fee income history with query-level pagination and venue transaction ids.
+
 ## 1.1.0-beta.0
 
 ### Minor Changes

@@ -4,5 +4,5 @@
   "initialVersions": {
     "@imbingox/acex": "1.0.0"
   },
-  "changesets": ["deribit-option-market-mvp"]
+  "changesets": ["account-funding-fee-history", "deribit-option-market-mvp"]
 }

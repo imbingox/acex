@@ -1253,7 +1253,7 @@ export class AccountManagerImpl
     const results = await Promise.all(
       input.symbols.map(async (symbol) => {
         try {
-          return await this.context.fetchFundingFeeHistory({
+          const result = await this.context.fetchFundingFeeHistory({
             accountId: input.accountId,
             symbol,
             startTs: input.startTs,
@@ -1261,6 +1261,12 @@ export class AccountManagerImpl
             page: input.page,
             limit: input.limit,
           });
+          return {
+            fees: result.fees.map((fee) =>
+              this.createFundingFeeHistoryEntry({ ...metadata, symbol }, fee),
+            ),
+            truncated: result.truncated,
+          };
         } catch (error) {
           throw this.wrapFundingFeeHistoryFetchError(error, {
             ...metadata,
@@ -1270,11 +1276,7 @@ export class AccountManagerImpl
       }),
     );
 
-    const fees = results.flatMap((result) =>
-      result.fees.map((fee) =>
-        this.createFundingFeeHistoryEntry(metadata, fee),
-      ),
-    );
+    const fees = results.flatMap((result) => result.fees);
     const truncated = results.some((result) => result.truncated);
     return this.createFundingFeeHistoryResult(input, fees, truncated);
   }

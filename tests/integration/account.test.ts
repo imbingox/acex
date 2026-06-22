@@ -383,6 +383,7 @@ test("account fetchFundingFeeHistory returns Binance PAPI UM funding fee income"
     expect(incomeRequest?.url.searchParams.get("timestamp")).toBe(
       "1710000000999",
     );
+    expect(incomeRequest?.url.searchParams.get("recvWindow")).toBe("5000");
   } finally {
     await client.stop();
   }

@@ -438,3 +438,40 @@ test("AccountManager funding fee history wraps adapter failures with symbol meta
     symbol: "BTC/USDT:USDT",
   });
 });
+
+test("AccountManager funding fee history wraps per-symbol normalization failures with symbol metadata", async () => {
+  const context = new StubFundingFeeContext();
+  context.fetchFundingFeeHistoryImpl = async (input) => ({
+    fees: [
+      rawFundingFee({
+        symbol: input.symbol ?? "BTC/USDT:USDT",
+        amount: "not-a-decimal",
+        fundingTime: 1700000000000,
+        venueTransactionId: "bad-decimal",
+      }),
+    ],
+    truncated: false,
+  });
+  const manager = new AccountManagerImpl(context);
+
+  await expect(
+    manager.fetchFundingFeeHistory({
+      accountId: "main-binance",
+      symbols: ["BTC/USDT:USDT"],
+    }),
+  ).rejects.toMatchObject({
+    code: "ACCOUNT_FUNDING_FEE_HISTORY_FETCH_FAILED",
+    details: {
+      accountId: "main-binance",
+      venue: "binance",
+      symbol: "BTC/USDT:USDT",
+    },
+  });
+  expect(context.errors).toHaveLength(1);
+  expect(context.errors[0]).toMatchObject({
+    source: "adapter",
+    accountId: "main-binance",
+    venue: "binance",
+    symbol: "BTC/USDT:USDT",
+  });
+});

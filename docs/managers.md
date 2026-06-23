@@ -35,7 +35,13 @@ try {
 import { BigNumber } from "@imbingox/acex";
 
 const book = client.market.getL1Book({ venue: "binance", symbol });
-if (book && book.bidPrice !== null && book.askPrice !== null) {
+if (
+  book &&
+  book.bidPrice !== null &&
+  book.bidSize !== null &&
+  book.askPrice !== null &&
+  book.askSize !== null
+) {
   const bidAskDiff = new BigNumber(book.askPrice).minus(book.bidPrice);
 }
 ```

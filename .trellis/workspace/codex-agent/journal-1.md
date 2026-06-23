@@ -1948,3 +1948,36 @@ Added client.account.fetchFundingFeeHistory with Binance PAPI UM income history 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 56: Nullable L1 book quote sides
+
+**Date**: 2026-06-23
+**Task**: Nullable L1 book quote sides
+**Branch**: `dev`
+
+### Summary
+
+Implemented nullable L1Book top-of-book semantics for Deribit partial and empty quotes, removed no_quote runtime status, updated docs/specs/tests, and opened PR #109.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b3ce732` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

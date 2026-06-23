@@ -9,9 +9,8 @@ const market = normalizeDeribitOptionInstrument(
 
 test("Deribit stream protocol encodes quote subscriptions", () => {
   const protocol = new DeribitStreamProtocol();
-  const frame = JSON.parse(
-    protocol.encodeSubscribe([{ channel: "l1book", market }]),
-  ) as Record<string, unknown>;
+  const encoded = protocol.encodeSubscribe([{ channel: "l1book", market }]);
+  const frame = JSON.parse(encoded.data) as Record<string, unknown>;
 
   expect(frame).toMatchObject({
     jsonrpc: "2.0",
@@ -21,9 +20,33 @@ test("Deribit stream protocol encodes quote subscriptions", () => {
     },
     id: 1,
   });
+  expect(encoded.ackId).toBe(1);
   expect(protocol.subscriptionKey({ channel: "l1book", market })).toBe(
     "l1book:BTC-21JUN26-57000-C",
   );
+});
+
+test("Deribit stream protocol routes control ACKs with ids", () => {
+  const protocol = new DeribitStreamProtocol();
+
+  expect(protocol.routeMessage({ id: 1, result: ["quote.BTC"] })).toEqual({
+    kind: "ack",
+    ack: { id: 1 },
+  });
+
+  const rejected = protocol.routeMessage({
+    id: 2,
+    error: { message: "invalid channel" },
+  });
+  expect(rejected).toMatchObject({
+    kind: "ack",
+    ack: {
+      id: 2,
+      error: expect.objectContaining({
+        message: "Deribit stream subscription failed: invalid channel",
+      }),
+    },
+  });
 });
 
 test("Deribit stream protocol routes complete quote payloads as L1 data", () => {

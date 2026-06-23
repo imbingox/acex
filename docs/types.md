@@ -655,6 +655,8 @@ interface AccountDataStatus {
 
 `L1Book` 的报价形态从 nullable 字段直接推导：bid/ask 都有值表示双边报价；只有 bid 表示当前可按 bid 卖出该腿；只有 ask 表示当前可按 ask 买入该腿；四个字段全为 `null` 表示当前无可执行报价。SDK 不新增独立 quote state，也不会用 `status.reason` 表达空盘口。
 
+`lease.ready` 和 `L1Book.status.ready` 是两层状态：前者表示订阅已被底层 stream/venue 接受，通常来自 subscribe ACK，也可来自 ACK 前先到达且可路由到该订阅的真实 data；后者表示已经收到首份真实 L1 book state。因此 `await lease.ready` 后，`getL1Book()` 仍可能因为首条 quote 尚未到达而返回 `undefined`。
+
 TypeScript 不会因为检查了 `bidPrice` 就自动把 `bidSize` 收窄为非 null；调用代码里可以用本地 helper 固化 bid/ask 判断：
 
 ```ts

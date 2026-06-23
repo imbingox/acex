@@ -57,7 +57,7 @@ try {
 | `MARKET_INACTIVE` | catalog 中 market 不活跃 |
 | `MARKET_FUNDING_RATE_UNSUPPORTED` | 指定 market 不支持 funding rate |
 | `MARKET_NOT_FOUND` | 指定 symbol 不存在 |
-| `MARKET_STREAM_TIMEOUT` | market stream 首条消息超时 |
+| `MARKET_STREAM_TIMEOUT` | market stream 订阅 ACK / 初始 ready 超时或被拒绝 |
 | `ACCOUNT_ALREADY_EXISTS` | 重复注册 accountId |
 | `ACCOUNT_BOOTSTRAP_FAILED` | account bootstrap 失败 |
 | `ACCOUNT_FUNDING_FEE_HISTORY_FETCH_FAILED` | 账户资金费历史请求失败或响应结构不合法 |

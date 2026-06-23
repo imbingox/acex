@@ -8,6 +8,7 @@ export const DERIBIT_WS_URL = "wss://www.deribit.com/ws/api/v2";
 interface DeribitControlFrame {
   readonly method?: string;
   readonly channels?: string[];
+  readonly id?: number | string;
 }
 
 export const deribitFixtures = {
@@ -137,6 +138,10 @@ function parseControlFrame(frame: string): DeribitControlFrame | undefined {
             (channel): channel is string => typeof channel === "string",
           )
         : undefined,
+      id:
+        typeof record.id === "number" || typeof record.id === "string"
+          ? record.id
+          : undefined,
     };
   } catch {
     return undefined;
@@ -206,7 +211,8 @@ export async function waitForDeribitControlFrame(
   method: "public/subscribe" | "public/unsubscribe",
   channels: string[],
   timeoutMs = 300,
-): Promise<void> {
+  autoAck = true,
+): Promise<number | string | undefined> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -216,7 +222,14 @@ export async function waitForDeribitControlFrame(
         parsed?.method === method &&
         channels.every((channel) => parsed.channels?.includes(channel))
       ) {
-        return;
+        if (autoAck && parsed.id !== undefined) {
+          socket.emitJson({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: parsed.channels ?? [],
+          });
+        }
+        return parsed.id;
       }
     }
 

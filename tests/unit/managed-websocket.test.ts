@@ -206,6 +206,35 @@ test("managed websocket can run without a message watchdog", async () => {
   session.close();
 });
 
+test("managed websocket readyWhen open does not require an initial message after open", async () => {
+  const clock = new FakeClock();
+  const socket = new FakeWebSocket("wss://example.test/ws");
+  const session = createManagedWebSocket<{ value?: string }>({
+    url: socket.url,
+    initialMessageTimeoutMs: 50,
+    readyWhen: "open",
+    parseMessage(data) {
+      return JSON.parse(data) as { value?: string };
+    },
+    onMessage() {},
+    onUnexpectedClose() {},
+    createWebSocket() {
+      return socket as unknown as WebSocket;
+    },
+    now: clock.now,
+    setTimer: clock.setTimer as unknown as typeof setTimeout,
+    clearTimer: clock.clearTimer as unknown as typeof clearTimeout,
+  });
+
+  await session.ready;
+  clock.advance(50);
+
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(clock.timerCount).toBe(0);
+
+  session.close();
+});
+
 test("managed websocket reconnect backoff applies deterministic jitter and clamps to max delay", async () => {
   await expectReconnectDelay({
     random: () => 0,

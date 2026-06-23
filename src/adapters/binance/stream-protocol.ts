@@ -1,4 +1,8 @@
-import type { VenueStreamProtocol } from "../../internal/subscription-multiplexer.ts";
+import type {
+  EncodedVenueControlFrame,
+  VenueControlAck,
+  VenueStreamProtocol,
+} from "../../internal/subscription-multiplexer.ts";
 import type { BinanceMarketDefinition } from "./market-catalog.ts";
 
 export type BinanceStreamChannel = "l1book" | "fundingRate";
@@ -11,6 +15,8 @@ export interface BinanceStreamDescriptor {
 export interface BinanceStreamMessage {
   readonly result?: unknown;
   readonly id?: number | string;
+  readonly code?: number;
+  readonly msg?: string;
   readonly e?: string;
   readonly E?: number;
   readonly s?: string;
@@ -113,11 +119,15 @@ export class BinanceStreamProtocol
     }
   }
 
-  encodeSubscribe(descriptors: BinanceStreamDescriptor[]): string {
+  encodeSubscribe(
+    descriptors: BinanceStreamDescriptor[],
+  ): EncodedVenueControlFrame {
     return this.encodeControlFrame("SUBSCRIBE", descriptors);
   }
 
-  encodeUnsubscribe(descriptors: BinanceStreamDescriptor[]): string {
+  encodeUnsubscribe(
+    descriptors: BinanceStreamDescriptor[],
+  ): EncodedVenueControlFrame {
     return this.encodeControlFrame("UNSUBSCRIBE", descriptors);
   }
 
@@ -127,10 +137,10 @@ export class BinanceStreamProtocol
         subscriptionKey: string;
         payload: BinanceStreamPayload;
       }
-    | { kind: "ack" }
+    | { kind: "ack"; ack: VenueControlAck }
     | { kind: "ignore" } {
     if (hasField(message, "result") || this.isIdOnlyAck(message)) {
-      return { kind: "ack" };
+      return { kind: "ack", ack: this.createAck(message) };
     }
 
     if (
@@ -179,14 +189,18 @@ export class BinanceStreamProtocol
   private encodeControlFrame(
     method: "SUBSCRIBE" | "UNSUBSCRIBE",
     descriptors: BinanceStreamDescriptor[],
-  ): string {
+  ): EncodedVenueControlFrame {
+    const id = this.nextControlFrameId;
     const frame = {
       method,
       params: descriptors.map(streamName),
-      id: this.nextControlFrameId,
+      id,
     };
     this.nextControlFrameId += 1;
-    return JSON.stringify(frame);
+    return {
+      data: JSON.stringify(frame),
+      ackId: id,
+    };
   }
 
   private isIdOnlyAck(message: BinanceStreamMessage): boolean {
@@ -198,5 +212,20 @@ export class BinanceStreamProtocol
       message.a === undefined &&
       message.r === undefined
     );
+  }
+
+  private createAck(message: BinanceStreamMessage): VenueControlAck {
+    if (typeof message.code === "number") {
+      return {
+        id: message.id,
+        error: new Error(
+          message.msg
+            ? `Binance stream subscription failed: ${message.msg}`
+            : `Binance stream subscription failed with code ${message.code}`,
+        ),
+      };
+    }
+
+    return { id: message.id };
   }
 }

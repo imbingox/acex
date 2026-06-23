@@ -14,6 +14,7 @@ import {
 
 beforeEach(() => {
   FakeWebSocket.reset();
+  nextControlFrameId = 1;
 });
 
 interface FakeDescriptor {
@@ -27,6 +28,8 @@ interface FakePayload {
 
 interface FakeMessage {
   ack?: boolean;
+  ackId?: number | string;
+  error?: string;
   key?: string;
   value?: string;
 }
@@ -34,6 +37,7 @@ interface FakeMessage {
 interface FakeControlFrame {
   op: "sub" | "unsub";
   keys: string[];
+  id?: number | string;
 }
 
 interface CallbackLog {
@@ -116,6 +120,8 @@ class FakeClock {
   }
 }
 
+let nextControlFrameId = 1;
+
 const protocol: VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload> =
   {
     subscriptionKey(descriptor): string {
@@ -130,26 +136,44 @@ const protocol: VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload> =
     parseMessage(data): FakeMessage | undefined {
       return JSON.parse(data) as FakeMessage;
     },
-    encodeSubscribe(descriptors): string {
-      return JSON.stringify({
-        op: "sub",
-        keys: descriptors.map((descriptor) => descriptor.key),
-      } satisfies FakeControlFrame);
+    encodeSubscribe(descriptors) {
+      const id = nextControlFrameId;
+      nextControlFrameId += 1;
+      return {
+        data: JSON.stringify({
+          op: "sub",
+          keys: descriptors.map((descriptor) => descriptor.key),
+          id,
+        } satisfies FakeControlFrame),
+        ackId: id,
+      };
     },
-    encodeUnsubscribe(descriptors): string {
-      return JSON.stringify({
-        op: "unsub",
-        keys: descriptors.map((descriptor) => descriptor.key),
-      } satisfies FakeControlFrame);
+    encodeUnsubscribe(descriptors) {
+      const id = nextControlFrameId;
+      nextControlFrameId += 1;
+      return {
+        data: JSON.stringify({
+          op: "unsub",
+          keys: descriptors.map((descriptor) => descriptor.key),
+          id,
+        } satisfies FakeControlFrame),
+        ackId: id,
+      };
     },
     routeMessage(
       message,
     ):
       | { kind: "data"; subscriptionKey: string; payload: FakePayload }
-      | { kind: "ack" }
+      | { kind: "ack"; ack: { id?: number | string; error?: Error } }
       | { kind: "ignore" } {
       if (message.ack) {
-        return { kind: "ack" };
+        return {
+          kind: "ack",
+          ack: {
+            id: message.ackId,
+            error: message.error ? new Error(message.error) : undefined,
+          },
+        };
       }
 
       if (message.key && message.value) {
@@ -163,6 +187,26 @@ const protocol: VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload> =
       return { kind: "ignore" };
     },
   };
+
+const noAckProtocol: VenueStreamProtocol<
+  FakeMessage,
+  FakeDescriptor,
+  FakePayload
+> = {
+  ...protocol,
+  encodeSubscribe(descriptors): string {
+    return JSON.stringify({
+      op: "sub",
+      keys: descriptors.map((descriptor) => descriptor.key),
+    } satisfies FakeControlFrame);
+  },
+  encodeUnsubscribe(descriptors): string {
+    return JSON.stringify({
+      op: "unsub",
+      keys: descriptors.map((descriptor) => descriptor.key),
+    } satisfies FakeControlFrame);
+  },
+};
 
 function createCallbacks(): {
   callbacks: MultiplexedStreamCallbacks<FakePayload>;
@@ -257,12 +301,32 @@ function emitRaw(socket: FakeWebSocket, data: string): void {
 }
 
 function sentFrame(socket: FakeWebSocket, index: number): FakeControlFrame {
+  const parsed = sentControlFrame(socket, index);
+  return {
+    op: parsed.op,
+    keys: parsed.keys,
+  };
+}
+
+function sentControlFrame(
+  socket: FakeWebSocket,
+  index: number,
+): FakeControlFrame {
   const frame = socket.sentFrames[index];
   if (!frame) {
     throw new Error(`Missing sent frame ${index}`);
   }
 
   return JSON.parse(frame) as FakeControlFrame;
+}
+
+function ackFrame(socket: FakeWebSocket, index: number, error?: string): void {
+  const frame = sentControlFrame(socket, index);
+  if (frame.id === undefined) {
+    throw new Error(`Sent frame ${index} has no ack id`);
+  }
+
+  socket.emitJson({ ack: true, ackId: frame.id, error });
 }
 
 function socketsForUrl(url: string): FakeWebSocket[] {
@@ -395,8 +459,10 @@ test("re-subscribing an existing key in a pool shares the original connection", 
   const secondSocket = await waitForSocket("wss://fake.test/alpha", 1);
   await Promise.resolve();
   clock.advance(0);
+  ackFrame(firstSocket, 0);
   firstSocket.emitJson({ key: "a", value: "A1" });
   firstSocket.emitJson({ key: "b", value: "B1" });
+  ackFrame(secondSocket, 0);
 
   const secondHandle = multiplexer.subscribe(descriptor("c"), second.callbacks);
 
@@ -404,9 +470,9 @@ test("re-subscribing an existing key in a pool shares the original connection", 
   expect(secondSocket.readyState).toBe(FakeWebSocket.OPEN);
   expect(secondSocket.sentFrames).toHaveLength(1);
 
+  await Promise.all([firstHandle.ready, secondHandle.ready]);
   secondSocket.emitJson({ key: "c", value: "shared" });
 
-  await Promise.all([firstHandle.ready, secondHandle.ready]);
   expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
     "shared",
   ]);
@@ -483,10 +549,10 @@ test("different connection keys create separate sockets", async () => {
   ).toEqual(["wss://fake.test/alpha", "wss://fake.test/beta"]);
 });
 
-test("subscription ready resolves only after its first data message", async () => {
+test("subscription ready resolves after subscribe acknowledgement", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
-  const { callbacks } = createCallbacks();
+  const { callbacks, log } = createCallbacks();
   const handle = multiplexer.subscribe(descriptor("a"), callbacks);
 
   const socket = await openSocket("wss://fake.test/alpha");
@@ -494,9 +560,145 @@ test("subscription ready resolves only after its first data message", async () =
 
   await expectPending(handle.ready);
 
-  socket.emitJson({ key: "a", value: "first" });
+  ackFrame(socket, 0);
 
   await handle.ready;
+  expect(log.payloads).toHaveLength(0);
+});
+
+test("subscription ready resolves after send when protocol has no ACK id", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexerWithProtocol(clock, noAckProtocol);
+  const { callbacks } = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  expect(sentFrame(socket, 0)).toEqual({ op: "sub", keys: ["a"] });
+  await handle.ready;
+});
+
+test("subscription data before ACK resolves ready and survives ACK timeout", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const { callbacks, log } = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  socket.emitJson({ key: "a", value: "first-before-ack" });
+
+  await handle.ready;
+  expect(log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "first-before-ack",
+  ]);
+
+  clock.advance(5_000);
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+
+  ackFrame(socket, 0);
+  socket.emitJson({ key: "a", value: "after-ack-timeout" });
+
+  expect(log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "first-before-ack",
+    "after-ack-timeout",
+  ]);
+});
+
+test("late ACK error after data-ready reports error without dropping subscription", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const callbacks = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  socket.emitJson({ key: "a", value: "first-before-ack" });
+  await handle.ready;
+
+  clock.advance(5_000);
+  ackFrame(socket, 0, "late reject");
+
+  expect(callbacks.log.errors.map((error) => error.message)).toEqual([
+    "late reject",
+  ]);
+  expect(callbacks.log.disconnected).toBe(1);
+
+  socket.emitJson({ key: "a", value: "still-routed" });
+  expect(callbacks.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "first-before-ack",
+    "still-routed",
+  ]);
+});
+
+test("subscribe ACK error rejects pending subscribers and removes failed subscription", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const first = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+  const second = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  ackFrame(socket, 0, "denied");
+
+  const results = await Promise.allSettled([first.ready, second.ready]);
+  expect(results.map((result) => result.status)).toEqual([
+    "rejected",
+    "rejected",
+  ]);
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+
+  const fresh = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+  const nextSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+  ackFrame(nextSocket, 0);
+
+  await fresh.ready;
+  expect(nextSocket).not.toBe(socket);
+});
+
+test("subscribe ACK timeout rejects ready and removes failed subscription", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const handle = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  const failure = handle.ready.catch((error) => error);
+  clock.advance(5_000);
+
+  expect(await failure).toBeInstanceOf(Error);
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+
+  const fresh = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+  const nextSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+  ackFrame(nextSocket, 0);
+
+  await fresh.ready;
+  expect(nextSocket).not.toBe(socket);
 });
 
 test("re-subscribing the only key shares callbacks without rebuilding the socket", async () => {
@@ -509,6 +711,7 @@ test("re-subscribing the only key shares callbacks without rebuilding the socket
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
+  ackFrame(socket, 0);
 
   const secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
 
@@ -520,9 +723,9 @@ test("re-subscribing the only key shares callbacks without rebuilding the socket
   expect(socket.readyState).toBe(FakeWebSocket.OPEN);
   expect(socket.sentFrames).toHaveLength(1);
 
+  await Promise.all([firstHandle.ready, secondHandle.ready]);
   socket.emitJson({ key: "a", value: "shared" });
 
-  await Promise.all([firstHandle.ready, secondHandle.ready]);
   expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
     "shared",
   ]);
@@ -564,6 +767,7 @@ test("subscribing the same key during payload delivery does not receive the in-f
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
+  ackFrame(socket, 0);
 
   socket.emitJson({ key: "a", value: "M1" });
 
@@ -576,7 +780,7 @@ test("subscribing the same key during payload delivery does not receive the in-f
     throw new Error("Expected the second subscription to be created");
   }
   expect(second.log.payloads).toHaveLength(0);
-  await expectPending(createdSecondHandle.ready);
+  await createdSecondHandle.ready;
 
   socket.emitJson({ key: "a", value: "M2" });
 
@@ -599,12 +803,12 @@ test("closing one shared handle leaves the remote subscription active", async ()
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
+  ackFrame(socket, 0);
 
   const secondHandle = multiplexer.subscribe(descriptor("a"), second.callbacks);
 
-  socket.emitJson({ key: "a", value: "shared" });
-
   await Promise.all([firstHandle.ready, secondHandle.ready]);
+  socket.emitJson({ key: "a", value: "shared" });
 
   firstHandle.close();
 
@@ -703,7 +907,7 @@ test("retired connection does not reconnect when socket closes before unsubscrib
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
-  socket.emitJson({ key: "a", value: "ready" });
+  ackFrame(socket, 0);
   await handle.ready;
 
   handle.close();
@@ -771,6 +975,62 @@ test("reconnect creates a new socket and replays active subscriptions", async ()
   ]);
 });
 
+test("reconnect replay ACK error reports error without dropping a ready subscription", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const callbacks = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  ackFrame(socket, 0);
+  await handle.ready;
+  socket.emitJson({ key: "a", value: "before-reconnect" });
+
+  socket.disconnect();
+  clock.advance(10);
+  const reconnectSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+  ackFrame(reconnectSocket, 0, "replay rejected");
+
+  expect(callbacks.log.errors.map((error) => error.message)).toEqual([
+    "replay rejected",
+  ]);
+  expect(callbacks.log.disconnected).toBe(2);
+
+  reconnectSocket.emitJson({ key: "a", value: "still-routed" });
+  expect(callbacks.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "before-reconnect",
+    "still-routed",
+  ]);
+});
+
+test("stale ACK from a disconnected socket does not resolve pending ready", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const handle = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  const staleAckId = sentControlFrame(socket, 0).id;
+  socket.disconnect();
+
+  clock.advance(10);
+  const reconnectSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+
+  socket.emitJson({ ack: true, ackId: staleAckId });
+  await expectPending(handle.ready, 10);
+
+  ackFrame(reconnectSocket, 0);
+  await handle.ready;
+});
+
 test("reconnect callback fires only after an established connection opens again", async () => {
   const clock = new FakeClock();
   const reconnects: Array<{ connectionKey: string; keys: string[] }> = [];
@@ -797,9 +1057,10 @@ test("reconnect callback fires only after an established connection opens again"
   const handle = multiplexer.subscribe(descriptor("a"), callbacks);
   const firstSocket = await openSocket("wss://fake.test/alpha");
   await Promise.resolve();
+  clock.advance(0);
   expect(reconnects).toEqual([]);
 
-  emitRaw(firstSocket, JSON.stringify({ key: "a", value: "first" }));
+  ackFrame(firstSocket, 0);
   await handle.ready;
   firstSocket.disconnect();
   clock.advance(10);
@@ -882,7 +1143,7 @@ test("ack frames do not trigger payload callbacks", async () => {
 
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
-  socket.emitJson({ ack: true });
+  socket.emitJson({ ack: true, ackId: "unknown" });
 
   expect(log.payloads).toHaveLength(0);
   await expectPending(handle.ready);
@@ -903,9 +1164,8 @@ test("heartbeat idle-timeout sends ping only after inbound idle interval", async
   const socket = await openSocket("wss://fake.test/alpha");
   clock.advance(0);
 
-  expect(socket.sentFrames).toEqual([
-    JSON.stringify({ op: "sub", keys: ["a"] } satisfies FakeControlFrame),
-  ]);
+  expect(socket.sentFrames).toHaveLength(1);
+  expect(sentFrame(socket, 0)).toEqual({ op: "sub", keys: ["a"] });
 
   clock.advance(49);
   expect(socket.sentFrames).toHaveLength(1);
@@ -932,11 +1192,9 @@ test("heartbeat fixed-interval sends ping every interval", async () => {
   clock.advance(25);
   clock.advance(25);
 
-  expect(socket.sentFrames).toEqual([
-    JSON.stringify({ op: "sub", keys: ["a"] } satisfies FakeControlFrame),
-    "ping",
-    "ping",
-  ]);
+  expect(socket.sentFrames).toHaveLength(3);
+  expect(sentFrame(socket, 0)).toEqual({ op: "sub", keys: ["a"] });
+  expect(socket.sentFrames.slice(1)).toEqual(["ping", "ping"]);
 });
 
 test("heartbeat countAnyInboundAsActivity resets idle timer", async () => {
@@ -1043,8 +1301,9 @@ test("heartbeat pong timeout reconnects and replays shared subscriptions", async
     keys: ["a"],
   });
 
-  reconnectSocket.emitJson({ key: "a", value: "after-reconnect" });
+  ackFrame(reconnectSocket, 0);
   await Promise.all([firstHandle.ready, secondHandle.ready]);
+  reconnectSocket.emitJson({ key: "a", value: "after-reconnect" });
 
   expect(first.log.payloads.map((entry) => entry.payload.value)).toEqual([
     "after-reconnect",
@@ -1100,8 +1359,7 @@ test("connections without heartbeat do not send application pings when idle", as
   clock.advance(0);
   clock.advance(1_000);
 
-  expect(socket.sentFrames).toEqual([
-    JSON.stringify({ op: "sub", keys: ["a"] } satisfies FakeControlFrame),
-  ]);
+  expect(socket.sentFrames).toHaveLength(1);
+  expect(sentFrame(socket, 0)).toEqual({ op: "sub", keys: ["a"] });
   expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(1);
 });

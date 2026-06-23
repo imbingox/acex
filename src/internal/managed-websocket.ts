@@ -378,6 +378,10 @@ export function createManagedWebSocket<TMessage>(
       lastHeartbeatActivityAt = now();
       options.onOpen?.();
       if (readyWhen === "open") {
+        if (initialTimeout) {
+          clearTimer(initialTimeout);
+          initialTimeout = undefined;
+        }
         resolveIfPending();
       }
       scheduleHeartbeat(socket);

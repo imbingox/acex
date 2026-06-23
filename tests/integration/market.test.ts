@@ -643,7 +643,13 @@ test("market stream timeout exposes cause and market context details", async () 
   const subscribePromise = l1Lease.ready.catch((error) => error);
 
   const socket = await waitForSocket(BINANCE_USDM_WS_BASE_URL, 0);
-  await waitForBinanceControlFrame(socket, "SUBSCRIBE", ["btcusdt@bookTicker"]);
+  await waitForBinanceControlFrame(
+    socket,
+    "SUBSCRIBE",
+    ["btcusdt@bookTicker"],
+    300,
+    false,
+  );
 
   const failure = await subscribePromise;
   expect(failure).toBeInstanceOf(AcexError);

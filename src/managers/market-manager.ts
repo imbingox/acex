@@ -1430,7 +1430,7 @@ export class MarketManagerImpl
       throw error;
     }
 
-    if (record.l1BookStreamReady && record.l1Book) {
+    if (record.l1BookStreamReady) {
       state.resolveReady();
     }
 
@@ -1462,7 +1462,7 @@ export class MarketManagerImpl
       throw error;
     }
 
-    if (record.fundingRateStreamReady && record.fundingRate) {
+    if (record.fundingRateStreamReady) {
       state.resolveReady();
     }
 
@@ -1771,7 +1771,6 @@ export class MarketManagerImpl
           update,
           record.l1Book,
         );
-        this.resolvePendingLeases(record.l1BookLeases);
 
         const event: L1BookUpdatedEvent = {
           type: "l1_book.updated",
@@ -1833,7 +1832,6 @@ export class MarketManagerImpl
           update,
           record.fundingRate,
         );
-        this.resolvePendingLeases(record.fundingRateLeases);
 
         const event: FundingRateUpdatedEvent = {
           type: "funding_rate.updated",

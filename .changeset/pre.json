@@ -7,6 +7,7 @@
   "changesets": [
     "account-funding-fee-history",
     "deribit-option-market-mvp",
-    "nullable-l1-book"
+    "nullable-l1-book",
+    "quiet-options-lease-ready"
   ]
 }

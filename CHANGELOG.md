@@ -1,5 +1,13 @@
 # @imbingox/acex
 
+## 1.1.0-beta.2
+
+### Minor Changes
+
+- 57a0653: Change L1 Book snapshots to nullable top-of-book state. `bidPrice` / `bidSize` / `askPrice` / `askSize` are now `string | null`, partial and empty books resolve L1 subscription readiness, and `status.reason: "no_quote"` has been removed.
+
+  Migration: `await lease.ready` now means the SDK has received the first readable top-of-book state, not necessarily a complete two-sided quote. Check `askPrice` / `askSize` before buying, `bidPrice` / `bidSize` before selling, and treat all four fields being `null` as an empty book rather than a subscription failure.
+
 ## 1.1.0-beta.1
 
 ### Minor Changes

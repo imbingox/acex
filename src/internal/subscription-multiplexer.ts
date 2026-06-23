@@ -167,8 +167,8 @@ function normalizeControlFrameEncoding(
   return typeof encoded === "string" ? { data: encoded } : encoded;
 }
 
-function controlAckKey(id: ControlFrameAckId): ControlFrameAckId {
-  return typeof id === "number" ? id : String(id);
+function controlAckKey(id: ControlFrameAckId): string {
+  return String(id);
 }
 
 export class SubscriptionMultiplexer<

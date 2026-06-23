@@ -332,6 +332,7 @@ test("Deribit quote before subscribe ACK updates book and resolves L1 ready", as
     300,
     false,
   );
+  expect(controlId).toBeDefined();
 
   emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
     timestamp: 1710000000004,
@@ -393,6 +394,7 @@ test("Deribit subscribe ACK error rejects L1 ready", async () => {
     300,
     false,
   );
+  expect(controlId).toBeDefined();
   socket.emitJson({
     jsonrpc: "2.0",
     id: controlId,

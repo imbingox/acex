@@ -566,6 +566,23 @@ test("subscription ready resolves after subscribe acknowledgement", async () => 
   expect(log.payloads).toHaveLength(0);
 });
 
+test("subscription ACK id matching canonicalizes numbers and strings", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const handle = multiplexer.subscribe(
+    descriptor("a"),
+    createCallbacks().callbacks,
+  );
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  const controlId = sentControlFrame(socket, 0).id;
+
+  socket.emitJson({ ack: true, ackId: String(controlId) });
+
+  await handle.ready;
+});
+
 test("subscription ready resolves after send when protocol has no ACK id", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexerWithProtocol(clock, noAckProtocol);

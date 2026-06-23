@@ -1,6 +1,10 @@
 import BigNumber from "bignumber.js";
 import { toCanonical } from "../../internal/decimal.ts";
-import type { VenueStreamProtocol } from "../../internal/subscription-multiplexer.ts";
+import type {
+  EncodedVenueControlFrame,
+  VenueControlAck,
+  VenueStreamProtocol,
+} from "../../internal/subscription-multiplexer.ts";
 import type { OptionMarketDefinition } from "../../types/index.ts";
 
 export type DeribitStreamChannel = "l1book";
@@ -122,11 +126,15 @@ export class DeribitStreamProtocol
     }
   }
 
-  encodeSubscribe(descriptors: DeribitStreamDescriptor[]): string {
+  encodeSubscribe(
+    descriptors: DeribitStreamDescriptor[],
+  ): EncodedVenueControlFrame {
     return this.encodeControlFrame("public/subscribe", descriptors);
   }
 
-  encodeUnsubscribe(descriptors: DeribitStreamDescriptor[]): string {
+  encodeUnsubscribe(
+    descriptors: DeribitStreamDescriptor[],
+  ): EncodedVenueControlFrame {
     return this.encodeControlFrame("public/unsubscribe", descriptors);
   }
 
@@ -136,10 +144,10 @@ export class DeribitStreamProtocol
         subscriptionKey: string;
         payload: DeribitStreamPayload;
       }
-    | { kind: "ack" }
+    | { kind: "ack"; ack: VenueControlAck }
     | { kind: "ignore" } {
     if (message.id !== undefined && message.method !== "subscription") {
-      return { kind: "ack" };
+      return { kind: "ack", ack: this.createAck(message) };
     }
 
     if (message.method !== "subscription" || !isRecord(message.params)) {
@@ -183,7 +191,8 @@ export class DeribitStreamProtocol
   private encodeControlFrame(
     method: "public/subscribe" | "public/unsubscribe",
     descriptors: DeribitStreamDescriptor[],
-  ): string {
+  ): EncodedVenueControlFrame {
+    const id = this.nextControlFrameId;
     const frame = {
       jsonrpc: "2.0",
       method,
@@ -192,9 +201,40 @@ export class DeribitStreamProtocol
           quoteChannel(descriptor.market.id),
         ),
       },
-      id: this.nextControlFrameId,
+      id,
     };
     this.nextControlFrameId += 1;
-    return JSON.stringify(frame);
+    return {
+      data: JSON.stringify(frame),
+      ackId: id,
+    };
+  }
+
+  private createAck(message: DeribitStreamMessage): VenueControlAck {
+    if (message.error !== undefined) {
+      return {
+        id: message.id,
+        error: new Error(
+          `Deribit stream subscription failed: ${this.formatError(message.error)}`,
+        ),
+      };
+    }
+
+    return { id: message.id };
+  }
+
+  private formatError(error: unknown): string {
+    if (isRecord(error)) {
+      const message = error.message;
+      if (typeof message === "string" && message.length > 0) {
+        return message;
+      }
+    }
+
+    if (typeof error === "string" && error.length > 0) {
+      return error;
+    }
+
+    return "unknown error";
   }
 }

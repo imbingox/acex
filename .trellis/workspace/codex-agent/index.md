@@ -7,8 +7,8 @@
 ## Current Status
 
 <!-- @@@auto:current-status -->
-- **Active File**: `journal-1.md`
-- **Total Sessions**: 56
+- **Active File**: `journal-2.md`
+- **Total Sessions**: 57
 - **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,8 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1983 | Active |
+| `journal-2.md` | ~40 | Active |
+| `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 57 | 2026-06-23 | L1 lease ready uses subscription acceptance | `6f9c0b9` | `codex/l1-lease-ready-ack` |
 | 56 | 2026-06-23 | Nullable L1 book quote sides | `b3ce732` | `dev` |
 | 55 | 2026-06-22 | Account funding fee history API | `132e0ce`, `0e4a36d` | `main` |
 | 54 | 2026-06-21 | Deribit 期权行情 MVP | `77eca3b` | `main` |

@@ -36,14 +36,14 @@ export interface MarketManager {
 ### 3. Contracts
 
 - `acquire*Subscription()` 只完成 client started 校验、market resolution、logical lease 注册和底层 stream 启动；不等待首条 market data。
-- 调用方必须 `await lease.ready` 等待该 lease 的首次可用数据。
+- 调用方必须 `await lease.ready` 等待该 lease 的 logical subscription 被底层 stream / venue 接受。`lease.ready` 不保证 snapshot 已存在。
 - 每次 acquire 返回独立 lease；`lease.close()` 只释放当前 lease，且必须幂等。
 - 同一 `venue:symbol` + channel 只维护一条真实底层 `StreamHandle`；L1 book 与 funding rate 的 lease/ref-count 彼此独立。
 - 最后一个 active lease 关闭时，manager 才关闭该 channel 的底层 stream，并把对应 snapshot status 标为 inactive。
 - `client.stop()` 关闭所有底层 market websocket，但保留 active logical leases；`client.start()` 后按仍 active 的 leases 自动恢复底层 stream。
 - stopped 期间调用 `lease.close()` 正常减少引用；某 channel 最后一个 lease 关闭后，后续 start 不再恢复该 channel。
 - `MarketSubscriptionLease.ready` 是首次 ready barrier，不是可重置生命周期 signal；restart 后恢复状态通过 snapshot/status/events 观察。
-- 对 L1 Book，`lease.ready` 在首份 top-of-book 状态到达后 resolve；two-sided、bid-only、ask-only 和四字段全 `null` 的 empty 都是可读状态。
+- 对 L1 Book，`lease.ready` 在订阅 ACK / 等价订阅接受信号到达后 resolve。可确认属于该 pending subscription 的真实 top-of-book 如果先于 ACK 到达，也属于等价订阅接受信号。首条真实 top-of-book 到达后才创建 `L1Book`；two-sided、bid-only、ask-only 和四字段全 `null` 的 empty 都是可读 L1 state。
 - Empty L1 Book 是 fresh/readable market state：`status.ready = true`、`freshness = "fresh"`、`reason` 为空。空盘口不得通过 status reason 表达。
 
 ### 4. Validation & Error Matrix
@@ -53,8 +53,10 @@ export interface MarketManager {
 | client 未 started 时 acquire | `acquire*Subscription()` reject `CLIENT_NOT_STARTED`，不创建 lease |
 | market 不存在 / inactive / venue 不支持 | `acquire*Subscription()` reject 对应 market error，且不创建 lease |
 | funding rate 用在非 swap contract market | reject `MARKET_FUNDING_RATE_UNSUPPORTED` |
-| 首条 market data timeout / stream initial ready reject | `lease.ready` reject `MARKET_STREAM_TIMEOUT`，pending lease 自动释放，底层 stream 关闭并清空 |
-| L1 ready 前收到 bid-only / ask-only / empty | `lease.ready` resolve，getter 返回 nullable `L1Book`，并发布 `l1_book.updated` |
+| subscribe ACK timeout / stream initial ready reject | `lease.ready` reject `MARKET_STREAM_TIMEOUT`，pending lease 自动释放，底层 stream 关闭并清空 |
+| L1 ready 后暂时没有首条 quote | `lease.ready` 已 resolve，`getL1Book()` 仍可为 `undefined` |
+| ACK 前收到可路由 quote data | 更新 `L1Book` 并 resolve 对应 `lease.ready`；后续 ACK success 幂等 |
+| 收到 bid-only / ask-only / empty quote | getter 返回 nullable `L1Book`，并发布 `l1_book.updated` |
 | 多个 pending leases 共享同一条初始 stream 且该 stream 失败 | 所有仍 pending 的相关 leases 都 reject，且引用不泄漏 |
 | `lease.close()` 发生在 ready settle 前 | 当前 lease 释放，`lease.ready` reject 明确 close-before-ready 错误 |
 | `lease.close()` 发生在 ready resolved 后 | 当前 lease 释放；不是最后一个 lease 时底层 stream 保持运行 |

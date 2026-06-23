@@ -8,7 +8,7 @@
 
 ### Ready barrier
 
-`acquire*Subscription()` 返回 lease 后，调用方用 `lease.ready` 等待第一份可读快照：
+`acquire*Subscription()` 返回 lease 后，调用方用 `lease.ready` 等待该 logical subscription 被底层 stream/venue 接受：
 
 ```ts
 const lease = await client.market.acquireL1BookSubscription({
@@ -18,12 +18,15 @@ const lease = await client.market.acquireL1BookSubscription({
 try {
   await lease.ready;
   const snapshot = client.market.getL1Book({ venue: "binance", symbol });
+  if (!snapshot) {
+    return;
+  }
 } finally {
   lease.close();
 }
 ```
 
-如果首条可读数据迟迟不到，`lease.ready` 会 reject，SDK 会自动释放该 lease。对 L1 Book 来说，可读快照是一份 top-of-book 状态，不要求双边报价完整；bid-only、ask-only 和四字段全 `null` 的空盘口都会让 `lease.ready` resolve。空盘口是 fresh/readable market state，不会写入 status reason。
+如果 subscribe ACK 迟迟不到或交易所拒绝订阅，`lease.ready` 会 reject，SDK 会自动释放该 lease。可确认属于 pending subscription 的真实 data 如果先于 ACK 到达，也会视为订阅已接受。`lease.ready` 不保证首条 market data 已经到达；低流动性 symbol 在 ready 后 `getL1Book()` 仍可能暂时返回 `undefined`。对 L1 Book 来说，一旦交易所推送 top-of-book，bid-only、ask-only 和四字段全 `null` 的空盘口都会更新快照并发布事件。空盘口是 fresh/readable market state，不会写入 status reason。
 
 稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。行情多路复用连接健康时，单个 symbol 长时间没有新盘口推送不会被标记为 `stale`；这通常表示盘口未变化，若需要 per-symbol 活跃度请用 `lastReceivedAt` 自行计算 age。
 
@@ -55,7 +58,7 @@ if (
 | 字段 | 语义 |
 |---|---|
 | `activity` | `"active"` 表示当前订阅活跃；`"inactive"` 表示已退订或停止 |
-| `ready` | 是否已有首份可读数据 |
+| `ready` | 对 snapshot status 表示是否已有首份可读数据；对 lease.ready 表示订阅已被接受 |
 | `freshness` | market stream 新鲜度：`"fresh"` / `"stale"` / `"reconciling"` |
 | `runtimeStatus` | private stream 状态：`"bootstrap_pending"` / `"healthy"` / `"degraded"` / `"reconnecting"` / `"reconciling"` / `"stopped"` |
 | `reason` | 状态原因，如 `credentials_missing`、`http_failed`、`rate_limited`、`ws_disconnected` |
@@ -331,7 +334,7 @@ try {
 }
 ```
 
-Deribit option L1 使用 public WS `quote.<instrument>`。SDK 会把每份 quote 映射为 nullable top-of-book：bid price/size 都有限且大于 0 时 bid 侧有效，ask price/size 都有限且大于 0 时 ask 侧有效；任一字段无效则该侧 price/size 成对置为 `null`。two-sided、bid-only、ask-only 和 empty 都会发布 `l1_book.updated`，并让首个 `lease.ready` resolve。
+Deribit option L1 使用 public WS `quote.<instrument>`。SDK 会在 Deribit `public/subscribe` ACK 后让 `lease.ready` resolve；如果 matching quote data 先于 ACK 到达，也会更新 book 并 resolve 对应 lease。如果首条 quote 暂时没有到达，`getL1Book()` 仍为 `undefined`。SDK 会把每份 quote 映射为 nullable top-of-book：bid price/size 都有限且大于 0 时 bid 侧有效，ask price/size 都有限且大于 0 时 ask 侧有效；任一字段无效则该侧 price/size 成对置为 `null`。two-sided、bid-only、ask-only 和 empty 都会发布 `l1_book.updated`。
 
 有 ask 表示当前可按 ask 买入该期权腿，有 bid 表示当前可按 bid 卖出该期权腿；四个字段全为 `null` 表示当前无可执行报价。空盘口仍是 fresh/readable market state：`status.ready = true`、`freshness = "fresh"`、`reason` 为空。批量订阅低流动性期权时，可以等待所有 lease ready 后逐个读取 nullable bid/ask，而不是把单边或空盘口当作订阅失败。
 
@@ -353,7 +356,7 @@ console.log({
 });
 ```
 
-订阅上百个 Deribit option symbol 时，建议把 `acquireL1BookSubscription()` 分批启动，并用 `Promise.allSettled()` 收集结果。partial 或 empty book 已经是有效 ready state，不应触发重订；只有 `lease.ready` reject、网络长期不可用或订阅列表重新筛选时才处理 lease 生命周期。对 reject 的订阅使用 capped backoff + jitter 重试，避免在低流动性或临时断线时集中重连；当 symbol 不再需要观察时主动 `lease.close()`。
+订阅上百个 Deribit option symbol 时，建议把 `acquireL1BookSubscription()` 分批启动，并用 `Promise.allSettled()` 收集订阅建立结果。ready 后没有 book 通常只是该低流动性 instrument 尚无首条 quote，不应触发重订；partial 或 empty book 也都是有效 L1 state。只有 `lease.ready` reject、网络长期不可用或订阅列表重新筛选时才处理 lease 生命周期。对 reject 的订阅使用 capped backoff + jitter 重试，避免临时断线时集中重连；当 symbol 不再需要观察时主动 `lease.close()`。
 
 Deribit option L1 的 bid/ask 价格单位是 `premiumCurrency`；strike 单位是 `strikeCurrency`，结算币种是 `settle`。SDK 不自动做单位换算，调用方如需和其他市场数据组合，应自行处理不同字段的计价单位。
 

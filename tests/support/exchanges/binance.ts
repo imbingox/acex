@@ -29,6 +29,7 @@ export const PAPI_ACCOUNT_WS_URL = papiAccountWsUrl();
 interface BinanceControlFrame {
   readonly method?: string;
   readonly params?: string[];
+  readonly id?: number | string;
 }
 
 const binanceFixtures = {
@@ -467,6 +468,10 @@ function parseControlFrame(frame: string): BinanceControlFrame | undefined {
     return {
       method: typeof record.method === "string" ? record.method : undefined,
       params,
+      id:
+        typeof record.id === "number" || typeof record.id === "string"
+          ? record.id
+          : undefined,
     };
   } catch {
     return undefined;
@@ -478,7 +483,8 @@ export async function waitForBinanceControlFrame(
   method: "SUBSCRIBE" | "UNSUBSCRIBE",
   streams: string[],
   timeoutMs = 300,
-): Promise<void> {
+  autoAck = true,
+): Promise<number | string | undefined> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -488,7 +494,13 @@ export async function waitForBinanceControlFrame(
         parsed?.method === method &&
         streams.every((stream) => parsed.params?.includes(stream))
       ) {
-        return;
+        if (autoAck && parsed.id !== undefined) {
+          socket.emitJson({
+            result: null,
+            id: parsed.id,
+          });
+        }
+        return parsed.id;
       }
     }
 

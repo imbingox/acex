@@ -482,7 +482,7 @@ export interface AcexErrorDetails {
 | account/order bootstrap 返回 `{code,msg}` | `ACCOUNT_BOOTSTRAP_FAILED` / `ORDER_BOOTSTRAP_FAILED`，保留 `cause`，填 `details.venueError` | 不填 |
 | market catalog/server-time 返回纯文本/HTML | 不填 `details.venueError`，只填 `details.transport.rawBody/status/url` | 不填 |
 | market public REST query（public aggregate trades / raw historical trades / funding history）失败 | `MARKET_PUBLIC_TRADES_FETCH_FAILED` / `MARKET_FUNDING_RATE_HISTORY_FETCH_FAILED`，保留 `cause`，填 `details.venue/symbol` 和可用 `details.transport` / `details.venueError`。Binance `fetchPublicRawTrades()` 缺 market API key 也包装为 `MARKET_PUBLIC_TRADES_FETCH_FAILED`，且必须在加载 market catalog 前失败，不发任何远端请求。 | 不填 |
-| market stream 首包超时 | `MARKET_STREAM_TIMEOUT`，保留 `cause`，填 `details.venue/symbol`，不填 `details.venueError` | 不填 |
+| market stream 订阅 ACK / 初始 ready 超时或被拒绝 | `MARKET_STREAM_TIMEOUT`，保留 `cause`，填 `details.venue/symbol`，不填 `details.venueError` | 不填 |
 | network/timeout/parse 无可结构化交易所 body | 不填 `details.venueError`，保留 `cause` 与可用 transport metadata | 订单命令为 `unknown`，其他错误不填 |
 | 本地订单输入校验错误 | 可填 `venue/accountId/symbol`，不填 `cause` / `transport` | `not_placed` |
 | 敏感 query/body/header 出现在底层请求 | public `message`、`details.transport.url`、`details.transport.rawBody` 都不得泄漏敏感值 | 不影响 |

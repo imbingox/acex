@@ -257,6 +257,170 @@ test("Deribit partial and empty first quotes resolve L1 ready", async () => {
   await putIterator.return?.();
 });
 
+test("Deribit subscribe ACK resolves L1 ready before the first quote", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 50,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
+    },
+  });
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const lease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const socket = await waitForSocket(DERIBIT_WS_URL);
+  await waitForDeribitControlFrame(socket, "public/subscribe", [
+    `quote.${BTC_CALL_INSTRUMENT}`,
+  ]);
+
+  await lease.ready;
+  expect(
+    client.market.getL1Book({ venue: "deribit", symbol: BTC_CALL_SYMBOL }),
+  ).toBeUndefined();
+  expect(
+    client.market.getMarketStatus({
+      venue: "deribit",
+      symbol: BTC_CALL_SYMBOL,
+    }),
+  ).toMatchObject({
+    activity: "active",
+    ready: false,
+  });
+
+  lease.close();
+});
+
+test("Deribit quote before subscribe ACK updates book and resolves L1 ready", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
+    },
+  });
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const iterator = client.market.events
+    .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
+    [Symbol.asyncIterator]();
+  const lease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const socket = await waitForSocket(DERIBIT_WS_URL);
+  const controlId = await waitForDeribitControlFrame(
+    socket,
+    "public/subscribe",
+    [`quote.${BTC_CALL_INSTRUMENT}`],
+    300,
+    false,
+  );
+  expect(controlId).toBeDefined();
+
+  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
+    timestamp: 1710000000004,
+    best_bid_price: 0.101,
+    best_bid_amount: 2,
+    best_ask_price: 0.102,
+    best_ask_amount: 3,
+  });
+
+  const event = await nextEvent(iterator);
+  expect(event.snapshot).toMatchObject({
+    bidPrice: "0.101",
+    askPrice: "0.102",
+    status: {
+      ready: true,
+      freshness: "fresh",
+    },
+  });
+  await lease.ready;
+
+  socket.emitJson({
+    jsonrpc: "2.0",
+    id: controlId,
+    result: [`quote.${BTC_CALL_INSTRUMENT}`],
+  });
+  await lease.ready;
+
+  lease.close();
+  await iterator.return?.();
+});
+
+test("Deribit subscribe ACK error rejects L1 ready", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
+    },
+  });
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const lease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const readyFailure = lease.ready.catch((error) => error);
+  const socket = await waitForSocket(DERIBIT_WS_URL);
+  const controlId = await waitForDeribitControlFrame(
+    socket,
+    "public/subscribe",
+    [`quote.${BTC_CALL_INSTRUMENT}`],
+    300,
+    false,
+  );
+  expect(controlId).toBeDefined();
+  socket.emitJson({
+    jsonrpc: "2.0",
+    id: controlId,
+    error: {
+      message: "invalid channel",
+    },
+  });
+
+  expect(await readyFailure).toMatchObject({
+    code: "MARKET_STREAM_TIMEOUT",
+    details: {
+      venue: "deribit",
+      symbol: BTC_CALL_SYMBOL,
+    },
+  });
+  expect(
+    client.market.getMarketStatus({
+      venue: "deribit",
+      symbol: BTC_CALL_SYMBOL,
+    }),
+  ).toMatchObject({
+    activity: "inactive",
+    ready: false,
+  });
+});
+
 test("Deribit ask-only first quote resolves L1 ready", async () => {
   installDeribitMarketInfra();
   const client = createClient({

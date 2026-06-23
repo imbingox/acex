@@ -20,12 +20,13 @@ Deribit runtime support is currently public option market data only: option cata
 
 ## L1 Book
 
-- Deribit option L1 uses public WS `quote.<instrument>`.
-- Each quote payload maps to nullable top-of-book data and must use the multiplexer `data` route / adapter `onUpdate`.
-- A side is valid only when both price and size are finite and greater than 0. If either field is missing, non-finite, or non-positive, set that side's price and size to `null`.
-- Publish `L1Book` for two-sided, bid-only, ask-only, and empty states. All four states resolve first `lease.ready`, increment version, update `getL1Book()`, and publish `l1_book.updated`.
-- Empty book is fresh/readable market state: `status.ready = true`, `freshness = "fresh"`, and `reason` is unset.
-- Do not use status-only routes or status reasons for normal quote shape, and do not add a separate public quote-state field.
+- Deribit option L1 使用 public WS `quote.<instrument>`。
+- `lease.ready` 由 Deribit `public/subscribe` ACK resolve。如果 matching `quote.<instrument>` data message 在该 ACK 前到达，已路由的 data 也视为 subscription acceptance，并 resolve `lease.ready`。
+- 每个 quote payload 都映射为 nullable top-of-book data，并且必须使用 multiplexer `data` route / adapter `onUpdate`。
+- 单侧报价只有在 price 和 size 都有限且大于 0 时才有效。任一字段缺失、非有限或非正数时，该侧 price 和 size 都置为 `null`。
+- two-sided、bid-only、ask-only 和 empty 状态都要发布 `L1Book`。这四种状态都会递增 version、更新 `getL1Book()`，并发布 `l1_book.updated`。
+- Empty book 是 fresh/readable market state：`status.ready = true`、`freshness = "fresh"`，且 `reason` 不设置。
+- 不要对正常 quote shape 使用 status-only route 或 status reason，也不要新增独立 public quote-state 字段。
 
 ## Capability Contract
 

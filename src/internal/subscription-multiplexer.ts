@@ -8,6 +8,19 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 type Freshness = "fresh" | "stale";
 type StaleReason = "heartbeat_timeout";
 type ControlFrameKind = "subscribe" | "unsubscribe";
+type ControlFrameAckId = number | string;
+
+export interface EncodedVenueControlFrame {
+  readonly data: string;
+  readonly ackId?: ControlFrameAckId;
+}
+
+export type VenueControlFrameEncoding = string | EncodedVenueControlFrame;
+
+export interface VenueControlAck {
+  readonly id?: ControlFrameAckId;
+  readonly error?: Error;
+}
 
 export interface MultiplexerSubscriptionHandle {
   readonly ready: Promise<void>;
@@ -42,14 +55,14 @@ export interface VenueStreamProtocol<
   connectionKey(descriptor: TDescriptor): string;
   connectionUrl(connectionKey: string): string;
   parseMessage(data: string): TMessage | undefined;
-  encodeSubscribe(descriptors: TDescriptor[]): string;
-  encodeUnsubscribe(descriptors: TDescriptor[]): string;
+  encodeSubscribe(descriptors: TDescriptor[]): VenueControlFrameEncoding;
+  encodeUnsubscribe(descriptors: TDescriptor[]): VenueControlFrameEncoding;
   routeMessage(
     message: TMessage,
   ):
     | { kind: "data"; subscriptionKey: string; payload: TPayload }
     | { kind: "status"; subscriptionKey: string; payload: TStatusPayload }
-    | { kind: "ack" }
+    | { kind: "ack"; ack: VenueControlAck }
     | { kind: "ignore" };
 }
 
@@ -87,6 +100,7 @@ interface LocalSubscriber<TPayload, TStatusPayload> {
 interface SubState<TDescriptor, TPayload, TStatusPayload> {
   readonly descriptor: TDescriptor;
   readonly subscribers: Set<LocalSubscriber<TPayload, TStatusPayload>>;
+  ready: boolean;
 }
 
 interface ControlFrame<TDescriptor> {
@@ -94,11 +108,22 @@ interface ControlFrame<TDescriptor> {
   readonly descriptors: Map<string, TDescriptor>;
 }
 
+interface PendingControlAck<TDescriptor> {
+  readonly kind: ControlFrameKind;
+  readonly subscriptionKeys: string[];
+  readonly descriptors: Map<string, TDescriptor>;
+  readonly timer: TimerHandle | undefined;
+}
+
 interface ConnectionState<TDescriptor, TPayload, TStatusPayload> {
   readonly key: string;
   readonly url: string;
   readonly subs: Map<string, SubState<TDescriptor, TPayload, TStatusPayload>>;
   readonly controlQueue: ControlFrame<TDescriptor>[];
+  readonly pendingControlAcks: Map<
+    ControlFrameAckId,
+    PendingControlAck<TDescriptor>
+  >;
   session: ManagedWebSocketSession;
   isOpen: boolean;
   hasOpened: boolean;
@@ -134,6 +159,16 @@ function eventError(event: Event): Error {
   }
 
   return new Error(`WebSocket error: ${event.type}`);
+}
+
+function normalizeControlFrameEncoding(
+  encoded: VenueControlFrameEncoding,
+): EncodedVenueControlFrame {
+  return typeof encoded === "string" ? { data: encoded } : encoded;
+}
+
+function controlAckKey(id: ControlFrameAckId): string {
+  return String(id);
 }
 
 export class SubscriptionMultiplexer<
@@ -196,12 +231,16 @@ export class SubscriptionMultiplexer<
     const existing = connection.subs.get(subscriptionKey);
     if (existing) {
       existing.subscribers.add(localSubscriber);
-      this.scheduleInitialTimeout(
-        connection,
-        subscriptionKey,
-        existing,
-        localSubscriber,
-      );
+      if (existing.ready) {
+        this.resolveSubReady(localSubscriber);
+      } else {
+        this.scheduleInitialTimeout(
+          connection,
+          subscriptionKey,
+          existing,
+          localSubscriber,
+        );
+      }
 
       return this.createHandle(
         connection,
@@ -214,6 +253,7 @@ export class SubscriptionMultiplexer<
     const sub: SubState<TDescriptor, TPayload, TStatusPayload> = {
       descriptor,
       subscribers: new Set([localSubscriber]),
+      ready: false,
     };
 
     connection.subs.set(subscriptionKey, sub);
@@ -286,6 +326,7 @@ export class SubscriptionMultiplexer<
       url: this.protocol.connectionUrl(connectionKey),
       subs: new Map(),
       controlQueue: [],
+      pendingControlAcks: new Map(),
       session: undefined as unknown as ManagedWebSocketSession,
       isOpen: false,
       hasOpened: false,
@@ -434,6 +475,7 @@ export class SubscriptionMultiplexer<
       this.clearTimer(connection.controlTimer);
       connection.controlTimer = undefined;
     }
+    this.clearPendingControlAcks(connection);
 
     if (connection.subs.size === 0) {
       this.closeConnection(connection);
@@ -454,6 +496,11 @@ export class SubscriptionMultiplexer<
     receivedAt: number,
   ): void {
     const routed = this.protocol.routeMessage(message);
+    if (routed.kind === "ack") {
+      this.handleControlAck(connection, routed.ack);
+      return;
+    }
+
     if (routed.kind !== "data" && routed.kind !== "status") {
       return;
     }
@@ -461,6 +508,10 @@ export class SubscriptionMultiplexer<
     const sub = connection.subs.get(routed.subscriptionKey);
     if (!sub) {
       return;
+    }
+
+    if (routed.kind === "data" && !sub.ready) {
+      this.markSubscriptionReady(sub);
     }
 
     if (sub.subscribers.size === 1) {
@@ -493,9 +544,6 @@ export class SubscriptionMultiplexer<
     if (!sub.subscribers.has(localSubscriber)) {
       return;
     }
-
-    this.clearInitialTimer(localSubscriber);
-    this.resolveSubReady(localSubscriber);
 
     if (localSubscriber.freshness !== "fresh") {
       localSubscriber.freshness = "fresh";
@@ -539,7 +587,7 @@ export class SubscriptionMultiplexer<
       localSubscriber.readySettled = true;
       localSubscriber.deferred.reject(
         new Error(
-          `Timed out waiting for first data message for ${subscriptionKey}`,
+          `Timed out waiting for subscription acknowledgement for ${subscriptionKey}`,
         ),
       );
       this.removeSubscription(
@@ -581,6 +629,29 @@ export class SubscriptionMultiplexer<
     localSubscriber.deferred.resolve();
   }
 
+  private markSubscriptionReady(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
+    sub.ready = true;
+    for (const localSubscriber of sub.subscribers) {
+      this.clearInitialTimer(localSubscriber);
+      this.resolveSubReady(localSubscriber);
+    }
+  }
+
+  private rejectSubscriptionReady(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    error: Error,
+  ): void {
+    for (const localSubscriber of sub.subscribers) {
+      this.clearInitialTimer(localSubscriber);
+      if (!localSubscriber.readySettled) {
+        localSubscriber.readySettled = true;
+        localSubscriber.deferred.reject(error);
+      }
+    }
+  }
+
   private removeSubscription(
     connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
     subscriptionKey: string,
@@ -608,6 +679,37 @@ export class SubscriptionMultiplexer<
     connection.subs.delete(subscriptionKey);
     this.clearSubTimers(sub);
     this.removeQueuedDescriptor(connection, "subscribe", subscriptionKey);
+    this.removePendingDescriptor(connection, subscriptionKey);
+
+    if (sendUnsubscribe) {
+      this.enqueueControlFrame(connection, "unsubscribe", [
+        [subscriptionKey, sub.descriptor],
+      ]);
+    }
+
+    if (connection.subs.size === 0) {
+      if (sendUnsubscribe && connection.isOpen) {
+        this.retireConnectionAfterControlFlush(connection);
+      } else {
+        this.closeConnection(connection);
+      }
+    }
+  }
+
+  private removeEntireSubscription(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    subscriptionKey: string,
+    sendUnsubscribe: boolean,
+  ): void {
+    const sub = connection.subs.get(subscriptionKey);
+    if (!sub) {
+      return;
+    }
+
+    connection.subs.delete(subscriptionKey);
+    this.clearSubTimers(sub);
+    this.removeQueuedDescriptor(connection, "subscribe", subscriptionKey);
+    this.removePendingDescriptor(connection, subscriptionKey);
 
     if (sendUnsubscribe) {
       this.enqueueControlFrame(connection, "unsubscribe", [
@@ -641,6 +743,7 @@ export class SubscriptionMultiplexer<
     }
 
     connection.controlQueue.length = 0;
+    this.clearPendingControlAcks(connection);
     connection.session.close();
     this.removeConnectionFromPool(connection);
   }
@@ -778,12 +881,37 @@ export class SubscriptionMultiplexer<
 
     const descriptors = [...frame.descriptors.values()];
     if (descriptors.length > 0) {
-      const data =
+      const encoded =
         frame.kind === "subscribe"
           ? this.protocol.encodeSubscribe(descriptors)
           : this.protocol.encodeUnsubscribe(descriptors);
-      connection.session.send(data);
+      const controlFrame = normalizeControlFrameEncoding(encoded);
+      if (
+        frame.kind === "subscribe" &&
+        controlFrame.ackId !== undefined &&
+        frame.descriptors.size > 0
+      ) {
+        const ackKey = controlAckKey(controlFrame.ackId);
+        connection.pendingControlAcks.set(ackKey, {
+          kind: frame.kind,
+          subscriptionKeys: [...frame.descriptors.keys()],
+          descriptors: new Map(frame.descriptors),
+          timer: this.setTimer(() => {
+            this.handleControlAckTimeout(connection, ackKey);
+          }, this.options.initialMessageTimeoutMs),
+        });
+      }
+      connection.session.send(controlFrame.data);
       connection.lastControlSentAt = this.now();
+
+      if (frame.kind === "subscribe" && controlFrame.ackId === undefined) {
+        for (const subscriptionKey of frame.descriptors.keys()) {
+          const sub = connection.subs.get(subscriptionKey);
+          if (sub) {
+            this.markSubscriptionReady(sub);
+          }
+        }
+      }
     }
 
     if (connection.controlQueue.length > 0) {
@@ -793,6 +921,160 @@ export class SubscriptionMultiplexer<
 
     if (connection.closeAfterControlQueueDrained) {
       this.closeConnection(connection);
+    }
+  }
+
+  private handleControlAck(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    ack: VenueControlAck,
+  ): void {
+    if (ack.id === undefined) {
+      return;
+    }
+
+    const ackKey = controlAckKey(ack.id);
+    const pending = connection.pendingControlAcks.get(ackKey);
+    if (!pending) {
+      return;
+    }
+
+    this.clearPendingControlAck(connection, ackKey);
+    if (pending.kind !== "subscribe") {
+      return;
+    }
+
+    if (ack.error) {
+      for (const subscriptionKey of pending.subscriptionKeys) {
+        const sub = connection.subs.get(subscriptionKey);
+        if (sub) {
+          if (sub.ready) {
+            this.notifySubscriptionAckError(sub, ack.error);
+          } else {
+            this.rejectSubscriptionReady(sub, ack.error);
+            this.removeEntireSubscription(connection, subscriptionKey, false);
+          }
+        }
+      }
+      return;
+    }
+
+    for (const subscriptionKey of pending.subscriptionKeys) {
+      const sub = connection.subs.get(subscriptionKey);
+      if (sub) {
+        this.markSubscriptionReady(sub);
+      }
+    }
+  }
+
+  private removePendingDescriptor(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    subscriptionKey: string,
+  ): void {
+    for (const [ackId, pending] of connection.pendingControlAcks) {
+      if (!pending.descriptors.has(subscriptionKey)) {
+        continue;
+      }
+
+      pending.descriptors.delete(subscriptionKey);
+      const remainingKeys = pending.subscriptionKeys.filter(
+        (key) => key !== subscriptionKey,
+      );
+      if (remainingKeys.length === 0) {
+        this.clearPendingControlAck(connection, ackId);
+        continue;
+      }
+
+      connection.pendingControlAcks.set(ackId, {
+        kind: pending.kind,
+        subscriptionKeys: remainingKeys,
+        descriptors: pending.descriptors,
+        timer: pending.timer,
+      });
+    }
+  }
+
+  private clearPendingControlAck(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    ackId: ControlFrameAckId,
+  ): void {
+    const pending = connection.pendingControlAcks.get(ackId);
+    if (pending) {
+      if (pending.timer) {
+        this.clearTimer(pending.timer);
+      }
+      connection.pendingControlAcks.delete(ackId);
+    }
+  }
+
+  private clearPendingControlAcks(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
+    for (const pending of connection.pendingControlAcks.values()) {
+      if (pending.timer) {
+        this.clearTimer(pending.timer);
+      }
+    }
+    connection.pendingControlAcks.clear();
+  }
+
+  private handleControlAckTimeout(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    ackId: ControlFrameAckId,
+  ): void {
+    const pending = connection.pendingControlAcks.get(ackId);
+    if (!pending) {
+      return;
+    }
+
+    if (pending.kind !== "subscribe") {
+      this.clearPendingControlAck(connection, ackId);
+      return;
+    }
+
+    const readyKeys: string[] = [];
+    const readyDescriptors = new Map<string, TDescriptor>();
+    for (const subscriptionKey of pending.subscriptionKeys) {
+      const sub = connection.subs.get(subscriptionKey);
+      if (!sub) {
+        continue;
+      }
+
+      if (sub.ready) {
+        readyKeys.push(subscriptionKey);
+        readyDescriptors.set(subscriptionKey, sub.descriptor);
+        continue;
+      }
+
+      this.rejectSubscriptionReady(
+        sub,
+        new Error(
+          `Timed out waiting for subscription acknowledgement for ${subscriptionKey}`,
+        ),
+      );
+      this.removeEntireSubscription(connection, subscriptionKey, false);
+    }
+
+    if (readyKeys.length === 0) {
+      this.clearPendingControlAck(connection, ackId);
+      return;
+    }
+
+    connection.pendingControlAcks.set(ackId, {
+      kind: pending.kind,
+      subscriptionKeys: readyKeys,
+      descriptors: readyDescriptors,
+      timer: undefined,
+    });
+  }
+
+  private notifySubscriptionAckError(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    error: Error,
+  ): void {
+    for (const localSubscriber of sub.subscribers) {
+      localSubscriber.callbacks.onError(error);
+      localSubscriber.freshness = "stale";
+      localSubscriber.callbacks.onDisconnected();
     }
   }
 }

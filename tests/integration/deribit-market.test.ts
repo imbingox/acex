@@ -7,7 +7,6 @@ import {
   waitForDeribitControlFrame,
 } from "../support/exchanges/deribit.ts";
 import {
-  expectPending,
   type FakeWebSocket,
   nextEvent,
   waitForSocket,
@@ -15,52 +14,8 @@ import {
 
 const BTC_CALL_SYMBOL = "BTC/USD:BTC-20260621-57000-C";
 const BTC_CALL_INSTRUMENT = "BTC-21JUN26-57000-C";
-
-async function expectNoEvent<T>(
-  iterator: AsyncIterator<T>,
-  timeoutMs: number,
-): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const result = await Promise.race([
-    iterator.next().then((value) => ({ kind: "event" as const, value })),
-    new Promise<{ kind: "timeout" }>((resolve) => {
-      timeout = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-    }),
-  ]);
-
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-
-  if (result.kind === "timeout") {
-    await iterator.return?.();
-    return;
-  }
-
-  if (result.kind === "event") {
-    if (result.value.done) {
-      throw new Error("Expected no event, iterator closed unexpectedly");
-    }
-
-    throw new Error(
-      `Expected no event, received ${JSON.stringify(result.value.value)}`,
-    );
-  }
-}
-
-async function nextMatchingStatus(
-  iterator: AsyncIterator<MarketStatusChangedEvent>,
-  predicate: (event: MarketStatusChangedEvent) => boolean,
-): Promise<MarketStatusChangedEvent> {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const event = await nextEvent(iterator);
-    if (predicate(event)) {
-      return event;
-    }
-  }
-
-  throw new Error("Timed out waiting for matching market status event");
-}
+const BTC_PUT_SYMBOL = "BTC/USD:BTC-20260621-57000-P";
+const BTC_PUT_INSTRUMENT = "BTC-21JUN26-57000-P";
 
 function emitDeribitQuote(
   socket: FakeWebSocket,
@@ -75,6 +30,20 @@ function emitDeribitQuote(
       data,
     },
   });
+}
+
+async function nextMatchingStatus(
+  iterator: AsyncIterator<MarketStatusChangedEvent>,
+  predicate: (event: MarketStatusChangedEvent) => boolean,
+): Promise<MarketStatusChangedEvent> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const event = await nextEvent(iterator);
+    if (predicate(event)) {
+      return event;
+    }
+  }
+
+  throw new Error("Timed out waiting for matching market status event");
 }
 
 test("default client loadMarkets loads runtime-supported Binance and Deribit catalogs", async () => {
@@ -186,7 +155,7 @@ test("Deribit underlyings config rejects empty input and load fails invalid unde
   });
 });
 
-test("Deribit quote no_quote does not resolve ready or publish partial L1", async () => {
+test("Deribit partial and empty first quotes resolve L1 ready", async () => {
   installDeribitMarketInfra();
   const client = createClient({
     venues: ["deribit"],
@@ -203,6 +172,318 @@ test("Deribit quote no_quote does not resolve ready or publish partial L1", asyn
   await client.market.loadMarkets();
   await client.start();
 
+  const callIterator = client.market.events
+    .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
+    [Symbol.asyncIterator]();
+  const putIterator = client.market.events
+    .l1BookUpdates({ venue: "deribit", symbol: BTC_PUT_SYMBOL })
+    [Symbol.asyncIterator]();
+
+  const callLease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const putLease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_PUT_SYMBOL,
+  });
+  const socket = await waitForSocket(DERIBIT_WS_URL);
+  await waitForDeribitControlFrame(socket, "public/subscribe", [
+    `quote.${BTC_CALL_INSTRUMENT}`,
+    `quote.${BTC_PUT_INSTRUMENT}`,
+  ]);
+
+  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
+    timestamp: 1710000000001,
+    best_bid_price: 0.101,
+    best_bid_amount: 2,
+    best_ask_price: null,
+    best_ask_amount: null,
+  });
+  emitDeribitQuote(socket, BTC_PUT_INSTRUMENT, {
+    timestamp: 1710000000002,
+    best_bid_price: null,
+    best_bid_amount: null,
+    best_ask_price: null,
+    best_ask_amount: null,
+  });
+  await Promise.all([callLease.ready, putLease.ready]);
+
+  const callEvent = await nextEvent(callIterator);
+  expect(callEvent.snapshot).toMatchObject({
+    bidPrice: "0.101",
+    bidSize: "2",
+    askPrice: null,
+    askSize: null,
+    exchangeTs: 1710000000001,
+    version: 1,
+    status: {
+      ready: true,
+      freshness: "fresh",
+    },
+  });
+  expect(callEvent.snapshot.status.reason).toBeUndefined();
+  expect(
+    client.market.getMarketStatus({
+      venue: "deribit",
+      symbol: BTC_CALL_SYMBOL,
+    })?.reason,
+  ).toBeUndefined();
+
+  const putEvent = await nextEvent(putIterator);
+  expect(putEvent.snapshot).toMatchObject({
+    bidPrice: null,
+    bidSize: null,
+    askPrice: null,
+    askSize: null,
+    exchangeTs: 1710000000002,
+    version: 1,
+    status: {
+      ready: true,
+      freshness: "fresh",
+    },
+  });
+  expect(putEvent.snapshot.status.reason).toBeUndefined();
+  expect(
+    client.market.getMarketStatus({
+      venue: "deribit",
+      symbol: BTC_PUT_SYMBOL,
+    })?.reason,
+  ).toBeUndefined();
+
+  callLease.close();
+  putLease.close();
+  await callIterator.return?.();
+  await putIterator.return?.();
+});
+
+test("Deribit ask-only first quote resolves L1 ready", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
+    },
+  });
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const iterator = client.market.events
+    .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
+    [Symbol.asyncIterator]();
+  const lease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const socket = await waitForSocket(DERIBIT_WS_URL);
+  await waitForDeribitControlFrame(socket, "public/subscribe", [
+    `quote.${BTC_CALL_INSTRUMENT}`,
+  ]);
+
+  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
+    timestamp: 1710000000003,
+    best_bid_price: null,
+    best_bid_amount: null,
+    best_ask_price: 0.102,
+    best_ask_amount: 3,
+  });
+  await lease.ready;
+
+  const event = await nextEvent(iterator);
+  expect(event.snapshot).toMatchObject({
+    bidPrice: null,
+    bidSize: null,
+    askPrice: "0.102",
+    askSize: "3",
+    exchangeTs: 1710000000003,
+    version: 1,
+    status: {
+      ready: true,
+      freshness: "fresh",
+    },
+  });
+  expect(event.snapshot.status.reason).toBeUndefined();
+  expect(
+    client.market.getL1Book({ venue: "deribit", symbol: BTC_CALL_SYMBOL }),
+  ).toEqual(event.snapshot);
+
+  lease.close();
+  await iterator.return?.();
+});
+
+test("Deribit quote transitions publish nullable L1 updates", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
+    },
+  });
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const iterator = client.market.events
+    .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
+    [Symbol.asyncIterator]();
+  const lease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const socket = await waitForSocket(DERIBIT_WS_URL);
+  await waitForDeribitControlFrame(socket, "public/subscribe", [
+    `quote.${BTC_CALL_INSTRUMENT}`,
+  ]);
+
+  const updates = [
+    {
+      data: {
+        timestamp: 1710000000001,
+        best_bid_price: 0.101,
+        best_bid_amount: 2,
+        best_ask_price: 0.102,
+        best_ask_amount: 3,
+      },
+      expected: {
+        bidPrice: "0.101",
+        bidSize: "2",
+        askPrice: "0.102",
+        askSize: "3",
+      },
+    },
+    {
+      data: {
+        timestamp: 1710000000002,
+        best_bid_price: 0.103,
+        best_bid_amount: 4,
+        best_ask_price: null,
+        best_ask_amount: null,
+      },
+      expected: {
+        bidPrice: "0.103",
+        bidSize: "4",
+        askPrice: null,
+        askSize: null,
+      },
+    },
+    {
+      data: {
+        timestamp: 1710000000003,
+        best_bid_price: null,
+        best_bid_amount: null,
+        best_ask_price: 0.104,
+        best_ask_amount: 5,
+      },
+      expected: {
+        bidPrice: null,
+        bidSize: null,
+        askPrice: "0.104",
+        askSize: "5",
+      },
+    },
+    {
+      data: {
+        timestamp: 1710000000004,
+        best_bid_price: null,
+        best_bid_amount: null,
+        best_ask_price: null,
+        best_ask_amount: null,
+      },
+      expected: {
+        bidPrice: null,
+        bidSize: null,
+        askPrice: null,
+        askSize: null,
+      },
+    },
+    {
+      data: {
+        timestamp: 1710000000005,
+        best_bid_price: 0.105,
+        best_bid_amount: 6,
+        best_ask_price: 0.106,
+        best_ask_amount: 7,
+      },
+      expected: {
+        bidPrice: "0.105",
+        bidSize: "6",
+        askPrice: "0.106",
+        askSize: "7",
+      },
+    },
+  ] as const;
+
+  for (const [index, update] of updates.entries()) {
+    emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, update.data);
+    if (index === 0) {
+      await lease.ready;
+    }
+
+    const event = await nextEvent(iterator);
+    expect(event.snapshot).toMatchObject({
+      ...update.expected,
+      exchangeTs: update.data.timestamp,
+      version: index + 1,
+      status: {
+        ready: true,
+        freshness: "fresh",
+      },
+    });
+    expect(event.snapshot.status.reason).toBeUndefined();
+
+    const latestBook = client.market.getL1Book({
+      venue: "deribit",
+      symbol: BTC_CALL_SYMBOL,
+    });
+    expect(latestBook).toEqual(event.snapshot);
+    expect(
+      client.market.getMarketStatus({
+        venue: "deribit",
+        symbol: BTC_CALL_SYMBOL,
+      }),
+    ).toMatchObject({
+      ready: true,
+      freshness: "fresh",
+      reason: undefined,
+    });
+  }
+
+  lease.close();
+  await iterator.return?.();
+});
+
+test("Deribit empty quote recovers freshness after heartbeat stale", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1StaleAfterMs: 20,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
+    },
+  });
+
+  await client.market.loadMarkets();
+  await client.start();
+
+  const l1Iterator = client.market.events
+    .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
+    [Symbol.asyncIterator]();
   const statusIterator = client.market.events
     .status({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
     [Symbol.asyncIterator]();
@@ -217,157 +498,131 @@ test("Deribit quote no_quote does not resolve ready or publish partial L1", asyn
 
   emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
     timestamp: 1710000000001,
-    best_bid_price: null,
-    best_bid_amount: 2,
-    best_ask_price: 0.102,
-    best_ask_amount: 3,
-  });
-
-  await expectPending(lease.ready, 25);
-  expect(
-    client.market.getL1Book({ venue: "deribit", symbol: BTC_CALL_SYMBOL }),
-  ).toBeUndefined();
-
-  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
-    timestamp: 1710000000002,
     best_bid_price: 0.101,
     best_bid_amount: 2,
     best_ask_price: 0.102,
     best_ask_amount: 3,
   });
   await lease.ready;
+  await nextEvent(l1Iterator);
 
-  const completeBook = client.market.getL1Book({
-    venue: "deribit",
-    symbol: BTC_CALL_SYMBOL,
+  const staleStatus = await nextMatchingStatus(
+    statusIterator,
+    (event) => event.status.reason === "heartbeat_timeout",
+  );
+  expect(staleStatus.status).toMatchObject({
+    ready: true,
+    freshness: "stale",
+    reason: "heartbeat_timeout",
   });
-  expect(completeBook).toMatchObject({
-    bidPrice: "0.101",
-    bidSize: "2",
-    askPrice: "0.102",
-    askSize: "3",
+
+  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
+    timestamp: 1710000000002,
+    best_bid_price: null,
+    best_bid_amount: null,
+    best_ask_price: null,
+    best_ask_amount: null,
+  });
+
+  const emptyEvent = await nextEvent(l1Iterator);
+  expect(emptyEvent.snapshot).toMatchObject({
+    bidPrice: null,
+    bidSize: null,
+    askPrice: null,
+    askSize: null,
     exchangeTs: 1710000000002,
-    version: 1,
+    version: 2,
     status: {
+      ready: true,
       freshness: "fresh",
     },
   });
-  if (!completeBook) {
-    throw new Error("Expected complete Deribit L1 book");
-  }
-
-  const noQuoteL1Iterator = client.market.events
-    .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
-    [Symbol.asyncIterator]();
-  await Bun.sleep(2);
-  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
-    timestamp: 1710000000003,
-    best_bid_price: 0.101,
-    best_bid_amount: 0,
-    best_ask_price: 0.102,
-    best_ask_amount: 3,
+  expect(emptyEvent.snapshot.status.reason).toBeUndefined();
+  expect(
+    client.market.getMarketStatus({
+      venue: "deribit",
+      symbol: BTC_CALL_SYMBOL,
+    }),
+  ).toMatchObject({
+    ready: true,
+    freshness: "fresh",
+    reason: undefined,
   });
 
-  const noQuoteStatus = await nextMatchingStatus(
-    statusIterator,
-    (event) => event.status.ready && event.status.reason === "no_quote",
-  );
-  expect(noQuoteStatus.status).toMatchObject({
-    freshness: "stale",
-    reason: "no_quote",
-  });
-  expect(noQuoteStatus.status.lastReceivedAt).toBeGreaterThanOrEqual(
-    completeBook.receivedAt,
-  );
-  await expectNoEvent(noQuoteL1Iterator, 25);
+  lease.close();
+  await l1Iterator.return?.();
+  await statusIterator.return?.();
+});
 
-  const staleBook = client.market.getL1Book({
-    venue: "deribit",
-    symbol: BTC_CALL_SYMBOL,
-  });
-  expect(staleBook).toMatchObject({
-    bidPrice: completeBook.bidPrice,
-    bidSize: completeBook.bidSize,
-    askPrice: completeBook.askPrice,
-    askSize: completeBook.askSize,
-    exchangeTs: completeBook.exchangeTs,
-    receivedAt: completeBook.receivedAt,
-    updatedAt: completeBook.updatedAt,
-    version: completeBook.version,
-    status: {
-      freshness: "stale",
-      reason: "no_quote",
-    },
-  });
-  expect(staleBook?.status.lastReceivedAt).toBeGreaterThanOrEqual(
-    completeBook.receivedAt,
-  );
-
-  await Bun.sleep(2);
-  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
-    timestamp: 1710000000004,
-    best_bid_price: 0.101,
-    best_bid_amount: 0,
-    best_ask_price: 0.102,
-    best_ask_amount: 3,
-  });
-  const repeatedNoQuoteStatus = await nextMatchingStatus(
-    statusIterator,
-    (event) =>
-      event.status.ready &&
-      event.status.reason === "no_quote" &&
-      (event.status.lastReceivedAt ?? 0) >
-        (noQuoteStatus.status.lastReceivedAt ?? 0),
-  );
-  expect(repeatedNoQuoteStatus.status).toMatchObject({
-    freshness: "stale",
-    reason: "no_quote",
-  });
-  const repeatedStaleBook = client.market.getL1Book({
-    venue: "deribit",
-    symbol: BTC_CALL_SYMBOL,
-  });
-  expect(repeatedStaleBook).toMatchObject({
-    bidPrice: completeBook.bidPrice,
-    bidSize: completeBook.bidSize,
-    askPrice: completeBook.askPrice,
-    askSize: completeBook.askSize,
-    exchangeTs: completeBook.exchangeTs,
-    receivedAt: completeBook.receivedAt,
-    updatedAt: completeBook.updatedAt,
-    version: completeBook.version,
-    status: {
-      freshness: "stale",
-      reason: "no_quote",
+test("Deribit reconnect replays subscription and publishes nullable L1", async () => {
+  installDeribitMarketInfra();
+  const client = createClient({
+    venues: ["deribit"],
+    market: {
+      l1InitialMessageTimeoutMs: 200,
+      l1ReconnectDelayMs: 5,
+      l1ReconnectMaxDelayMs: 5,
+      venues: {
+        deribit: {
+          underlyings: ["BTC"],
+        },
+      },
     },
   });
 
-  const l1Iterator = client.market.events
+  await client.market.loadMarkets();
+  await client.start();
+
+  const iterator = client.market.events
     .l1BookUpdates({ venue: "deribit", symbol: BTC_CALL_SYMBOL })
     [Symbol.asyncIterator]();
-  emitDeribitQuote(socket, BTC_CALL_INSTRUMENT, {
-    timestamp: 1710000000005,
-    best_bid_price: 0.103,
-    best_bid_amount: 4,
+  const lease = await client.market.acquireL1BookSubscription({
+    venue: "deribit",
+    symbol: BTC_CALL_SYMBOL,
+  });
+  const firstSocket = await waitForSocket(DERIBIT_WS_URL);
+  await waitForDeribitControlFrame(firstSocket, "public/subscribe", [
+    `quote.${BTC_CALL_INSTRUMENT}`,
+  ]);
+
+  emitDeribitQuote(firstSocket, BTC_CALL_INSTRUMENT, {
+    timestamp: 1710000000001,
+    best_bid_price: 0.101,
+    best_bid_amount: 2,
+    best_ask_price: 0.102,
+    best_ask_amount: 3,
+  });
+  await lease.ready;
+  await nextEvent(iterator);
+
+  firstSocket.disconnect();
+  const reconnectSocket = await waitForSocket(DERIBIT_WS_URL, 1, 100);
+  await waitForDeribitControlFrame(reconnectSocket, "public/subscribe", [
+    `quote.${BTC_CALL_INSTRUMENT}`,
+  ]);
+  emitDeribitQuote(reconnectSocket, BTC_CALL_INSTRUMENT, {
+    timestamp: 1710000000002,
+    best_bid_price: null,
+    best_bid_amount: null,
     best_ask_price: 0.104,
     best_ask_amount: 5,
   });
 
-  const freshEvent = await nextEvent(l1Iterator);
-  expect(freshEvent.snapshot).toMatchObject({
-    bidPrice: "0.103",
-    bidSize: "4",
+  const replayEvent = await nextEvent(iterator);
+  expect(replayEvent.snapshot).toMatchObject({
+    bidPrice: null,
+    bidSize: null,
     askPrice: "0.104",
     askSize: "5",
-    exchangeTs: 1710000000005,
+    exchangeTs: 1710000000002,
     version: 2,
     status: {
+      ready: true,
       freshness: "fresh",
-      reason: undefined,
     },
   });
+  expect(replayEvent.snapshot.status.reason).toBeUndefined();
 
   lease.close();
-  await statusIterator.return?.();
-  await l1Iterator.return?.();
+  await iterator.return?.();
 });

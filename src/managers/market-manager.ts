@@ -8,7 +8,6 @@ import type {
   RawFundingRateHistoryEntry,
   RawFundingRateUpdate,
   RawL1BookUpdate,
-  RawL1NoQuoteUpdate,
   RawPublicTrade,
   StreamHandle,
 } from "../adapters/types.ts";
@@ -1785,9 +1784,6 @@ export class MarketManagerImpl
         this.publishMarketEvent(event);
         this.recomputeAndPublishStatus(record);
       },
-      onNoQuote: (update: RawL1NoQuoteUpdate) => {
-        this.handleL1NoQuote(record, update);
-      },
       onFreshnessChange: (freshness, reason) => {
         this.updateConnectionState(record, "l1Book", freshness, reason);
       },
@@ -1884,30 +1880,22 @@ export class MarketManagerImpl
     );
   }
 
-  private handleL1NoQuote(
-    record: MarketRecord,
-    update: RawL1NoQuoteUpdate,
-  ): void {
-    record.l1LastReceivedAt = update.receivedAt;
-    record.l1Freshness = "stale";
-    record.l1Reason = "no_quote";
-    this.syncL1BookStatus(record, undefined, undefined, update.receivedAt);
-    this.recomputeAndPublishStatus(record, undefined, { forcePublish: true });
-  }
-
   private createL1Book(
     venue: Venue,
     symbol: string,
     input: RawL1BookUpdate,
     previous?: L1Book,
   ): L1Book {
+    const bid = this.createL1Side(input.bidPrice, input.bidSize);
+    const ask = this.createL1Side(input.askPrice, input.askSize);
+
     return freezeL1Book({
       venue,
       symbol,
-      bidPrice: toCanonical(input.bidPrice),
-      bidSize: toCanonical(input.bidSize),
-      askPrice: toCanonical(input.askPrice),
-      askSize: toCanonical(input.askSize),
+      bidPrice: bid.price,
+      bidSize: bid.size,
+      askPrice: ask.price,
+      askSize: ask.size,
       exchangeTs: input.exchangeTs,
       receivedAt: input.receivedAt,
       updatedAt: input.receivedAt,
@@ -1921,6 +1909,31 @@ export class MarketManagerImpl
         input.receivedAt,
       ),
     });
+  }
+
+  private createL1Side(
+    price: string | null,
+    size: string | null,
+  ): { price: string | null; size: string | null } {
+    if (price === null || size === null) {
+      return { price: null, size: null };
+    }
+
+    const priceValue = new BigNumber(price);
+    const sizeValue = new BigNumber(size);
+    if (
+      !priceValue.isFinite() ||
+      priceValue.isLessThanOrEqualTo(0) ||
+      !sizeValue.isFinite() ||
+      sizeValue.isLessThanOrEqualTo(0)
+    ) {
+      return { price: null, size: null };
+    }
+
+    return {
+      price: toCanonical(price),
+      size: toCanonical(size),
+    };
   }
 
   private createFundingRate(

@@ -41,7 +41,7 @@ try {
     venue: "binance",
     symbol: "BTC/USDT:USDT",
   })) {
-    console.log(event.snapshot.bidPrice);
+    console.log(event.snapshot.bidPrice ?? "no bid");
     break;
   }
 } finally {
@@ -49,7 +49,9 @@ try {
 }
 ```
 
-`acquireL1BookSubscription()` 只完成输入校验、market resolution 和 logical lease 注册；`lease.ready` 会等待该 lease 的首条有效数据到达后 resolve。首条数据超时会 reject `MARKET_STREAM_TIMEOUT`，并自动释放该 lease。释放订阅时调用 `lease.close()`，该方法幂等；只有最后一个 active lease 关闭后，SDK 才会关闭底层 websocket stream。
+`acquireL1BookSubscription()` 只完成输入校验、market resolution 和 logical lease 注册；`lease.ready` 会等待该 lease 的首份 top-of-book 状态到达后 resolve。L1 Book 的 `bidPrice` / `bidSize` / `askPrice` / `askSize` 是 nullable：有 ask 表示当前可按 ask 买入该腿，有 bid 表示当前可按 bid 卖出该腿，四个字段全为 `null` 表示当前无可执行报价。首条 top-of-book 状态超时会 reject `MARKET_STREAM_TIMEOUT`，并自动释放该 lease。释放订阅时调用 `lease.close()`，该方法幂等；只有最后一个 active lease 关闭后，SDK 才会关闭底层 websocket stream。
+
+从旧版本迁移时，不要再把 `await lease.ready` 当作“已有完整双边报价”。它现在只表示已经收到首份可读 top-of-book state；执行前应按方向检查字段：买入检查 `askPrice !== null && askSize !== null`，卖出检查 `bidPrice !== null && bidSize !== null`。旧的 `status.reason` quote 状态已移除；空盘口由四个 bid/ask 字段全为 `null` 表达。
 
 ## 注册 Binance 交易账户
 
@@ -168,7 +170,7 @@ const order = await client.order.createOrder({
   price: "60000",
   amount: "0.001",
   postOnly: true,
-  clientOrderId: "strategy-001",
+  clientOrderId: "client-001",
   um: {
     positionSide: "long",
   },
@@ -189,7 +191,7 @@ const marginOrder = await client.order.createOrder({
 const canceled = await client.order.cancelOrder({
   accountId: "main-binance",
   symbol: "BTC/USDT:USDT",
-  clientOrderId: "strategy-001",
+  clientOrderId: "client-001",
 });
 
 const batch = await client.order.cancelAllOrders({

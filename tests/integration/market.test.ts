@@ -671,7 +671,7 @@ test("market stream timeout exposes cause and market context details", async () 
   await errors.return?.();
 });
 
-test("l1 book snapshots canonicalize decimal string output", async () => {
+test("l1 book snapshots canonicalize decimals and null invalid sides", async () => {
   installBinanceMarketInfra();
   const client = createClient({
     market: {
@@ -708,8 +708,8 @@ test("l1 book snapshots canonicalize decimal string output", async () => {
   ).toMatchObject({
     bidPrice: "0.0000001",
     bidSize: "0.1234567890123456789",
-    askPrice: "1000000000000000000000",
-    askSize: "-0.01",
+    askPrice: null,
+    askSize: null,
   });
 
   l1Lease.close();

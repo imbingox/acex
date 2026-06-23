@@ -65,7 +65,14 @@ try {
     symbol: "BTC/USDT:USDT",
   });
 
-  console.log(book?.bidPrice, book?.askPrice);
+  if (book) {
+    console.log({
+      hasBid: book.bidPrice !== null,
+      bidPrice: book.bidPrice,
+      hasAsk: book.askPrice !== null,
+      askPrice: book.askPrice,
+    });
+  }
 } finally {
   lease?.close();
   await client.stop();

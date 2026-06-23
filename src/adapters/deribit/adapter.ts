@@ -21,7 +21,6 @@ import {
   type DeribitStreamMessage,
   type DeribitStreamPayload,
   DeribitStreamProtocol,
-  type DeribitStreamStatusPayload,
 } from "./stream-protocol.ts";
 
 const DERIBIT_CONTROL_FRAME_MAX_PER_SEC = 5;
@@ -30,8 +29,7 @@ const DERIBIT_MAX_SUBSCRIPTIONS_PER_CONNECTION = 200;
 type DeribitMarketMultiplexer = SubscriptionMultiplexer<
   DeribitStreamMessage,
   DeribitStreamDescriptor,
-  DeribitStreamPayload,
-  DeribitStreamStatusPayload
+  DeribitStreamPayload
 >;
 
 interface DeribitMultiplexerConfig {
@@ -109,17 +107,6 @@ export class DeribitMarketAdapter implements MarketAdapter {
             receivedAt,
           });
         },
-        onStatus(payload, receivedAt) {
-          if (payload.reason !== "no_quote") {
-            return;
-          }
-
-          callbacks.onNoQuote?.({
-            exchangeTs: payload.exchangeTs,
-            receivedAt,
-            raw: payload.raw,
-          });
-        },
         onFreshnessChange: callbacks.onFreshnessChange,
         onDisconnected: callbacks.onDisconnected,
         onError: callbacks.onError,
@@ -159,8 +146,7 @@ export class DeribitMarketAdapter implements MarketAdapter {
       this.multiplexer = new SubscriptionMultiplexer<
         DeribitStreamMessage,
         DeribitStreamDescriptor,
-        DeribitStreamPayload,
-        DeribitStreamStatusPayload
+        DeribitStreamPayload
       >(new DeribitStreamProtocol(), {
         initialMessageTimeoutMs: config.initialMessageTimeoutMs,
         staleAfterMs: config.staleAfterMs,

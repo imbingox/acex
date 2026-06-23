@@ -1,0 +1,7 @@
+{"file":".trellis/spec/sdk/public-api.md","reason":"Public L1Book type and breaking contract rules"}
+{"file":".trellis/spec/sdk/managers.md","reason":"Market subscription lease and ready/status semantics to update"}
+{"file":".trellis/spec/sdk/adapters.md","reason":"Market adapter SPI and L1 stream callback contract to update"}
+{"file":".trellis/spec/sdk/venues/deribit.md","reason":"Deribit quote stream venue contract to update"}
+{"file":".trellis/spec/sdk/docs.md","reason":"User-facing docs update rules"}
+{"file":".trellis/spec/sdk/testing.md","reason":"Validation commands and test layout"}
+{"file":".trellis/spec/sdk/release-packaging.md","reason":"Changeset requirement and beta breaking bump level"}

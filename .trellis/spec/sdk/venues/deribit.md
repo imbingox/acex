@@ -21,10 +21,11 @@ Deribit runtime support is currently public option market data only: option cata
 ## L1 Book
 
 - Deribit option L1 uses public WS `quote.<instrument>`.
-- Only publish `L1Book` when bid/ask price and size are all present, finite, and positive.
-- Before lease ready, no complete quote means `lease.ready` keeps waiting and may timeout; never publish partial books.
-- After a complete quote exists, a no-quote payload is a status-only transition: keep last complete top-level prices/timestamps/version, set `status.freshness = "stale"`, `status.reason = "no_quote"`, update status `lastReceivedAt`, and publish `market.status_changed` only.
-- A later complete quote publishes a fresh `L1Book` and clears the no-quote reason.
+- Each quote payload maps to nullable top-of-book data and must use the multiplexer `data` route / adapter `onUpdate`.
+- A side is valid only when both price and size are finite and greater than 0. If either field is missing, non-finite, or non-positive, set that side's price and size to `null`.
+- Publish `L1Book` for two-sided, bid-only, ask-only, and empty states. All four states resolve first `lease.ready`, increment version, update `getL1Book()`, and publish `l1_book.updated`.
+- Empty book is fresh/readable market state: `status.ready = true`, `freshness = "fresh"`, and `reason` is unset.
+- Do not use status-only routes or status reasons for normal quote shape, and do not add a separate public quote-state field.
 
 ## Capability Contract
 

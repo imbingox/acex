@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 55
-- **Last Active**: 2026-06-22
+- **Total Sessions**: 56
+- **Last Active**: 2026-06-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1950 | Active |
+| `journal-1.md` | ~1983 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 56 | 2026-06-23 | Nullable L1 book quote sides | `b3ce732` | `dev` |
 | 55 | 2026-06-22 | Account funding fee history API | `132e0ce`, `0e4a36d` | `main` |
 | 54 | 2026-06-21 | Deribit 期权行情 MVP | `77eca3b` | `main` |
 | 53 | 2026-06-20 | Binance PAPI margin order routing | `076db02`, `1ffb347`, `f21c373` | `feat/binance-papi-margin-orders` |

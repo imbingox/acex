@@ -23,7 +23,9 @@ try {
 }
 ```
 
-如果首条数据迟迟不到，`lease.ready` 会 reject，SDK 会自动释放该 lease。稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。行情多路复用连接健康时，单个 symbol 长时间没有新盘口推送不会被标记为 `stale`；这通常表示盘口未变化，若需要 per-symbol 活跃度请用 `lastReceivedAt` 自行计算 age。
+如果首条可读数据迟迟不到，`lease.ready` 会 reject，SDK 会自动释放该 lease。对 L1 Book 来说，可读快照是一份 top-of-book 状态，不要求双边报价完整；bid-only、ask-only 和四字段全 `null` 的空盘口都会让 `lease.ready` resolve。空盘口是 fresh/readable market state，不会写入 status reason。
+
+稳态期间断线不会清空旧快照；快照上的 `status.freshness` 会转为 `stale`。行情多路复用连接健康时，单个 symbol 长时间没有新盘口推送不会被标记为 `stale`；这通常表示盘口未变化，若需要 per-symbol 活跃度请用 `lastReceivedAt` 自行计算 age。
 
 ### Decimal string
 
@@ -33,7 +35,15 @@ try {
 import { BigNumber } from "@imbingox/acex";
 
 const book = client.market.getL1Book({ venue: "binance", symbol });
-const bidAskDiff = new BigNumber(book!.askPrice).minus(book!.bidPrice);
+if (
+  book &&
+  book.bidPrice !== null &&
+  book.bidSize !== null &&
+  book.askPrice !== null &&
+  book.askSize !== null
+) {
+  const bidAskDiff = new BigNumber(book.askPrice).minus(book.bidPrice);
+}
 ```
 
 不要用 `parseFloat()` 处理金额、数量、价格和比率。`createOrder()` 的 `price` / `amount` 必须传 decimal string；`normalizeOrderInput()` 的 `DecimalInput` 可接受 string / number / `BigNumber`。
@@ -293,7 +303,9 @@ try {
     }),
   );
 
-  await Promise.all(l1Leases.map((lease) => lease.ready));
+  const readyResults = await Promise.allSettled(
+    l1Leases.map((lease) => lease.ready),
+  );
 
   const callBook = client.market.getL1Book({
     venue: "deribit",
@@ -304,7 +316,13 @@ try {
     symbol: firstPair.put.symbol,
   });
 
-  console.log(firstPair.expiry, firstPair.strike, callBook?.askPrice, putBook?.bidPrice);
+  console.log(
+    firstPair.expiry,
+    firstPair.strike,
+    readyResults.map((result) => result.status),
+    callBook?.askPrice,
+    putBook?.bidPrice,
+  );
 } finally {
   for (const lease of l1Leases) {
     lease.close();
@@ -313,7 +331,29 @@ try {
 }
 ```
 
-Deribit option L1 使用 public WS `quote.<instrument>`，只在 bid/ask price 和 size 都存在、有限且为正数时发布 `L1Book`。如果首包没有完整双边 quote，`lease.ready` 会继续等待并可能按初始消息超时失败；不会发布半成品 `l1_book.updated`。如果已有完整 quote 后收到无完整双边 quote，SDK 会保留 last complete book 的顶层价格、时间戳和 version，只把 `book.status.freshness` 置为 `"stale"`、`reason` 置为 `"no_quote"`，并通过 `market.status_changed` 更新 `lastReceivedAt`。后续恢复完整 quote 时会发布新的 L1 Book 并恢复 `"fresh"`。
+Deribit option L1 使用 public WS `quote.<instrument>`。SDK 会把每份 quote 映射为 nullable top-of-book：bid price/size 都有限且大于 0 时 bid 侧有效，ask price/size 都有限且大于 0 时 ask 侧有效；任一字段无效则该侧 price/size 成对置为 `null`。two-sided、bid-only、ask-only 和 empty 都会发布 `l1_book.updated`，并让首个 `lease.ready` resolve。
+
+有 ask 表示当前可按 ask 买入该期权腿，有 bid 表示当前可按 bid 卖出该期权腿；四个字段全为 `null` 表示当前无可执行报价。空盘口仍是 fresh/readable market state：`status.ready = true`、`freshness = "fresh"`、`reason` 为空。批量订阅低流动性期权时，可以等待所有 lease ready 后逐个读取 nullable bid/ask，而不是把单边或空盘口当作订阅失败。
+
+```ts
+const ask =
+  callBook && callBook.askPrice !== null && callBook.askSize !== null
+    ? { price: callBook.askPrice, size: callBook.askSize }
+    : undefined;
+const bid =
+  callBook && callBook.bidPrice !== null && callBook.bidSize !== null
+    ? { price: callBook.bidPrice, size: callBook.bidSize }
+    : undefined;
+
+console.log({
+  hasAsk: ask !== undefined,
+  ask,
+  hasBid: bid !== undefined,
+  bid,
+});
+```
+
+订阅上百个 Deribit option symbol 时，建议把 `acquireL1BookSubscription()` 分批启动，并用 `Promise.allSettled()` 收集结果。partial 或 empty book 已经是有效 ready state，不应触发重订；只有 `lease.ready` reject、网络长期不可用或订阅列表重新筛选时才处理 lease 生命周期。对 reject 的订阅使用 capped backoff + jitter 重试，避免在低流动性或临时断线时集中重连；当 symbol 不再需要观察时主动 `lease.close()`。
 
 Deribit option L1 的 bid/ask 价格单位是 `premiumCurrency`；strike 单位是 `strikeCurrency`，结算币种是 `settle`。SDK 不自动做单位换算，调用方如需和其他市场数据组合，应自行处理不同字段的计价单位。
 

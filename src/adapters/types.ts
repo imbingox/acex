@@ -178,18 +178,12 @@ export interface StreamHandle {
 }
 
 export interface RawL1BookUpdate {
-  bidPrice: string;
-  bidSize: string;
-  askPrice: string;
-  askSize: string;
+  bidPrice: string | null;
+  bidSize: string | null;
+  askPrice: string | null;
+  askSize: string | null;
   exchangeTs?: number;
   receivedAt: number;
-}
-
-export interface RawL1NoQuoteUpdate {
-  exchangeTs?: number;
-  receivedAt: number;
-  raw?: Record<string, unknown>;
 }
 
 export interface RawFundingRateUpdate {
@@ -251,7 +245,6 @@ export interface RawFundingRateHistoryResult {
 
 export interface L1BookStreamCallbacks {
   onUpdate(update: RawL1BookUpdate): void;
-  onNoQuote?(update: RawL1NoQuoteUpdate): void;
   onFreshnessChange(
     freshness: "fresh" | "stale",
     reason?: "heartbeat_timeout",

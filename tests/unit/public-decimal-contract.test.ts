@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import * as ts from "typescript";
 import { toCanonical } from "../../src/internal/decimal.ts";
+import type { L1Book, MarketDataStreamStatus } from "../../src/types/index.ts";
 
 const PROJECT_ROOT = path.resolve(import.meta.dir, "../..");
 const TYPES_ROOT = path.join(PROJECT_ROOT, "src/types");
@@ -21,6 +22,13 @@ interface IllegalReference {
   readonly binding: string;
   readonly context: string;
 }
+
+type Exact<Actual, Expected> =
+  (<Value>() => Value extends Actual ? 1 : 2) extends <
+    Value,
+  >() => Value extends Expected ? 1 : 2
+    ? true
+    : false;
 
 async function listTypeScriptFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -204,6 +212,38 @@ test("toCanonical emits plain decimal strings without trailing zeros", () => {
   expect(toCanonical("-0.0100")).toBe("-0.01");
   expect(toCanonical("0.0000")).toBe("0");
   expect(toCanonical("0.1234567890123456789000")).toBe("0.1234567890123456789");
+});
+
+test("L1Book public contract represents missing quote sides with null", () => {
+  const book = {
+    venue: "deribit",
+    symbol: "BTC/USD:BTC-20260621-57000-C",
+    bidPrice: null,
+    bidSize: null,
+    askPrice: "0.102",
+    askSize: "3",
+    receivedAt: 1710000000000,
+    updatedAt: 1710000000000,
+    version: 1,
+    status: {
+      activity: "active",
+      ready: true,
+      freshness: "fresh",
+    },
+  } satisfies L1Book;
+
+  expect(book.bidPrice).toBeNull();
+  expect(book.askPrice).toBe("0.102");
+});
+
+test("market data stream status reason exposes only runtime freshness reasons", () => {
+  type Reason = NonNullable<MarketDataStreamStatus["reason"]>;
+  const reasonContractIsExact: Exact<
+    Reason,
+    "ws_disconnected" | "heartbeat_timeout" | "reconciling"
+  > = true;
+
+  expect(reasonContractIsExact).toBe(true);
 });
 
 test("toCanonical throws on non-finite input instead of emitting sentinels", () => {

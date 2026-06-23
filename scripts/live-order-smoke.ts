@@ -495,6 +495,10 @@ async function runCancelAllSmoke(options: {
       throw new Error(`Missing market data for ${options.symbol}`);
     }
 
+    if (book.bidPrice === null) {
+      throw new Error(`Missing executable bid for ${options.symbol}`);
+    }
+
     const bidPrice = new BigNumber(book.bidPrice);
     if (!bidPrice.isFinite() || bidPrice.isLessThanOrEqualTo(0)) {
       throw new Error(

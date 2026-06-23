@@ -518,10 +518,11 @@ interface FetchFundingFeeHistoryResult {
 interface L1Book {
   venue: Venue;
   symbol: string;
-  bidPrice: string;
-  bidSize: string;
-  askPrice: string;
-  askSize: string;
+  // Nullable top-of-book。price/size 在同一侧必须成对为 string 或 null。
+  bidPrice: string | null;
+  bidSize: string | null;
+  askPrice: string | null;
+  askSize: string | null;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;
@@ -536,7 +537,7 @@ interface MarketDataStreamStatus {
   lastReceivedAt?: number;
   lastReadyAt?: number;
   inactiveSince?: number;
-  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling" | "no_quote";
+  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 }
 
 interface MarketDataStatus extends MarketDataStreamStatus {
@@ -651,6 +652,32 @@ interface AccountDataStatus {
   reason?: PrivateRuntimeReason;
 }
 ```
+
+`L1Book` 的报价形态从 nullable 字段直接推导：bid/ask 都有值表示双边报价；只有 bid 表示当前可按 bid 卖出该腿；只有 ask 表示当前可按 ask 买入该腿；四个字段全为 `null` 表示当前无可执行报价。SDK 不新增独立 quote state，也不会用 `status.reason` 表达空盘口。
+
+TypeScript 不会因为检查了 `bidPrice` 就自动把 `bidSize` 收窄为非 null；调用代码里可以用本地 helper 固化 bid/ask 判断：
+
+```ts
+type L1Side = { price: string; size: string };
+
+function bidSide(book: L1Book): L1Side | undefined {
+  return book.bidPrice === null || book.bidSize === null
+    ? undefined
+    : { price: book.bidPrice, size: book.bidSize };
+}
+
+function askSide(book: L1Book): L1Side | undefined {
+  return book.askPrice === null || book.askSize === null
+    ? undefined
+    : { price: book.askPrice, size: book.askSize };
+}
+
+function isEmptyBook(book: L1Book): boolean {
+  return bidSide(book) === undefined && askSide(book) === undefined;
+}
+```
+
+`askSide(book)` 存在表示当前可按 ask 买入；`bidSide(book)` 存在表示当前可按 bid 卖出。两者都存在是 two-sided，两者都不存在是 empty。
 
 ```ts
 type BinanceMarginSideEffectType =

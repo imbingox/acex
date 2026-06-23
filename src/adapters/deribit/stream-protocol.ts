@@ -21,22 +21,14 @@ export interface DeribitStreamMessage {
 
 export interface DeribitL1BookPayload {
   readonly channel: "l1book";
-  readonly bidPrice: string;
-  readonly bidSize: string;
-  readonly askPrice: string;
-  readonly askSize: string;
+  readonly bidPrice: string | null;
+  readonly bidSize: string | null;
+  readonly askPrice: string | null;
+  readonly askSize: string | null;
   readonly exchangeTs?: number;
-}
-
-export interface DeribitNoQuotePayload {
-  readonly channel: "l1book";
-  readonly reason: "no_quote";
-  readonly exchangeTs?: number;
-  readonly raw?: Record<string, unknown>;
 }
 
 export type DeribitStreamPayload = DeribitL1BookPayload;
-export type DeribitStreamStatusPayload = DeribitNoQuotePayload;
 
 const DERIBIT_WS_URL = "wss://www.deribit.com/ws/api/v2";
 
@@ -75,6 +67,19 @@ function positiveDecimal(value: unknown): string | undefined {
   return toCanonical(value);
 }
 
+function quoteSide(
+  price: unknown,
+  size: unknown,
+): { price: string | null; size: string | null } {
+  const sidePrice = positiveDecimal(price);
+  const sideSize = positiveDecimal(size);
+  if (!sidePrice || !sideSize) {
+    return { price: null, size: null };
+  }
+
+  return { price: sidePrice, size: sideSize };
+}
+
 function exchangeTs(data: Record<string, unknown>): number | undefined {
   const timestamp = data.timestamp;
   return typeof timestamp === "number" && Number.isFinite(timestamp)
@@ -87,8 +92,7 @@ export class DeribitStreamProtocol
     VenueStreamProtocol<
       DeribitStreamMessage,
       DeribitStreamDescriptor,
-      DeribitStreamPayload,
-      DeribitStreamStatusPayload
+      DeribitStreamPayload
     >
 {
   private nextControlFrameId = 1;
@@ -132,11 +136,6 @@ export class DeribitStreamProtocol
         subscriptionKey: string;
         payload: DeribitStreamPayload;
       }
-    | {
-        kind: "status";
-        subscriptionKey: string;
-        payload: DeribitStreamStatusPayload;
-      }
     | { kind: "ack" }
     | { kind: "ignore" } {
     if (message.id !== undefined && message.method !== "subscription") {
@@ -157,37 +156,26 @@ export class DeribitStreamProtocol
       return { kind: "ignore" };
     }
 
-    const key = subscriptionKey(instrumentName);
-    const data = isRecord(message.params.data) ? message.params.data : {};
-    const bidPrice = positiveDecimal(data.best_bid_price);
-    const bidSize = positiveDecimal(data.best_bid_amount);
-    const askPrice = positiveDecimal(data.best_ask_price);
-    const askSize = positiveDecimal(data.best_ask_amount);
-    const payloadExchangeTs = exchangeTs(data);
-
-    if (bidPrice && bidSize && askPrice && askSize) {
-      return {
-        kind: "data",
-        subscriptionKey: key,
-        payload: {
-          channel: "l1book",
-          bidPrice,
-          bidSize,
-          askPrice,
-          askSize,
-          exchangeTs: payloadExchangeTs,
-        },
-      };
+    if (!isRecord(message.params.data)) {
+      return { kind: "ignore" };
     }
 
+    const key = subscriptionKey(instrumentName);
+    const data = message.params.data;
+    const bid = quoteSide(data.best_bid_price, data.best_bid_amount);
+    const ask = quoteSide(data.best_ask_price, data.best_ask_amount);
+    const payloadExchangeTs = exchangeTs(data);
+
     return {
-      kind: "status",
+      kind: "data",
       subscriptionKey: key,
       payload: {
         channel: "l1book",
-        reason: "no_quote",
+        bidPrice: bid.price,
+        bidSize: bid.size,
+        askPrice: ask.price,
+        askSize: ask.size,
         exchangeTs: payloadExchangeTs,
-        raw: data,
       },
     };
   }

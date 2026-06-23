@@ -162,7 +162,7 @@ export interface MarketDataStatus {
   lastReceivedAt?: number;
   lastReadyAt?: number;
   inactiveSince?: number;
-  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling" | "no_quote";
+  reason?: "ws_disconnected" | "heartbeat_timeout" | "reconciling";
 }
 
 export interface MarketDataStreamStatus {
@@ -250,10 +250,10 @@ export interface MarketEventFilter {
 export interface L1Book {
   venue: Venue;
   symbol: string;
-  bidPrice: string;
-  bidSize: string;
-  askPrice: string;
-  askSize: string;
+  bidPrice: string | null;
+  bidSize: string | null;
+  askPrice: string | null;
+  askSize: string | null;
   exchangeTs?: number;
   receivedAt: number;
   updatedAt: number;

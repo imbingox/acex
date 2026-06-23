@@ -43,7 +43,8 @@ export interface MarketManager {
 - `client.stop()` 关闭所有底层 market websocket，但保留 active logical leases；`client.start()` 后按仍 active 的 leases 自动恢复底层 stream。
 - stopped 期间调用 `lease.close()` 正常减少引用；某 channel 最后一个 lease 关闭后，后续 start 不再恢复该 channel。
 - `MarketSubscriptionLease.ready` 是首次 ready barrier，不是可重置生命周期 signal；restart 后恢复状态通过 snapshot/status/events 观察。
-- `no_quote` 这类 status-only market 输入不算首条有效 market data：不得 resolve `lease.ready`，不得清 initial-message timeout，且不得发布半成品 `l1_book.updated`。已有完整 L1 后收到 `no_quote` 时，只更新 snapshot/status freshness 为 `stale`、reason 为 `no_quote`，并发布 `market.status_changed`。
+- 对 L1 Book，`lease.ready` 在首份 top-of-book 状态到达后 resolve；two-sided、bid-only、ask-only 和四字段全 `null` 的 empty 都是可读状态。
+- Empty L1 Book 是 fresh/readable market state：`status.ready = true`、`freshness = "fresh"`、`reason` 为空。空盘口不得通过 status reason 表达。
 
 ### 4. Validation & Error Matrix
 
@@ -53,7 +54,7 @@ export interface MarketManager {
 | market 不存在 / inactive / venue 不支持 | `acquire*Subscription()` reject 对应 market error，且不创建 lease |
 | funding rate 用在非 swap contract market | reject `MARKET_FUNDING_RATE_UNSUPPORTED` |
 | 首条 market data timeout / stream initial ready reject | `lease.ready` reject `MARKET_STREAM_TIMEOUT`，pending lease 自动释放，底层 stream 关闭并清空 |
-| ready 前收到 `no_quote` status-only 输入 | `lease.ready` 保持 pending，getter 不返回半成品 L1；之后若仍无有效 data，按首包超时失败 |
+| L1 ready 前收到 bid-only / ask-only / empty | `lease.ready` resolve，getter 返回 nullable `L1Book`，并发布 `l1_book.updated` |
 | 多个 pending leases 共享同一条初始 stream 且该 stream 失败 | 所有仍 pending 的相关 leases 都 reject，且引用不泄漏 |
 | `lease.close()` 发生在 ready settle 前 | 当前 lease 释放，`lease.ready` reject 明确 close-before-ready 错误 |
 | `lease.close()` 发生在 ready resolved 后 | 当前 lease 释放；不是最后一个 lease 时底层 stream 保持运行 |

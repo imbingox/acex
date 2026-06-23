@@ -126,6 +126,10 @@ test("caller can observe l1 book keep changing for one minute", async () => {
       const event = await nextEvent(iterator, 5_000);
       eventCount += 1;
 
+      if (event.snapshot.bidPrice === null) {
+        throw new Error("Expected Binance L1 continuity feed to include bid");
+      }
+
       if (eventCount === 1) {
         firstBidPrice = event.snapshot.bidPrice;
         expect(event.snapshot.version).toBe(1);

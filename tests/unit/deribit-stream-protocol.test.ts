@@ -86,32 +86,73 @@ test("Deribit stream protocol canonicalizes scientific notation quote decimals",
   });
 });
 
-test("Deribit stream protocol routes missing or non-positive quote as no_quote status", () => {
+test("Deribit stream protocol routes partial and empty quotes as nullable L1 data", () => {
   const protocol = new DeribitStreamProtocol();
 
-  for (const data of [
-    {
-      timestamp: 1710000000002,
-      best_bid_price: null,
-      best_bid_amount: 2,
-      best_ask_price: 0.102,
-      best_ask_amount: 3,
-    },
-    {
-      timestamp: 1710000000003,
-      best_bid_price: 0.101,
-      best_bid_amount: 0,
-      best_ask_price: 0.102,
-      best_ask_amount: 3,
-    },
-    {
-      timestamp: 1710000000004,
-      best_bid_price: Number.POSITIVE_INFINITY,
-      best_bid_amount: 2,
-      best_ask_price: 0.102,
-      best_ask_amount: 3,
-    },
-  ]) {
+  const cases = [
+    [
+      {
+        timestamp: 1710000000002,
+        best_bid_price: 0.101,
+        best_bid_amount: 2,
+        best_ask_price: null,
+        best_ask_amount: null,
+      },
+      {
+        bidPrice: "0.101",
+        bidSize: "2",
+        askPrice: null,
+        askSize: null,
+      },
+    ],
+    [
+      {
+        timestamp: 1710000000003,
+        best_bid_price: null,
+        best_bid_amount: null,
+        best_ask_price: 0.102,
+        best_ask_amount: 3,
+      },
+      {
+        bidPrice: null,
+        bidSize: null,
+        askPrice: "0.102",
+        askSize: "3",
+      },
+    ],
+    [
+      {
+        timestamp: 1710000000004,
+        best_bid_price: 0.101,
+        best_bid_amount: 0,
+        best_ask_price: 0.102,
+        best_ask_amount: 3,
+      },
+      {
+        bidPrice: null,
+        bidSize: null,
+        askPrice: "0.102",
+        askSize: "3",
+      },
+    ],
+    [
+      {
+        timestamp: 1710000000005,
+        best_bid_price: Number.POSITIVE_INFINITY,
+        best_bid_amount: 2,
+        best_ask_price: null,
+        best_ask_amount: null,
+      },
+      {
+        bidPrice: null,
+        bidSize: null,
+        askPrice: null,
+        askSize: null,
+      },
+    ],
+  ] as const;
+
+  for (const [data, expected] of cases) {
     const routed = protocol.routeMessage({
       method: "subscription",
       params: {
@@ -120,14 +161,60 @@ test("Deribit stream protocol routes missing or non-positive quote as no_quote s
       },
     });
 
-    expect(routed).toMatchObject({
-      kind: "status",
+    expect(routed).toEqual({
+      kind: "data",
       subscriptionKey: "l1book:BTC-21JUN26-57000-C",
       payload: {
         channel: "l1book",
-        reason: "no_quote",
+        ...expected,
         exchangeTs: data.timestamp,
       },
     });
+  }
+});
+
+test("Deribit stream protocol nulls a side unless price and size are both valid", () => {
+  const protocol = new DeribitStreamProtocol();
+  const routed = protocol.routeMessage({
+    method: "subscription",
+    params: {
+      channel: "quote.BTC-21JUN26-57000-C",
+      data: {
+        timestamp: 1710000000002,
+        best_bid_price: 0.101,
+        best_bid_amount: null,
+        best_ask_price: 0.102,
+        best_ask_amount: 3,
+      },
+    },
+  });
+
+  expect(routed).toEqual({
+    kind: "data",
+    subscriptionKey: "l1book:BTC-21JUN26-57000-C",
+    payload: {
+      channel: "l1book",
+      bidPrice: null,
+      bidSize: null,
+      askPrice: "0.102",
+      askSize: "3",
+      exchangeTs: 1710000000002,
+    },
+  });
+});
+
+test("Deribit stream protocol ignores malformed quote data payloads", () => {
+  const protocol = new DeribitStreamProtocol();
+
+  for (const data of [undefined, null, [], "not-an-object"] as const) {
+    expect(
+      protocol.routeMessage({
+        method: "subscription",
+        params: {
+          channel: "quote.BTC-21JUN26-57000-C",
+          data,
+        },
+      }),
+    ).toEqual({ kind: "ignore" });
   }
 });

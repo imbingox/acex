@@ -1,5 +1,6 @@
 import type {
   EncodedVenueControlFrame,
+  StreamLivenessPolicy,
   VenueControlAck,
   VenueStreamProtocol,
 } from "../../internal/subscription-multiplexer.ts";
@@ -48,6 +49,10 @@ export type BinanceStreamPayload =
       readonly exchangeTs?: number;
     };
 
+interface BinanceStreamProtocolOptions {
+  readonly fundingRateStaleAfterMs: number;
+}
+
 const BINANCE_SPOT_WS_BASE_URL = "wss://stream.binance.com:9443/ws";
 const BINANCE_USDM_WS_BASE_URL = "wss://fstream.binance.com/ws";
 const BINANCE_USDM_MARKET_WS_BASE_URL = "wss://fstream.binance.com/market/ws";
@@ -94,6 +99,8 @@ export class BinanceStreamProtocol
 {
   private nextControlFrameId = 1;
 
+  constructor(private readonly options: BinanceStreamProtocolOptions) {}
+
   subscriptionKey(descriptor: BinanceStreamDescriptor): string {
     return `${descriptor.channel}:${descriptor.market.id}`;
   }
@@ -129,6 +136,20 @@ export class BinanceStreamProtocol
     descriptors: BinanceStreamDescriptor[],
   ): EncodedVenueControlFrame {
     return this.encodeControlFrame("UNSUBSCRIBE", descriptors);
+  }
+
+  livenessPolicy(
+    descriptor: BinanceStreamDescriptor,
+  ): StreamLivenessPolicy | undefined {
+    if (descriptor.channel !== "fundingRate") {
+      return undefined;
+    }
+
+    return {
+      kind: "periodic",
+      staleAfterMs: this.options.fundingRateStaleAfterMs,
+      onStale: "reconnect",
+    };
   }
 
   routeMessage(message: BinanceStreamMessage):

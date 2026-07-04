@@ -9,6 +9,15 @@ type Freshness = "fresh" | "stale";
 type StaleReason = "heartbeat_timeout";
 type ControlFrameKind = "subscribe" | "unsubscribe";
 type ControlFrameAckId = number | string;
+type LivenessStaleAction = "mark_stale" | "reconnect";
+
+export type StreamLivenessPolicy =
+  | { readonly kind: "event_driven" }
+  | {
+      readonly kind: "periodic" | "low_volume";
+      readonly staleAfterMs: number;
+      readonly onStale: LivenessStaleAction;
+    };
 
 export interface EncodedVenueControlFrame {
   readonly data: string;
@@ -57,6 +66,7 @@ export interface VenueStreamProtocol<
   parseMessage(data: string): TMessage | undefined;
   encodeSubscribe(descriptors: TDescriptor[]): VenueControlFrameEncoding;
   encodeUnsubscribe(descriptors: TDescriptor[]): VenueControlFrameEncoding;
+  livenessPolicy?(descriptor: TDescriptor): StreamLivenessPolicy | undefined;
   routeMessage(
     message: TMessage,
   ):
@@ -100,7 +110,10 @@ interface LocalSubscriber<TPayload, TStatusPayload> {
 interface SubState<TDescriptor, TPayload, TStatusPayload> {
   readonly descriptor: TDescriptor;
   readonly subscribers: Set<LocalSubscriber<TPayload, TStatusPayload>>;
+  readonly livenessPolicy: StreamLivenessPolicy | undefined;
   ready: boolean;
+  livenessTimer: TimerHandle | undefined;
+  livenessStaleNotified: boolean;
 }
 
 interface ControlFrame<TDescriptor> {
@@ -128,6 +141,7 @@ interface ConnectionState<TDescriptor, TPayload, TStatusPayload> {
   isOpen: boolean;
   hasOpened: boolean;
   closeAfterControlQueueDrained: boolean;
+  readonly suppressedDisconnectSubscriptionKeys: Set<string>;
   controlTimer: TimerHandle | undefined;
   lastControlSentAt: number | undefined;
 }
@@ -169,6 +183,15 @@ function normalizeControlFrameEncoding(
 
 function controlAckKey(id: ControlFrameAckId): string {
   return String(id);
+}
+
+function tracksBusinessLiveness(
+  policy: StreamLivenessPolicy | undefined,
+): policy is Extract<
+  StreamLivenessPolicy,
+  { readonly kind: "periodic" | "low_volume" }
+> {
+  return policy?.kind === "periodic" || policy?.kind === "low_volume";
 }
 
 export class SubscriptionMultiplexer<
@@ -253,7 +276,10 @@ export class SubscriptionMultiplexer<
     const sub: SubState<TDescriptor, TPayload, TStatusPayload> = {
       descriptor,
       subscribers: new Set([localSubscriber]),
+      livenessPolicy: this.protocol.livenessPolicy?.(descriptor),
       ready: false,
+      livenessTimer: undefined,
+      livenessStaleNotified: false,
     };
 
     connection.subs.set(subscriptionKey, sub);
@@ -331,6 +357,7 @@ export class SubscriptionMultiplexer<
       isOpen: false,
       hasOpened: false,
       closeAfterControlQueueDrained: false,
+      suppressedDisconnectSubscriptionKeys: new Set(),
       controlTimer: undefined,
       lastControlSentAt: undefined,
     };
@@ -355,7 +382,7 @@ export class SubscriptionMultiplexer<
       messageWatchdog: {
         staleAfterMs: this.options.staleAfterMs,
         onStale: () => {
-          this.markAllStale(connection, "heartbeat_timeout");
+          this.handleConnectionStale(connection);
         },
       },
       reconnect: {
@@ -469,6 +496,10 @@ export class SubscriptionMultiplexer<
   private handleUnexpectedClose(
     connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
+    const suppressedKeys = new Set(
+      connection.suppressedDisconnectSubscriptionKeys,
+    );
+    connection.suppressedDisconnectSubscriptionKeys.clear();
     connection.isOpen = false;
     connection.lastControlSentAt = undefined;
     if (connection.controlTimer) {
@@ -476,6 +507,7 @@ export class SubscriptionMultiplexer<
       connection.controlTimer = undefined;
     }
     this.clearPendingControlAcks(connection);
+    this.clearConnectionBusinessLivenessTimers(connection);
 
     if (connection.subs.size === 0) {
       this.closeConnection(connection);
@@ -483,7 +515,11 @@ export class SubscriptionMultiplexer<
     }
 
     this.markAllStaleSilently(connection);
-    for (const sub of connection.subs.values()) {
+    for (const [subscriptionKey, sub] of connection.subs) {
+      if (suppressedKeys.has(subscriptionKey)) {
+        continue;
+      }
+
       for (const localSubscriber of sub.subscribers) {
         localSubscriber.callbacks.onDisconnected();
       }
@@ -511,7 +547,13 @@ export class SubscriptionMultiplexer<
     }
 
     if (routed.kind === "data" && !sub.ready) {
-      this.markSubscriptionReady(sub);
+      this.markSubscriptionReady(connection, routed.subscriptionKey, sub, {
+        startLivenessTimer: false,
+      });
+    }
+
+    if (routed.kind === "data") {
+      this.noteSubscriptionData(connection, routed.subscriptionKey, sub);
     }
 
     if (sub.subscribers.size === 1) {
@@ -616,6 +658,7 @@ export class SubscriptionMultiplexer<
     for (const localSubscriber of sub.subscribers) {
       this.clearInitialTimer(localSubscriber);
     }
+    this.clearBusinessLivenessTimer(sub);
   }
 
   private resolveSubReady(
@@ -630,12 +673,21 @@ export class SubscriptionMultiplexer<
   }
 
   private markSubscriptionReady(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    subscriptionKey: string,
     sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    options: { startLivenessTimer: boolean } = {
+      startLivenessTimer: true,
+    },
   ): void {
     sub.ready = true;
     for (const localSubscriber of sub.subscribers) {
       this.clearInitialTimer(localSubscriber);
       this.resolveSubReady(localSubscriber);
+    }
+
+    if (options.startLivenessTimer) {
+      this.scheduleBusinessLivenessTimer(connection, subscriptionKey, sub);
     }
   }
 
@@ -908,7 +960,7 @@ export class SubscriptionMultiplexer<
         for (const subscriptionKey of frame.descriptors.keys()) {
           const sub = connection.subs.get(subscriptionKey);
           if (sub) {
-            this.markSubscriptionReady(sub);
+            this.markSubscriptionReady(connection, subscriptionKey, sub);
           }
         }
       }
@@ -961,7 +1013,7 @@ export class SubscriptionMultiplexer<
     for (const subscriptionKey of pending.subscriptionKeys) {
       const sub = connection.subs.get(subscriptionKey);
       if (sub) {
-        this.markSubscriptionReady(sub);
+        this.markSubscriptionReady(connection, subscriptionKey, sub);
       }
     }
   }
@@ -1075,6 +1127,103 @@ export class SubscriptionMultiplexer<
       localSubscriber.callbacks.onError(error);
       localSubscriber.freshness = "stale";
       localSubscriber.callbacks.onDisconnected();
+    }
+  }
+
+  private handleConnectionStale(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
+    this.markAllStale(connection, "heartbeat_timeout");
+  }
+
+  private noteSubscriptionData(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    subscriptionKey: string,
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
+    sub.livenessStaleNotified = false;
+    this.scheduleBusinessLivenessTimer(connection, subscriptionKey, sub, {
+      resetExisting: true,
+    });
+  }
+
+  private scheduleBusinessLivenessTimer(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+    subscriptionKey: string,
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    options: { resetExisting: boolean } = { resetExisting: false },
+  ): void {
+    const policy = sub.livenessPolicy;
+    if (!tracksBusinessLiveness(policy)) {
+      return;
+    }
+
+    if (sub.livenessTimer) {
+      if (!options.resetExisting) {
+        return;
+      }
+
+      this.clearTimer(sub.livenessTimer);
+      sub.livenessTimer = undefined;
+    }
+
+    sub.livenessStaleNotified = false;
+    sub.livenessTimer = this.setTimer(() => {
+      sub.livenessTimer = undefined;
+      if (
+        connection.subs.get(subscriptionKey) !== sub ||
+        !connection.isOpen ||
+        sub.livenessStaleNotified
+      ) {
+        return;
+      }
+
+      sub.livenessStaleNotified = true;
+      this.markSubscriptionStale(sub, "heartbeat_timeout");
+      if (policy.onStale === "reconnect") {
+        connection.suppressedDisconnectSubscriptionKeys.add(subscriptionKey);
+        const restarted = connection.session.restart(
+          `business liveness timeout for ${subscriptionKey}`,
+        );
+        if (!restarted) {
+          connection.suppressedDisconnectSubscriptionKeys.delete(
+            subscriptionKey,
+          );
+        }
+      }
+    }, policy.staleAfterMs);
+  }
+
+  private clearBusinessLivenessTimer(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
+    if (!sub.livenessTimer) {
+      return;
+    }
+
+    this.clearTimer(sub.livenessTimer);
+    sub.livenessTimer = undefined;
+  }
+
+  private clearConnectionBusinessLivenessTimers(
+    connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
+  ): void {
+    for (const sub of connection.subs.values()) {
+      this.clearBusinessLivenessTimer(sub);
+    }
+  }
+
+  private markSubscriptionStale(
+    sub: SubState<TDescriptor, TPayload, TStatusPayload>,
+    reason: StaleReason,
+  ): void {
+    for (const localSubscriber of sub.subscribers) {
+      if (localSubscriber.freshness === "stale") {
+        continue;
+      }
+
+      localSubscriber.freshness = "stale";
+      localSubscriber.callbacks.onFreshnessChange("stale", reason);
     }
   }
 }

@@ -1159,19 +1159,7 @@ test("funding rate stream handles stale disconnect and reconnect", async () => {
     freshness: "stale",
     reason: "heartbeat_timeout",
   });
-
-  firstSocket.disconnect();
-  await Bun.sleep(0);
-
-  expect(
-    client.market.getMarketStatus({
-      venue: "binance",
-      symbol: "BTC/USDT:USDT",
-    }),
-  ).toMatchObject({
-    freshness: "stale",
-    reason: "ws_disconnected",
-  });
+  expect(firstSocket.readyState).toBe(FakeWebSocket.CLOSED);
 
   const secondSocket = await waitForSocket(
     BINANCE_USDM_MARKET_WS_BASE_URL,

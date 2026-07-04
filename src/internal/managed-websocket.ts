@@ -62,6 +62,7 @@ export interface ManagedWebSocketOptions<TMessage> {
 export interface ManagedWebSocketSession {
   readonly ready: Promise<void>;
   send(data: string): void;
+  restart(reason?: string): void;
   close(): void;
 }
 
@@ -475,6 +476,18 @@ export function createManagedWebSocket<TMessage>(
       }
 
       activeSocket.send(data);
+    },
+    restart(reason = "websocket restart requested"): void {
+      if (
+        closed ||
+        !activeSocket ||
+        activeSocket.readyState === WebSocket.CLOSING ||
+        activeSocket.readyState === WebSocket.CLOSED
+      ) {
+        return;
+      }
+
+      activeSocket.close(1000, reason);
     },
     close() {
       if (closed) {

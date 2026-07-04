@@ -2,6 +2,7 @@ import { beforeEach, expect, test } from "bun:test";
 import {
   type MultiplexedStreamCallbacks,
   type MultiplexerSubscriptionHandle,
+  type StreamLivenessPolicy,
   SubscriptionMultiplexer,
   type VenueHeartbeat,
   type VenueStreamProtocol,
@@ -207,6 +208,22 @@ const noAckProtocol: VenueStreamProtocol<
     } satisfies FakeControlFrame);
   },
 };
+
+function createLivenessProtocol(
+  livenessPolicy: (
+    descriptor: FakeDescriptor,
+  ) => StreamLivenessPolicy | undefined,
+  baseProtocol: VenueStreamProtocol<
+    FakeMessage,
+    FakeDescriptor,
+    FakePayload
+  > = protocol,
+): VenueStreamProtocol<FakeMessage, FakeDescriptor, FakePayload> {
+  return {
+    ...baseProtocol,
+    livenessPolicy,
+  };
+}
 
 function createCallbacks(): {
   callbacks: MultiplexedStreamCallbacks<FakePayload>;
@@ -1127,6 +1144,113 @@ test("quiet subscription stays fresh while the shared connection receives other 
     { freshness: "fresh" },
     { freshness: "stale", reason: "heartbeat_timeout" },
   ]);
+});
+
+test("periodic subscription stale restarts the socket and replays the subscription", async () => {
+  const clock = new FakeClock();
+  const periodicProtocol = createLivenessProtocol((item) =>
+    item.key === "a" ? { kind: "periodic", onStale: "reconnect" } : undefined,
+  );
+  const multiplexer = createMultiplexerWithProtocol(clock, periodicProtocol);
+  const callbacks = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  ackFrame(socket, 0);
+  await handle.ready;
+  socket.emitJson({ key: "a", value: "A1" });
+
+  expect(callbacks.log.freshness).toEqual([{ freshness: "fresh" }]);
+
+  clock.advance(99);
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+
+  clock.advance(1);
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(callbacks.log.freshness).toEqual([
+    { freshness: "fresh" },
+    { freshness: "stale", reason: "heartbeat_timeout" },
+  ]);
+  expect(callbacks.log.disconnected).toBe(0);
+
+  clock.advance(10);
+  const reconnectSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+
+  expect(sentFrame(reconnectSocket, 0)).toEqual({
+    op: "sub",
+    keys: ["a"],
+  });
+
+  ackFrame(reconnectSocket, 0);
+  reconnectSocket.emitJson({ key: "a", value: "A2" });
+
+  expect(callbacks.log.payloads.map((entry) => entry.payload.value)).toEqual([
+    "A1",
+    "A2",
+  ]);
+  expect(callbacks.log.freshness).toEqual([
+    { freshness: "fresh" },
+    { freshness: "stale", reason: "heartbeat_timeout" },
+    { freshness: "fresh" },
+  ]);
+});
+
+test("default subscription stale does not restart an open socket", async () => {
+  const clock = new FakeClock();
+  const multiplexer = createMultiplexer(clock);
+  const callbacks = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  ackFrame(socket, 0);
+  await handle.ready;
+  socket.emitJson({ key: "a", value: "A1" });
+
+  clock.advance(100);
+
+  expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+  expect(socketsForUrl("wss://fake.test/alpha")).toHaveLength(1);
+  expect(callbacks.log.freshness).toEqual([
+    { freshness: "fresh" },
+    { freshness: "stale", reason: "heartbeat_timeout" },
+  ]);
+});
+
+test("periodic liveness starts after a no-ACK subscribe frame is sent", async () => {
+  const clock = new FakeClock();
+  const periodicNoAckProtocol = createLivenessProtocol(
+    () => ({ kind: "periodic", onStale: "reconnect" }),
+    noAckProtocol,
+  );
+  const multiplexer = createMultiplexerWithProtocol(
+    clock,
+    periodicNoAckProtocol,
+  );
+  const callbacks = createCallbacks();
+  const handle = multiplexer.subscribe(descriptor("a"), callbacks.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+
+  expect(sentFrame(socket, 0)).toEqual({ op: "sub", keys: ["a"] });
+  await handle.ready;
+
+  clock.advance(100);
+
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(callbacks.log.freshness).toEqual([]);
+  expect(callbacks.log.disconnected).toBe(0);
+
+  clock.advance(10);
+  const reconnectSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+
+  expect(sentFrame(reconnectSocket, 0)).toEqual({ op: "sub", keys: ["a"] });
 });
 
 test("control frames are batched and throttled per connection", async () => {

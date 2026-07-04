@@ -1,5 +1,6 @@
 import type {
   EncodedVenueControlFrame,
+  StreamLivenessPolicy,
   VenueControlAck,
   VenueStreamProtocol,
 } from "../../internal/subscription-multiplexer.ts";
@@ -129,6 +130,19 @@ export class BinanceStreamProtocol
     descriptors: BinanceStreamDescriptor[],
   ): EncodedVenueControlFrame {
     return this.encodeControlFrame("UNSUBSCRIBE", descriptors);
+  }
+
+  livenessPolicy(
+    descriptor: BinanceStreamDescriptor,
+  ): StreamLivenessPolicy | undefined {
+    if (descriptor.channel !== "fundingRate") {
+      return undefined;
+    }
+
+    return {
+      kind: "periodic",
+      onStale: "reconnect",
+    };
   }
 
   routeMessage(message: BinanceStreamMessage):

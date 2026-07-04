@@ -23,7 +23,7 @@ const binanceUsdmMarket: BinanceMarketDefinition = {
 };
 
 test("BinanceStreamProtocol routes funding only for markPriceUpdate events", () => {
-  const protocol = new BinanceStreamProtocol();
+  const protocol = new BinanceStreamProtocol({ fundingRateStaleAfterMs: 100 });
 
   expect(protocol.routeMessage({ s: "BTCUSDT", r: "0.00010000" })).toEqual({
     kind: "ignore",
@@ -45,7 +45,7 @@ test("BinanceStreamProtocol routes funding only for markPriceUpdate events", () 
 });
 
 test("BinanceStreamProtocol applies periodic reconnect liveness only to funding rate streams", () => {
-  const protocol = new BinanceStreamProtocol();
+  const protocol = new BinanceStreamProtocol({ fundingRateStaleAfterMs: 100 });
 
   expect(
     protocol.livenessPolicy({
@@ -54,6 +54,7 @@ test("BinanceStreamProtocol applies periodic reconnect liveness only to funding 
     }),
   ).toEqual({
     kind: "periodic",
+    staleAfterMs: 100,
     onStale: "reconnect",
   });
   expect(

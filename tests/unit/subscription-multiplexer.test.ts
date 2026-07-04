@@ -1149,7 +1149,9 @@ test("quiet subscription stays fresh while the shared connection receives other 
 test("periodic subscription stale restarts the socket and replays the subscription", async () => {
   const clock = new FakeClock();
   const periodicProtocol = createLivenessProtocol((item) =>
-    item.key === "a" ? { kind: "periodic", onStale: "reconnect" } : undefined,
+    item.key === "a"
+      ? { kind: "periodic", staleAfterMs: 100, onStale: "reconnect" }
+      : undefined,
   );
   const multiplexer = createMultiplexerWithProtocol(clock, periodicProtocol);
   const callbacks = createCallbacks();
@@ -1198,6 +1200,79 @@ test("periodic subscription stale restarts the socket and replays the subscripti
   ]);
 });
 
+test("periodic restart still disconnects unrelated subscriptions on the shared socket", async () => {
+  const clock = new FakeClock();
+  const periodicProtocol = createLivenessProtocol((item) =>
+    item.key === "a"
+      ? { kind: "periodic", staleAfterMs: 100, onStale: "reconnect" }
+      : undefined,
+  );
+  const multiplexer = createMultiplexerWithProtocol(clock, periodicProtocol);
+  const periodic = createCallbacks();
+  const unrelated = createCallbacks();
+
+  multiplexer.subscribe(descriptor("a"), periodic.callbacks);
+  multiplexer.subscribe(descriptor("b"), unrelated.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  ackFrame(socket, 0);
+  socket.emitJson({ key: "a", value: "A1" });
+  socket.emitJson({ key: "b", value: "B1" });
+
+  clock.advance(100);
+
+  expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  expect(periodic.log.freshness).toEqual([
+    { freshness: "fresh" },
+    { freshness: "stale", reason: "heartbeat_timeout" },
+  ]);
+  expect(periodic.log.disconnected).toBe(0);
+  expect(unrelated.log.freshness).toEqual([{ freshness: "fresh" }]);
+  expect(unrelated.log.disconnected).toBe(1);
+
+  clock.advance(10);
+  const reconnectSocket = await waitForSocket("wss://fake.test/alpha", 1);
+  await Promise.resolve();
+  clock.advance(0);
+
+  expect(sentFrame(reconnectSocket, 0)).toEqual({
+    op: "sub",
+    keys: ["a", "b"],
+  });
+});
+
+test("periodic restart no-op does not leave disconnect suppression behind", async () => {
+  const clock = new FakeClock();
+  const periodicProtocol = createLivenessProtocol(() => ({
+    kind: "periodic",
+    staleAfterMs: 100,
+    onStale: "reconnect",
+  }));
+  const multiplexer = createMultiplexerWithProtocol(clock, periodicProtocol);
+  const callbacks = createCallbacks();
+
+  multiplexer.subscribe(descriptor("a"), callbacks.callbacks);
+
+  const socket = await openSocket("wss://fake.test/alpha");
+  clock.advance(0);
+  ackFrame(socket, 0);
+  socket.emitJson({ key: "a", value: "A1" });
+  socket.readyState = FakeWebSocket.CLOSING;
+
+  clock.advance(100);
+
+  expect(callbacks.log.freshness).toEqual([
+    { freshness: "fresh" },
+    { freshness: "stale", reason: "heartbeat_timeout" },
+  ]);
+  expect(callbacks.log.disconnected).toBe(0);
+
+  socket.disconnect();
+
+  expect(callbacks.log.disconnected).toBe(1);
+});
+
 test("default subscription stale does not restart an open socket", async () => {
   const clock = new FakeClock();
   const multiplexer = createMultiplexer(clock);
@@ -1223,7 +1298,7 @@ test("default subscription stale does not restart an open socket", async () => {
 test("periodic liveness starts after a no-ACK subscribe frame is sent", async () => {
   const clock = new FakeClock();
   const periodicNoAckProtocol = createLivenessProtocol(
-    () => ({ kind: "periodic", onStale: "reconnect" }),
+    () => ({ kind: "periodic", staleAfterMs: 100, onStale: "reconnect" }),
     noAckProtocol,
   );
   const multiplexer = createMultiplexerWithProtocol(

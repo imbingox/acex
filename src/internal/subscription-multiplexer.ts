@@ -15,7 +15,7 @@ export type StreamLivenessPolicy =
   | { readonly kind: "event_driven" }
   | {
       readonly kind: "periodic" | "low_volume";
-      readonly staleAfterMs?: number;
+      readonly staleAfterMs: number;
       readonly onStale: LivenessStaleAction;
     };
 
@@ -141,7 +141,7 @@ interface ConnectionState<TDescriptor, TPayload, TStatusPayload> {
   isOpen: boolean;
   hasOpened: boolean;
   closeAfterControlQueueDrained: boolean;
-  suppressNextDisconnectNotification: boolean;
+  readonly suppressedDisconnectSubscriptionKeys: Set<string>;
   controlTimer: TimerHandle | undefined;
   lastControlSentAt: number | undefined;
 }
@@ -357,7 +357,7 @@ export class SubscriptionMultiplexer<
       isOpen: false,
       hasOpened: false,
       closeAfterControlQueueDrained: false,
-      suppressNextDisconnectNotification: false,
+      suppressedDisconnectSubscriptionKeys: new Set(),
       controlTimer: undefined,
       lastControlSentAt: undefined,
     };
@@ -496,8 +496,10 @@ export class SubscriptionMultiplexer<
   private handleUnexpectedClose(
     connection: ConnectionState<TDescriptor, TPayload, TStatusPayload>,
   ): void {
-    const notifyDisconnected = !connection.suppressNextDisconnectNotification;
-    connection.suppressNextDisconnectNotification = false;
+    const suppressedKeys = new Set(
+      connection.suppressedDisconnectSubscriptionKeys,
+    );
+    connection.suppressedDisconnectSubscriptionKeys.clear();
     connection.isOpen = false;
     connection.lastControlSentAt = undefined;
     if (connection.controlTimer) {
@@ -513,11 +515,13 @@ export class SubscriptionMultiplexer<
     }
 
     this.markAllStaleSilently(connection);
-    if (notifyDisconnected) {
-      for (const sub of connection.subs.values()) {
-        for (const localSubscriber of sub.subscribers) {
-          localSubscriber.callbacks.onDisconnected();
-        }
+    for (const [subscriptionKey, sub] of connection.subs) {
+      if (suppressedKeys.has(subscriptionKey)) {
+        continue;
+      }
+
+      for (const localSubscriber of sub.subscribers) {
+        localSubscriber.callbacks.onDisconnected();
       }
     }
   }
@@ -1164,7 +1168,6 @@ export class SubscriptionMultiplexer<
     }
 
     sub.livenessStaleNotified = false;
-    const staleAfterMs = policy.staleAfterMs ?? this.options.staleAfterMs;
     sub.livenessTimer = this.setTimer(() => {
       sub.livenessTimer = undefined;
       if (
@@ -1178,12 +1181,17 @@ export class SubscriptionMultiplexer<
       sub.livenessStaleNotified = true;
       this.markSubscriptionStale(sub, "heartbeat_timeout");
       if (policy.onStale === "reconnect") {
-        connection.suppressNextDisconnectNotification = true;
-        connection.session.restart(
+        connection.suppressedDisconnectSubscriptionKeys.add(subscriptionKey);
+        const restarted = connection.session.restart(
           `business liveness timeout for ${subscriptionKey}`,
         );
+        if (!restarted) {
+          connection.suppressedDisconnectSubscriptionKeys.delete(
+            subscriptionKey,
+          );
+        }
       }
-    }, staleAfterMs);
+    }, policy.staleAfterMs);
   }
 
   private clearBusinessLivenessTimer(

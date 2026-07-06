@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 57
-- **Last Active**: 2026-06-23
+- **Total Sessions**: 58
+- **Last Active**: 2026-07-06
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~40 | Active |
+| `journal-2.md` | ~73 | Active |
 | `journal-1.md` | ~1983 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 58 | 2026-07-06 | Fix CI bun lockfile | `cd8c7d8` | `feat/juplend-borrow-api-reader` |
 | 57 | 2026-06-23 | L1 lease ready uses subscription acceptance | `6f9c0b9` | `codex/l1-lease-ready-ack` |
 | 56 | 2026-06-23 | Nullable L1 book quote sides | `b3ce732` | `dev` |
 | 55 | 2026-06-22 | Account funding fee history API | `132e0ce`, `0e4a36d` | `main` |

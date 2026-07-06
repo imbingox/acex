@@ -316,12 +316,12 @@ def _load_hook_input() -> dict:
     short daemon read preserves that path while failing closed to `{}` for
     non-piping hosts.
     """
-    result_queue: "queue.Queue[str | BaseException]" = queue.Queue(maxsize=1)
+    result_queue: "queue.Queue[str | Exception]" = queue.Queue(maxsize=1)
 
     def _read() -> None:
         try:
             result_queue.put(sys.stdin.read())
-        except BaseException as exc:
+        except Exception as exc:
             result_queue.put(exc)
 
     reader = threading.Thread(target=_read, daemon=True)
@@ -331,7 +331,7 @@ def _load_hook_input() -> dict:
     except queue.Empty:
         return {}
 
-    if isinstance(raw, BaseException):
+    if isinstance(raw, Exception):
         return {}
     try:
         data = json.loads(raw) if raw.strip() else {}

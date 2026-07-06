@@ -2478,13 +2478,134 @@ test("Juplend account subscribe maps REST base-unit amounts by token decimals", 
     },
   });
   expect(client.account.getBalance(accountId, "JupUSD")).toMatchObject({
-    total: new BigNumber("-16271447.562893").toFixed(),
+    total: new BigNumber("-16271448.407567").toFixed(),
     lending: {
       supplied: new BigNumber("0").toFixed(),
-      borrowed: new BigNumber("16271447.562893").toFixed(),
-      netAsset: new BigNumber("-16271447.562893").toFixed(),
+      borrowed: new BigNumber("16271448.407567").toFixed(),
+      netAsset: new BigNumber("-16271448.407567").toFixed(),
       borrowAPY: new BigNumber("0.0447").toFixed(),
     },
+  });
+});
+
+test("Juplend account subscribe treats null REST amounts as zero", async () => {
+  const { installJuplendInfra } = await import(
+    "../support/exchanges/juplend.ts"
+  );
+  const client = createClient();
+  const accountId = "juplend-null-amounts";
+
+  installJuplendInfra({
+    positions: [
+      {
+        id: 301,
+        vaultId: 77,
+        supply: null,
+        borrow: null,
+        dustBorrow: null,
+        vault: {
+          id: "77",
+          supplyToken: {
+            address: "JLP1111111111111111111111111111111111111111",
+            symbol: "JLP",
+            uiSymbol: "JLP",
+            decimals: 6,
+            price: "1",
+          },
+          borrowToken: {
+            address: "JupUSD1111111111111111111111111111111111111",
+            symbol: "JupUSD",
+            uiSymbol: "JupUSD",
+            decimals: 6,
+            price: "1",
+          },
+          liquidationThreshold: "850",
+        },
+      },
+    ],
+  });
+
+  await client.registerAccount({
+    accountId,
+    venue: "juplend",
+    options: {
+      walletAddress: "33333333333333333333333333333333",
+    },
+  });
+  await client.start();
+  await client.account.subscribeAccount({ accountId });
+
+  expect(client.account.getBalance(accountId, "JLP")).toMatchObject({
+    total: new BigNumber("0").toFixed(),
+    lending: {
+      supplied: new BigNumber("0").toFixed(),
+      borrowed: new BigNumber("0").toFixed(),
+      netAsset: new BigNumber("0").toFixed(),
+    },
+  });
+  expect(client.account.getBalance(accountId, "JupUSD")).toMatchObject({
+    total: new BigNumber("0").toFixed(),
+    lending: {
+      supplied: new BigNumber("0").toFixed(),
+      borrowed: new BigNumber("0").toFixed(),
+      netAsset: new BigNumber("0").toFixed(),
+    },
+  });
+});
+
+test("Juplend account subscribe rejects malformed token decimals", async () => {
+  const { installJuplendInfra } = await import(
+    "../support/exchanges/juplend.ts"
+  );
+  const client = createClient();
+  const accountId = "juplend-invalid-decimals";
+
+  installJuplendInfra({
+    positions: [
+      {
+        id: 401,
+        vaultId: 88,
+        supply: "1",
+        borrow: "0",
+        dustBorrow: "0",
+        vault: {
+          id: "88",
+          supplyToken: {
+            address: "BadDecimals111111111111111111111111111111111",
+            symbol: "BAD",
+            uiSymbol: "BAD",
+            decimals: "invalid",
+            price: "1",
+          },
+          borrowToken: {
+            address: "JupUSD1111111111111111111111111111111111111",
+            symbol: "JupUSD",
+            uiSymbol: "JupUSD",
+            decimals: 6,
+            price: "1",
+          },
+          liquidationThreshold: "850",
+        },
+      },
+    ],
+  });
+
+  await client.registerAccount({
+    accountId,
+    venue: "juplend",
+    options: {
+      walletAddress: "44444444444444444444444444444444",
+    },
+  });
+  await client.start();
+
+  await expect(
+    client.account.subscribeAccount({ accountId }),
+  ).rejects.toBeInstanceOf(AcexError);
+  expect(client.account.getAccountStatus(accountId)).toMatchObject({
+    runtimeStatus: "degraded",
+    ready: false,
+    reason: "http_failed",
   });
 });
 

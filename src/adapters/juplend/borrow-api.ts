@@ -14,7 +14,7 @@ export interface JuplendTokenMetadata {
   id?: string;
   symbol?: string;
   uiSymbol?: string;
-  decimals?: number | string;
+  decimals?: number | string | null;
   price?: number | string;
   usdPrice?: number | string;
   oraclePrice?: number | string;
@@ -34,9 +34,9 @@ export interface JuplendBorrowPositionLike {
   id?: number | string;
   nftId?: number | string;
   vaultId?: number | string;
-  supply?: StringLike | string | number;
-  borrow?: StringLike | string | number;
-  dustBorrow?: StringLike | string | number;
+  supply?: StringLike | string | number | null;
+  borrow?: StringLike | string | number | null;
+  dustBorrow?: StringLike | string | number | null;
   ownerAddress?: string;
   vault?: JuplendVaultMetadata;
 }
@@ -67,7 +67,7 @@ function buildApiHeaders(apiKey?: string): Record<string, string> | undefined {
   return apiKey ? { "x-api-key": apiKey } : undefined;
 }
 
-function getJupApiKey(explicitApiKey?: string): string | undefined {
+export function getJupApiKey(explicitApiKey?: string): string | undefined {
   return explicitApiKey || process.env.JUP_API || undefined;
 }
 
@@ -75,8 +75,10 @@ function withBaseUrl(baseUrl: string, path: string): string {
   return new URL(path, `${baseUrl}/`).toString();
 }
 
-function asString(value: StringLike | string | number | undefined): string {
-  return value === undefined ? "0" : value.toString();
+function asString(
+  value: StringLike | string | number | null | undefined,
+): string {
+  return value === undefined || value === null ? "0" : value.toString();
 }
 
 function getPositionNftId(position: JuplendBorrowPositionLike): string {
@@ -166,7 +168,7 @@ export async function readJuplendPositions(input: {
   const rawPositions = await requestJuplendJson<JuplendBorrowPositionLike[]>(
     url.toString(),
     {
-      headers: buildApiHeaders(getJupApiKey(input.jupApiKey)),
+      headers: buildApiHeaders(input.jupApiKey),
     },
     input.fetchFn,
     timeoutMs,

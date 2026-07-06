@@ -88,7 +88,7 @@ interface LendingRiskFacet {
 - Jup API config: `AccountRuntimeOptions.venues.juplend.jupApiKey` 可选；未显式配置时默认读取环境变量 `JUP_API`，用于请求 Jup 官方 Lend Borrow API。
 - Balance aggregation: 多个 matching positions 按 `asset` 聚合成 `AccountSnapshot.balances: Record<asset, BalanceSnapshot>`。
 - Public decimal contract: 所有公开数量 / 金额 / 比率字段都必须是 canonical decimal string；adapter 和 manager 内部可用 BigNumber 计算，但不得把 BigNumber 对象暴露到 `BalanceSnapshot`、`RiskSnapshot` 或 lending facets。
-- Quantity mapping: REST position `supply` / `borrow` 是对应 token base units。公开数量按 position 内嵌 vault token decimals 转 human amount：`supplied = supply / 10^supplyToken.decimals`；`borrowed = borrow / 10^borrowToken.decimals`。`dustBorrow` 当前不并入公开 debt 数量。
+- Quantity mapping: REST position `supply` / `borrow` / `dustBorrow` 是对应 token base units。公开数量按 position 内嵌 vault token decimals 转 human amount：`supplied = supply / 10^supplyToken.decimals`；`borrowed = (borrow + dustBorrow) / 10^borrowToken.decimals`。
 - Risk aggregation: `netEquity = totalCollateralUsd - totalDebtUsd`；`riskEquity = Σ(collateralUsd × liquidationThreshold) - totalDebtUsd`；`riskRatio = totalDebtUsd / Σ(collateralUsd × liquidationThreshold)`，分母为 0 时返回 `undefined`。
 - Threshold normalization: `liquidationThreshold = 850` 解释为 `0.85`；小于等于 1 的值按小数原样使用。
 - APY normalization: `supplyRate = 554` / `borrowRate = 513` 解释为 `0.0554` / `0.0513`。

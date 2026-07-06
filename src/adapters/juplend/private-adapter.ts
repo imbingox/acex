@@ -18,6 +18,7 @@ import type {
   StreamHandle,
 } from "../types.ts";
 import {
+  getJupApiKey,
   type JuplendTokenMetadata,
   readJuplendPositions,
 } from "./borrow-api.ts";
@@ -198,20 +199,28 @@ function buildRisk(input: {
   };
 }
 
-function getJupApiKey(explicitApiKey?: string): string | undefined {
-  return explicitApiKey || process.env.JUP_API || undefined;
-}
+function tokenDecimals(
+  token: JuplendTokenMetadata | undefined,
+  context: string,
+): number {
+  if (token?.decimals === undefined || token.decimals === null) {
+    throw new Error(`Juplend ${context} token missing decimals`);
+  }
 
-function tokenDecimals(token: JuplendTokenMetadata | undefined): number {
-  const decimals = Number(token?.decimals);
-  return Number.isInteger(decimals) && decimals >= 0 ? decimals : 0;
+  const decimals = Number(token.decimals);
+  if (!Number.isInteger(decimals) || decimals < 0) {
+    throw new Error(`Juplend ${context} token invalid decimals`);
+  }
+
+  return decimals;
 }
 
 function divideTokenAmount(
   value: BigNumber,
   token: JuplendTokenMetadata | undefined,
+  context: string,
 ): BigNumber {
-  return value.dividedBy(new BigNumber(10).pow(tokenDecimals(token)));
+  return value.dividedBy(new BigNumber(10).pow(tokenDecimals(token, context)));
 }
 
 async function mapAccount(
@@ -240,10 +249,15 @@ async function mapAccount(
     const suppliedQuantity = divideTokenAmount(
       toBigNumber(position.supplyAmount),
       vault.supplyToken,
+      `position ${position.nftId} supply`,
+    );
+    const borrowedBaseAmount = toBigNumber(position.borrowAmount).plus(
+      toBigNumber(position.dustBorrowAmount),
     );
     const borrowedQuantity = divideTokenAmount(
-      toBigNumber(position.borrowAmount),
+      borrowedBaseAmount,
       vault.borrowToken,
+      `position ${position.nftId} borrow`,
     );
 
     const liquidationThreshold = normalizeThreshold(vault.liquidationThreshold);

@@ -22,16 +22,27 @@ const juplendAccount: RegisterAccountInput = {
   },
 };
 
+const juplendFilteredPositionAccount: RegisterAccountInput = {
+  accountId: "jup-loop-filtered",
+  venue: "juplend",
+  options: {
+    walletAddress: "wallet",
+    vaultId: "1",
+    positionId: "101",
+  },
+};
+
 const juplendDirectPositionAccount: RegisterAccountInput = {
   accountId: "jup-loop-direct",
   venue: "juplend",
+  // @ts-expect-error Juplend must provide walletAddress.
   options: {
     vaultId: "1",
     positionId: "101",
   },
 };
 
-// @ts-expect-error Juplend must provide walletAddress or vaultId+positionId.
+// @ts-expect-error Juplend must provide walletAddress.
 const juplendMissingWallet: RegisterAccountInput = {
   accountId: "jup-loop-a",
   venue: "juplend",
@@ -39,5 +50,6 @@ const juplendMissingWallet: RegisterAccountInput = {
 
 void binanceAccount;
 void juplendAccount;
+void juplendFilteredPositionAccount;
 void juplendDirectPositionAccount;
 void juplendMissingWallet;

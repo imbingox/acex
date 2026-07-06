@@ -15,7 +15,6 @@ interface CliOptions {
   walletAddress?: string;
   vaultId?: string;
   positionId?: string;
-  rpcUrl?: string;
   durationSec: number;
   pollIntervalMs: number;
   showAmounts: boolean;
@@ -26,7 +25,6 @@ interface SmokeResult {
   walletAddress?: string;
   vaultId?: string;
   positionId?: string;
-  rpcUrl?: string;
   subscribeLatencyMs: number;
   statusAfterSubscribe: Record<string, unknown>;
   snapshot: Record<string, unknown>;
@@ -44,31 +42,28 @@ function printHelp(): void {
 
 Environment:
   JUPLEND_WALLET_ADDRESS    Optional Solana wallet address to inspect
-  SOL_HELIUS_RPC            Optional Solana RPC URL for @jup-ag/lend-read
-  JUP_API                   Optional Jup API key for Tokens V2 / Price V3
+  JUP_API                   Optional Jup API key for Lend Borrow API
 
 Options:
   --account-id <id>          SDK account id (default: ${DEFAULT_ACCOUNT_ID})
   --wallet-address <addr>    Solana wallet address (overrides JUPLEND_WALLET_ADDRESS)
-  --vault-id <id>            Juplend vault id for direct single-position read
-  --position-id <id>         Juplend NFT position id
-  --rpc-url <url>            Optional Solana RPC URL (overrides SOL_HELIUS_RPC)
+  --vault-id <id>            Optional Juplend vault id filter
+  --position-id <id>         Optional Juplend NFT position id filter
   --duration <seconds>       Total observation duration (default: ${DEFAULT_DURATION_SEC})
   --poll-interval-ms <ms>    Juplend polling interval (default: ${DEFAULT_POLL_INTERVAL_MS})
   --show-amounts             Include lending balance/risk amounts in output
   --help                     Show this help
 
 Examples:
-  SOL_HELIUS_RPC=... JUPLEND_WALLET_ADDRESS=... bun run test:live:juplend -- --show-amounts
-  bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --rpc-url <rpc> --poll-interval-ms 10000 --duration 25
-  bun run test:live:juplend -- --account-id jup-loop-a --vault-id <vaultId> --position-id <nftId> --rpc-url <rpc> --show-amounts`);
+  JUPLEND_WALLET_ADDRESS=... bun run test:live:juplend -- --show-amounts
+  bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --position-id <nftId> --poll-interval-ms 10000 --duration 25
+  bun run test:live:juplend -- --account-id jup-loop-a --wallet-address <wallet> --vault-id <vaultId> --position-id <nftId> --show-amounts`);
 }
 
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     accountId: DEFAULT_ACCOUNT_ID,
     walletAddress: process.env.JUPLEND_WALLET_ADDRESS || undefined,
-    rpcUrl: process.env.SOL_HELIUS_RPC,
     durationSec: DEFAULT_DURATION_SEC,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     showAmounts: false,
@@ -97,9 +92,6 @@ function parseArgs(argv: string[]): CliOptions {
       case "--position-id":
         options.positionId = argv[++index] ?? "";
         break;
-      case "--rpc-url":
-        options.rpcUrl = argv[++index] ?? "";
-        break;
       case "--duration":
         options.durationSec = parseNumber(argv[++index] ?? "", "--duration");
         break;
@@ -121,10 +113,8 @@ function parseArgs(argv: string[]): CliOptions {
     throw new Error("--account-id cannot be empty");
   }
 
-  if (!options.walletAddress && !(options.vaultId && options.positionId)) {
-    throw new Error(
-      "JUPLEND_WALLET_ADDRESS/--wallet-address or --vault-id + --position-id is required",
-    );
+  if (!options.walletAddress) {
+    throw new Error("JUPLEND_WALLET_ADDRESS/--wallet-address is required");
   }
 
   if (options.pollIntervalMs <= 0) {
@@ -206,17 +196,19 @@ async function smokeJuplend(options: {
   walletAddress?: string;
   vaultId?: string;
   positionId?: string;
-  rpcUrl?: string;
   durationMs: number;
   pollIntervalMs: number;
   showAmounts: boolean;
 }): Promise<SmokeResult> {
+  if (!options.walletAddress) {
+    throw new Error("walletAddress is required");
+  }
+
   const client = createClient({
     account: {
       venues: {
         juplend: {
           pollIntervalMs: options.pollIntervalMs,
-          rpcUrl: options.rpcUrl,
         },
       },
     },
@@ -228,15 +220,11 @@ async function smokeJuplend(options: {
   const errorIterator = client.events.errors()[Symbol.asyncIterator]();
 
   try {
-    const accountOptions = options.walletAddress
-      ? {
-          walletAddress: options.walletAddress,
-          positionId: options.positionId,
-        }
-      : {
-          vaultId: options.vaultId as string,
-          positionId: options.positionId as string,
-        };
+    const accountOptions = {
+      walletAddress: options.walletAddress,
+      vaultId: options.vaultId,
+      positionId: options.positionId,
+    };
 
     await client.registerAccount({
       accountId: options.accountId,
@@ -277,7 +265,6 @@ async function smokeJuplend(options: {
       walletAddress: options.walletAddress,
       vaultId: options.vaultId,
       positionId: options.positionId,
-      rpcUrl: options.rpcUrl,
       subscribeLatencyMs,
       statusAfterSubscribe,
       snapshot: summarizeSnapshot(
@@ -314,7 +301,6 @@ async function main(): Promise<void> {
     walletAddress: options.walletAddress,
     vaultId: options.vaultId,
     positionId: options.positionId,
-    rpcUrl: options.rpcUrl,
     durationMs: options.durationSec * 1_000,
     pollIntervalMs: options.pollIntervalMs,
     showAmounts: options.showAmounts,

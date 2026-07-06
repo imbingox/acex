@@ -102,7 +102,6 @@ const client = createClient({
       },
       juplend: {
         pollIntervalMs: 30_000,
-        rpcUrl: process.env.SOL_HELIUS_RPC,
         jupApiKey: process.env.JUP_API,
       },
     },
@@ -182,7 +181,7 @@ await client.updateAccountCredentials("main-binance", { apiKey, secret });
 await client.removeAccount("main-binance");
 ```
 
-`RegisterAccountInput` 按 venue 区分。CEX venue 使用 `AccountCredentials`；Juplend 必须显式提供 `walletAddress` 或 `vaultId + positionId`。虽然 public `Venue` 包含 type-only venue，但注册成功不代表该 venue runtime 能订阅或下单，仍以 capability 和实际调用结果为准。
+`RegisterAccountInput` 按 venue 区分。CEX venue 使用 `AccountCredentials`；Juplend 必须显式提供 `walletAddress`，`vaultId` / `positionId` 只作为 REST 仓位结果的本地过滤条件。虽然 public `Venue` 包含 type-only venue，但注册成功不代表该 venue runtime 能订阅或下单，仍以 capability 和实际调用结果为准。
 
 ## MarketManager
 

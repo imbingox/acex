@@ -146,7 +146,7 @@ src/adapters/binance/stream-protocol.ts    — BinanceStreamProtocol（L1/fundin
 src/adapters/deribit/adapter.ts            — DeribitMarketAdapter（option catalog + quote stream）
 src/adapters/deribit/market-catalog.ts     — Deribit instrument catalog
 src/adapters/deribit/stream-protocol.ts    — Deribit quote stream protocol
-src/adapters/juplend/lend-read.ts          — @jup-ag/lend-read 边界封装
+src/adapters/juplend/borrow-api.ts         — Jupiter Borrow REST API reader
 src/adapters/juplend/private-adapter.ts    — JuplendPrivateAdapter（HTTP polling 只读借贷账户）
 src/internal/subscription-multiplexer.ts   — SubscriptionMultiplexer（通用订阅多路复用原语，venue-agnostic）
 ```

@@ -57,7 +57,7 @@ src/
 │   │   ├── market-catalog.ts
 │   │   └── stream-protocol.ts
 │   └── juplend/
-│       ├── lend-read.ts                  # @jup-ag/lend-read 边界封装
+│       ├── borrow-api.ts                 # Jupiter Borrow REST API 边界封装
 │       └── private-adapter.ts            # JuplendPrivateAdapter (HTTP polling 只读借贷)
 │
 ├── managers/                             # Layer 2: 领域 Manager

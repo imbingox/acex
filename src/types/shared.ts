@@ -326,7 +326,6 @@ export interface BinanceAccountRuntimeOptions {
 
 export interface JuplendAccountRuntimeOptions {
   pollIntervalMs?: number;
-  rpcUrl?: string;
   jupApiKey?: string;
 }
 
@@ -392,17 +391,11 @@ export interface BinanceAccountOptions {
   recvWindow?: number;
 }
 
-export type JuplendAccountOptions =
-  | {
-      walletAddress: string;
-      vaultId?: string;
-      positionId?: string;
-    }
-  | {
-      walletAddress?: string;
-      vaultId: string;
-      positionId: string;
-    };
+export interface JuplendAccountOptions {
+  walletAddress: string;
+  vaultId?: string;
+  positionId?: string;
+}
 
 export interface RegisterCexAccountInput {
   accountId: string;

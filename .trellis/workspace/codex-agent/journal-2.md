@@ -38,3 +38,36 @@ Changed market subscription lease.ready to resolve on subscribe ACK or matching 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 58: Fix CI bun lockfile
+
+**Date**: 2026-07-06
+**Task**: Fix CI bun lockfile
+**Branch**: `feat/juplend-borrow-api-reader`
+
+### Summary
+
+修复 Juplend borrow API reader PR 的 CI 安装失败：同步 bun.lock，移除已删除 SDK 依赖的 Bun lock 条目，并验证 frozen install、changeset status、lint、type-check、unit 和 integration tests。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cd8c7d8` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

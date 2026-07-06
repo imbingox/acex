@@ -308,13 +308,9 @@ function createJuplendAdapterGroup(
   venueOptions: JuplendAccountRuntimeOptions | undefined,
 ): VenueAdapterFactoryResult {
   return {
-    privateAdapter: new JuplendPrivateAdapter(
-      venueOptions?.rpcUrl,
-      venueOptions?.jupApiKey,
-      {
-        pollIntervalMs: venueOptions?.pollIntervalMs,
-      },
-    ),
+    privateAdapter: new JuplendPrivateAdapter(venueOptions?.jupApiKey, {
+      pollIntervalMs: venueOptions?.pollIntervalMs,
+    }),
   };
 }
 

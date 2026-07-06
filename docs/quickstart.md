@@ -113,7 +113,6 @@ const client = createClient({
     venues: {
       juplend: {
         pollIntervalMs: 30_000,
-        rpcUrl: process.env.SOL_HELIUS_RPC,
         jupApiKey: process.env.JUP_API,
       },
     },
@@ -144,20 +143,21 @@ const balances = client.account.getBalances("jup-loop-a");
 const risk = client.account.getRiskSnapshot("jup-loop-a");
 ```
 
-也可以用已知 vault + position 直接读取单仓，不扫全钱包：
+也可以在同一钱包返回的仓位里按 vault + position 过滤单仓：
 
 ```ts
 await client.registerAccount({
-  accountId: "jup-loop-direct",
+  accountId: "jup-loop-filtered",
   venue: "juplend",
   options: {
+    walletAddress: "<solana-wallet-address>",
     vaultId: "<vault-id>",
     positionId: "<nft-position-id>",
   },
 });
 ```
 
-Juplend 不需要私钥，不支持 supply / borrow / repay / withdraw。`accountId` 是 SDK 内的逻辑账户名，不是钱包地址。
+Juplend 不需要私钥或 Solana RPC，不支持 supply / borrow / repay / withdraw。`accountId` 是 SDK 内的逻辑账户名，不是钱包地址。
 
 ## 下单和撤单
 

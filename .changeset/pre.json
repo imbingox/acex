@@ -7,6 +7,7 @@
   "changesets": [
     "account-funding-fee-history",
     "deribit-option-market-mvp",
+    "juplend-borrow-api-reader",
     "nullable-l1-book",
     "periodic-stream-reconnect",
     "quiet-options-lease-ready"

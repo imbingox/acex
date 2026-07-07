@@ -16,8 +16,6 @@ export interface JuplendTokenMetadata {
   uiSymbol?: string;
   decimals?: number | string | null;
   price?: number | string;
-  usdPrice?: number | string;
-  oraclePrice?: number | string;
 }
 
 export interface JuplendVaultMetadata {

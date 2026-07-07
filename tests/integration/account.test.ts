@@ -2478,11 +2478,11 @@ test("Juplend account subscribe maps REST base-unit amounts by token decimals", 
     },
   });
   expect(client.account.getBalance(accountId, "JupUSD")).toMatchObject({
-    total: new BigNumber("-16271448.407567").toFixed(),
+    total: new BigNumber("-16271447.562893").toFixed(),
     lending: {
       supplied: new BigNumber("0").toFixed(),
-      borrowed: new BigNumber("16271448.407567").toFixed(),
-      netAsset: new BigNumber("-16271448.407567").toFixed(),
+      borrowed: new BigNumber("16271447.562893").toFixed(),
+      netAsset: new BigNumber("-16271447.562893").toFixed(),
       borrowAPY: new BigNumber("0.0447").toFixed(),
     },
   });

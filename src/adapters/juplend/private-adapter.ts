@@ -111,9 +111,7 @@ function tokenAsset(
 function tokenPrice(
   token: JuplendTokenMetadata | undefined,
 ): BigNumber | undefined {
-  const price = toBigNumber(
-    token?.usdPrice ?? token?.price ?? token?.oraclePrice,
-  );
+  const price = toBigNumber(token?.price);
   return price.gt(0) ? price : undefined;
 }
 
@@ -251,11 +249,8 @@ async function mapAccount(
       vault.supplyToken,
       `position ${position.nftId} supply`,
     );
-    const borrowedBaseAmount = toBigNumber(position.borrowAmount).plus(
-      toBigNumber(position.dustBorrowAmount),
-    );
     const borrowedQuantity = divideTokenAmount(
-      borrowedBaseAmount,
+      toBigNumber(position.borrowAmount),
       vault.borrowToken,
       `position ${position.nftId} borrow`,
     );

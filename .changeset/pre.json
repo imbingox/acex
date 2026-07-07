@@ -8,6 +8,7 @@
     "account-funding-fee-history",
     "deribit-option-market-mvp",
     "juplend-borrow-api-reader",
+    "juplend-borrow-field-only",
     "nullable-l1-book",
     "periodic-stream-reconnect",
     "quiet-options-lease-ready"
